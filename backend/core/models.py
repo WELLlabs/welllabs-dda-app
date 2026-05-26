@@ -2,12 +2,20 @@ from django.contrib.gis.db import models
 
 # Create your models here.
 
-class Watershed(models.Model):
+from django.contrib.gis.db import models
 
-    name = models.CharField(max_length=255, null=True)
+
+class Watershed(models.Model):
+    fid = models.AutoField(primary_key=True)
+
+    id = models.CharField(max_length=255, null=True, blank=True)
+
+    dn = models.IntegerField(null=True, blank=True)
+
+    uid = models.CharField(max_length=255, null=True, blank=True)
 
     geom = models.MultiPolygonField()
 
     class Meta:
         managed = False
-        db_table = "watersheds"
+        db_table = 'watersheds'

@@ -1,23 +1,33 @@
-# Python
-__pycache__/
-*.pyc
-venv/
-
-# Environment
-.env
-
-# Django
-db.sqlite3
-media/
-staticfiles/
-
 # macOS
 .DS_Store
 
+# Python
+backend/venv/
+__pycache__/
+*.pyc
+
+# Django
+backend/db.sqlite3
+backend/staticfiles/
+
+# Environment variables
+backend/.env
+frontend/.env
+
 # Node
-node_modules/
-.svelte-kit/
-dist/
+frontend/node_modules/
+
+# Svelte build
+frontend/.svelte-kit/
+frontend/build/
+
+# Logs
+*.log
+
+# GIS data
+data/raw/
+data/processed/
 
 # QGIS
 *.qgz~
+*.qgs~
