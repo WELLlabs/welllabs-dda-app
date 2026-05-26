@@ -1,18 +1,6 @@
 # WELLlabs DDA App
 
-Geospatial watershed diagnosis and field annotation platform.
-
-This project is an early-stage full-stack geospatial application built with:
-
-- Django
-
-- PostGIS
-
-- SvelteKit
-
-- Leaflet
-
-- TailwindCSS
+Early stage Geospatial watershed diagnosis and field annotation platform.
 
 The application allows a user to:
 
