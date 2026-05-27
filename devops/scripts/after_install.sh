@@ -102,6 +102,8 @@ cp /etc/nginx/conf.d/welllabs.conf /etc/nginx/conf.d/welllabs.conf.bak 2>/dev/nu
 # Install new config
 cp "$RELEASE_DIR/devops/nginx/welllabs.conf" /etc/nginx/conf.d/welllabs.conf
 rm -f /etc/nginx/conf.d/default.conf
+rm -f /etc/nginx/sites-enabled/default
+
 
 # Validate using the real nginx.conf (which includes conf.d/) — NOT -c on the file directly
 # because conf.d files contain server{} blocks which are only valid inside http{} context.
