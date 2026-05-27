@@ -1,0 +1,19 @@
+[Unit]
+Description=Well Labs SvelteKit Frontend (Node)
+After=network.target
+
+[Service]
+User=root
+Group=root
+WorkingDirectory=/opt/welllabs/current/frontend
+Environment=NODE_ENV=production
+Environment=PORT=3000
+Environment=ORIGIN=http://localhost
+
+ExecStart=/usr/bin/node /opt/welllabs/current/frontend/build/index.js
+
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
