@@ -18,10 +18,10 @@ else
 fi
 
 # Verify backend came up
-sleep 3
+sleep 5
 if ! systemctl is-active --quiet welllabs-backend.service; then
-    echo "ERROR: Backend failed to start."
-    echo "  Run: journalctl -u welllabs-backend.service -n 50"
+    echo "ERROR: Backend failed to start. Journal logs:"
+    journalctl -u welllabs-backend.service --no-pager -n 50
     exit 1
 fi
 echo "  ✓ Backend is active."
@@ -36,10 +36,10 @@ fi
 systemctl restart welllabs-frontend.service
 
 # Verify frontend came up
-sleep 2
+sleep 3
 if ! systemctl is-active --quiet welllabs-frontend.service; then
-    echo "ERROR: Frontend failed to start."
-    echo "  Run: journalctl -u welllabs-frontend.service -n 50"
+    echo "ERROR: Frontend failed to start. Journal logs:"
+    journalctl -u welllabs-frontend.service --no-pager -n 50
     exit 1
 fi
 echo "  ✓ Frontend is active."
