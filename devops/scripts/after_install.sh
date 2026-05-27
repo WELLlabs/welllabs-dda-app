@@ -15,6 +15,7 @@ cp -r "$DEPLOY_SRC" "$RELEASE_DIR"
 # ──────────────────────────────────────
 # 2. Link shared .env file
 # ──────────────────────────────────────
+# test
 echo "[2/7] Linking shared .env..."
 ln -sf /opt/welllabs/shared/.env "$RELEASE_DIR/backend/.env"
 
@@ -23,7 +24,7 @@ ln -sf /opt/welllabs/shared/.env "$RELEASE_DIR/backend/.env"
 # ──────────────────────────────────────
 echo "[3/7] Setting up Python virtual environment..."
 cd "$RELEASE_DIR/backend"
-python3 -m venv venv
+python3.13 -m venv venv
 source venv/bin/activate
 
 echo "[4/7] Installing Python dependencies..."
@@ -31,9 +32,17 @@ pip install --upgrade pip -q
 pip install -r requirements.txt -q
 
 # ──────────────────────────────────────
-# 4. Django migrations & static files
+# 4. Database Setup & Django migrations
 # ──────────────────────────────────────
-echo "[5/7] Running Django migrations & collectstatic..."
+echo "[5/7] Checking database..."
+if ! sudo -u postgres psql -lqt | cut -d \| -f 1 | grep -qw ddaapp; then
+    echo "Database 'ddaapp' does not exist. Creating it now..."
+    sudo -u postgres psql -c "CREATE DATABASE ddaapp;"
+    sudo -u postgres psql -d ddaapp -c "CREATE EXTENSION postgis;"
+    sudo -u postgres psql -c "ALTER USER postgres WITH PASSWORD 'postgres';"
+fi
+
+echo "Running Django migrations & collectstatic..."
 python manage.py migrate --noinput
 python manage.py collectstatic --noinput
 
@@ -44,7 +53,7 @@ deactivate
 # ──────────────────────────────────────
 echo "[6/7] Building SvelteKit frontend..."
 cd "$RELEASE_DIR/frontend"
-npm ci
+npm install
 npm run build
 
 # ──────────────────────────────────────
