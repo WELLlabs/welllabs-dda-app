@@ -1,0 +1,27 @@
+version: 0.0
+os: linux
+
+file_section:
+  - source: /
+    destination: /tmp/welllabs-deploy
+
+hooks:
+  BeforeInstall:
+    - location: devops/scripts/before_install.sh
+      timeout: 120
+      runas: root
+
+  AfterInstall:
+    - location: devops/scripts/after_install.sh
+      timeout: 600
+      runas: root
+
+  ApplicationStart:
+    - location: devops/scripts/application_start.sh
+      timeout: 120
+      runas: root
+
+  ValidateService:
+    - location: devops/scripts/validate_service.sh
+      timeout: 60
+      runas: root

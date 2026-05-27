@@ -1,0 +1,23 @@
+version: 0.2
+
+phases:
+  install:
+    commands:
+      - echo "Nothing to install in build phase"
+
+  pre_build:
+    commands:
+      - echo "Pre-build phase started on $(date)"
+
+  build:
+    commands:
+      - echo "Packaging application for CodeDeploy..."
+
+  post_build:
+    commands:
+      - echo "Build completed on $(date)"
+
+artifacts:
+  files:
+    - "**/*"
+  base-directory: "."
