@@ -1,6 +1,10 @@
 version: 0.0
 os: linux
 
+files:
+  - source: /
+    destination: /tmp/welllabs-deploy
+
 hooks:
   BeforeInstall:
     - location: devops/scripts/before_install.sh
