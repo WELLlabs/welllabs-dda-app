@@ -8,7 +8,7 @@ echo "=== ValidateService: Running health check ==="
 MAX_RETRIES=10
 RETRY_INTERVAL=3
 HTTP_CODE=000
-
+ 
 for i in $(seq 1 $MAX_RETRIES); do
     HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/health/ || echo "000")
     echo "  Attempt $i/$MAX_RETRIES → HTTP $HTTP_CODE"

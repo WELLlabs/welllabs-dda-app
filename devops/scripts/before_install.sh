@@ -12,7 +12,7 @@ mkdir -p /opt/welllabs/{releases,shared,logs}
 
 # Install system dependencies
 apt-get update -y
-apt-get install -y jq python3.12-venv libgdal-dev gdal-bin curl
+apt-get install -y jq python3.12-venv libgdal-dev gdal-bin curl 
 
 # Install Node.js 20 (includes npm) only if not already present
 if ! command -v node &>/dev/null; then

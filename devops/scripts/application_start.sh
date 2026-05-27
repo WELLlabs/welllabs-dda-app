@@ -43,7 +43,7 @@ if ! systemctl is-active --quiet welllabs-frontend.service; then
     exit 1
 fi
 echo "  ✓ Frontend is active."
-
+ 
 # ──────────────────────────────────────
 # Nginx: Reload config (zero downtime)
 # ──────────────────────────────────────

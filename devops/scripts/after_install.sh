@@ -109,7 +109,7 @@ cp "$RELEASE_DIR/devops/systemd/welllabs-backend.service" /etc/systemd/system/
 cp "$RELEASE_DIR/devops/systemd/welllabs-frontend.service" /etc/systemd/system/
 systemctl daemon-reload
 
-# ──────────────────────────────────────
+# ────────────────────────────────────── 
 # 7. Symlink swap — atomic
 # ──────────────────────────────────────
 echo ">>> Swapping symlink to new release: $TIMESTAMP"
