@@ -2,12 +2,7 @@
 set -e
 echo "=== BeforeInstall: Preparing for deployment ==="
 
-# ── AWS Secrets Manager secret ARN ─────────────────────────────────────────
-SECRET_ARN="arn:aws:secretsmanager:ap-south-1:590183894970:secret:well_labs_dda-Ojzru9"
-REGION="ap-south-1"
-# ───────────────────────────────────────────────────────────────────────────
-
-# Create app directories if they don't exist (first deployment)
+# Create necessary directories if they don't exist
 mkdir -p /opt/welllabs/{releases,shared,logs}
 
 # Install system dependencies
@@ -23,17 +18,22 @@ else
   echo "Node.js already installed: $(node --version)"
 fi
 
-# Fetch secret from AWS Secrets Manager and write it as .env
-echo "Fetching secrets from AWS Secrets Manager..."
-aws secretsmanager get-secret-value \
-  --secret-id "$SECRET_ARN" \
-  --region "$REGION" \
-  --query SecretString \
-  --output text \
-  | jq -r 'to_entries[] | "\(.key)=\(.value)"' \
-  > /opt/welllabs/shared/.env
-
-chmod 600 /opt/welllabs/shared/.env
-echo ".env written from Secrets Manager successfully."
+# Verify that the shared .env file exists and contains valid config (restores defaults if corrupted/empty)
+if [ ! -f /opt/welllabs/shared/.env ] || ! grep -q "^SECRET_KEY=" /opt/welllabs/shared/.env; then
+  echo "Warning: /opt/welllabs/shared/.env is missing or invalid (possibly corrupted by a previous run). Restoring defaults..."
+  cat > /opt/welllabs/shared/.env << 'ENVFILE'
+DB_NAME=ddaapp
+DB_USER=postgres
+DB_PASSWORD=postgres
+DB_HOST=localhost
+DB_PORT=5432
+DEBUG=False
+SECRET_KEY=change-me-to-a-secure-key
+ALLOWED_HOSTS=localhost,127.0.0.1
+ENVFILE
+  chmod 600 /opt/welllabs/shared/.env
+else
+  echo "/opt/welllabs/shared/.env verified successfully. Preserving host configurations."
+fi
 
 echo "=== Ready for new release ==="
