@@ -29,11 +29,20 @@ DB_HOST=localhost
 DB_PORT=5432
 DEBUG=False
 SECRET_KEY=change-me-to-a-secure-key
-ALLOWED_HOSTS=localhost,127.0.0.1
+ALLOWED_HOSTS=localhost,127.0.0.1,*
 ENVFILE
   chmod 600 /opt/welllabs/shared/.env
 else
   echo "/opt/welllabs/shared/.env verified successfully. Preserving host configurations."
+fi
+
+# Apply ALLOWED_HOSTS dynamically from pipeline if passed
+if [ -f allowed_hosts.txt ]; then
+  PIPELINE_HOSTS=$(cat allowed_hosts.txt | tr -d '\r' | xargs || echo "")
+  if [ -n "$PIPELINE_HOSTS" ]; then
+    echo "Updating ALLOWED_HOSTS in /opt/welllabs/shared/.env with value from Pipeline: $PIPELINE_HOSTS"
+    sed -i "s|^ALLOWED_HOSTS=.*|ALLOWED_HOSTS=localhost,127.0.0.1,$PIPELINE_HOSTS|" /opt/welllabs/shared/.env
+  fi
 fi
 
 echo "=== Ready for new release ==="
