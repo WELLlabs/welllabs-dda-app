@@ -25,7 +25,7 @@ def watershed_lookup(request):
 
     if not watershed:
         return JsonResponse({
-            'error': 'No watershed found test'
+            'error': 'No watershed found test1 sample'
         }, status=404)
 
     return JsonResponse({
