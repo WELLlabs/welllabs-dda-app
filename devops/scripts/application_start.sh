@@ -3,19 +3,13 @@ set -e
 echo "=== ApplicationStart: Zero-downtime reload ==="
 
 # ──────────────────────────────────────
-# Backend: Gunicorn (graceful reload if running)
+# Backend: Gunicorn (restart to load new code from symlink)
 # ──────────────────────────────────────
-if systemctl is-active --quiet welllabs-backend.service; then
-    echo "→ Gunicorn is running — sending graceful reload (SIGHUP)..."
-    echo "  Old workers will finish current requests, then new workers start."
-    systemctl kill -s HUP welllabs-backend.service
-else
-    echo "→ Gunicorn not running — starting fresh..."
-    if ! systemctl is-enabled --quiet welllabs-backend.service; then
-        systemctl enable welllabs-backend.service
-    fi
-    systemctl start welllabs-backend.service
+echo "→ Restarting Gunicorn backend..."
+if ! systemctl is-enabled --quiet welllabs-backend.service; then
+    systemctl enable welllabs-backend.service
 fi
+systemctl restart welllabs-backend.service
 
 # Verify backend came up
 sleep 5
