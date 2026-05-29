@@ -55,8 +55,9 @@
 
     try {
 
+       const apiBase = import.meta.env.VITE_API_URL || '';
        const response = await fetch(
-        `http://127.0.0.1:8000/api/watershed/?lat=${selectedLat}&lng=${selectedLng}`
+        `${apiBase}/api/watershed/?lat=${selectedLat}&lng=${selectedLng}`
       );
 
       watershed = await response.json();

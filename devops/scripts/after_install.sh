@@ -91,14 +91,14 @@ echo "Using npm: $NPM_BIN ($(npm --version)), Node: $(node --version)"
 
 npm install --os=linux --cpu=x64
 
-# Read EC2 IP and set VITE_API_URL for static env replacement during build
-# if [ -f "$DEPLOY_ARCHIVE/allowed_hosts.txt" ]; then
-#   EC2_IP=$(cat "$DEPLOY_ARCHIVE/allowed_hosts.txt" | tr -d '\r' | xargs)
-#   if [ -n "$EC2_IP" ]; then
-#     export VITE_API_URL="http://$EC2_IP"
-#     echo "Exported VITE_API_URL=$VITE_API_URL for frontend build"
-#   fi
-# fi
+Read EC2 IP and set VITE_API_URL for static env replacement during build
+if [ -f "$DEPLOY_ARCHIVE/allowed_hosts.txt" ]; then
+  EC2_IP=$(cat "$DEPLOY_ARCHIVE/allowed_hosts.txt" | tr -d '\r' | xargs)
+  if [ -n "$EC2_IP" ]; then
+    export VITE_API_URL="http://$EC2_IP"
+    echo "Exported VITE_API_URL=$VITE_API_URL for frontend build"
+  fi
+fi
 
 npm run build
 
