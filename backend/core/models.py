@@ -17,5 +17,5 @@ class Watershed(models.Model):
     geom = models.MultiPolygonField()
 
     class Meta:
-        managed = True
+        managed = False
         db_table = 'watersheds'
