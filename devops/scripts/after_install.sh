@@ -88,8 +88,7 @@ if [ -z "$NPM_BIN" ]; then
 fi
 echo "Using npm: $NPM_BIN ($(npm --version)), Node: $(node --version)"
 
-# Use npm install (not npm ci) to handle cross-platform lockfile differences.
-# The lockfile may be missing linux-x64 rollup binaries if generated on macOS/Windows.
+
 npm install --os=linux --cpu=x64
 
 # Read EC2 IP and set VITE_API_URL for static env replacement during build
