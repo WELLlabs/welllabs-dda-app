@@ -5,9 +5,36 @@ echo "=== BeforeInstall: Preparing for deployment ==="
 # Create necessary directories if they don't exist
 mkdir -p /opt/welllabs/{releases,shared,logs}
 
-# Install system dependencies
-apt-get update -y
-apt-get install -y jq python3.12-venv libgdal-dev gdal-bin curl 
+# Stop unattended-upgrades temporarily to avoid dpkg lock conflicts
+echo "Stopping unattended-upgrades if active..."
+systemctl stop unattended-upgrades || true
+
+# Wait for unattended-upgrades or apt processes to finish
+echo "Waiting for existing apt/dpkg locks to release..."
+for i in {1..20}; do
+  if ! pgrep -f "unattended-upgrades" >/dev/null && ! pgrep -f "apt-get" >/dev/null && ! pgrep -f "dpkg" >/dev/null; then
+    break
+  fi
+  echo "Lock process active. Waiting 5 seconds (attempt $i/20)..."
+  sleep 5
+done
+
+# Run apt-get update and install with retries
+echo "Installing system dependencies..."
+apt_retry() {
+  local count=0
+  until "$@"; do
+    if [ $count -gt 5 ]; then
+      echo "ERROR: Failed to run command: $@"
+      exit 1
+    fi
+    echo "Apt lock held or network issue. Retrying in 5 seconds (retry $((count++)))..."
+    sleep 5
+  done
+}
+
+apt_retry apt-get update -y
+apt_retry apt-get install -y jq python3.12-venv libgdal-dev gdal-bin curl
 
 # Install Node.js 20 (includes npm) only if not already present
 if ! command -v node &>/dev/null; then
