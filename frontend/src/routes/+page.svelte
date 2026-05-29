@@ -55,9 +55,8 @@
 
     try {
 
-      const apiBase = import.meta.env.VITE_API_URL || '';
-      const response = await fetch(
-        `${apiBase}/api/watershed/?lat=${selectedLat}&lng=${selectedLng}`
+       const response = await fetch(
+        `http://127.0.0.1:8000/api/watershed/?lat=${selectedLat}&lng=${selectedLng}`
       );
 
       watershed = await response.json();
@@ -103,7 +102,7 @@
   <div class="bg-white shadow p-4 z-[1000]">
 
     <h1 class="text-2xl font-bold mb-4">
-      WELLlabs DDA
+      WELLlabs DDA test
     </h1>
 
     <div class="flex gap-4 items-center flex-wrap">
