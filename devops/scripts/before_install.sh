@@ -19,6 +19,10 @@ for i in {1..20}; do
   sleep 5
 done
 
+# Configure any half-installed packages to fix interrupted dpkg errors
+echo "Configuring any interrupted packages..."
+DEBIAN_FRONTEND=noninteractive dpkg --configure -a || true
+
 # Run apt-get update and install with retries
 echo "Installing system dependencies..."
 apt_retry() {
@@ -40,7 +44,7 @@ apt_retry apt-get install -y jq python3.12-venv libgdal-dev gdal-bin curl
 if ! command -v node &>/dev/null; then
   echo "Node.js not found, installing..."
   curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-  apt-get install -y nodejs
+  apt_retry apt-get install -y nodejs
 else
   echo "Node.js already installed: $(node --version)"
 fi
