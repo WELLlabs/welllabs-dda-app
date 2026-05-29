@@ -1,49 +1,52 @@
 #!/bin/bash
 set -e
-
 echo "=== ApplicationStart: Zero-downtime reload ==="
 
-# Backend
-echo "→ Reloading Gunicorn backend..."
+# ──────────────────────────────────────
+# Backend: Gunicorn (restart to load new code from symlink)
+# ──────────────────────────────────────
+echo "→ Restarting Gunicorn backend..."
 if ! systemctl is-enabled --quiet welllabs-backend.service; then
     systemctl enable welllabs-backend.service
 fi
+systemctl restart welllabs-backend.service
 
-systemctl reload welllabs-backend.service
-
+# Verify backend came up
 sleep 5
-
 if ! systemctl is-active --quiet welllabs-backend.service; then
-    echo "ERROR: Backend failed to reload"
+    echo "ERROR: Backend failed to start. Journal logs:"
     journalctl -u welllabs-backend.service --no-pager -n 50
     exit 1
 fi
+echo "  ✓ Backend is active."
 
-echo "✓ Backend reload successful"
-
-# Frontend
-echo "→ Restarting frontend..."
+# ──────────────────────────────────────
+# Frontend: Node.js (restart — no hot reload support)
+# ──────────────────────────────────────
+echo "→ Restarting SvelteKit frontend..."
 if ! systemctl is-enabled --quiet welllabs-frontend.service; then
     systemctl enable welllabs-frontend.service
 fi
-
 systemctl restart welllabs-frontend.service
 
-sleep 5
-
+# Verify frontend came up
+sleep 3
 if ! systemctl is-active --quiet welllabs-frontend.service; then
-    echo "ERROR: Frontend failed to start"
+    echo "ERROR: Frontend failed to start. Journal logs:"
     journalctl -u welllabs-frontend.service --no-pager -n 50
     exit 1
 fi
+echo "  ✓ Frontend is active."
+ 
+# ──────────────────────────────────────
+# Nginx: Reload config (zero downtime)
+# ──────────────────────────────────────
+echo "→ Reloading Nginx configuration..."
+nginx -t && systemctl reload nginx
+echo "  ✓ Nginx reloaded."
 
-echo "✓ Frontend running"
-
-# Nginx
-echo "→ Reloading Nginx..."
-nginx -t
-systemctl reload nginx
-
-echo "✓ Nginx reloaded"
-
-echo "=== Deployment completed ==="
+echo ""
+echo "=== All services running ==="
+echo "  Backend  → http://127.0.0.1:8000 (Gunicorn/Django)"
+echo "  Frontend → http://127.0.0.1:3000 (Node/SvelteKit)"
+echo "  Nginx    → http://0.0.0.0:80     (Reverse Proxy)"
