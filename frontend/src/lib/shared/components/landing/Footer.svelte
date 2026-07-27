@@ -1,4 +1,4 @@
-<footer class="relative border-t border-hairline bg-void px-6 py-10 md:px-10">
+<footer class="relative border-t border-hairline bg-transparent px-6 py-10 md:px-10">
 	<div class="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 sm:flex-row">
 		<div class="flex items-center gap-2">
 			<svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">

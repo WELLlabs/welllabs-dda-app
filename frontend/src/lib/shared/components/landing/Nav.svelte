@@ -24,8 +24,7 @@
 			<circle cx="12" cy="12" r="6.5" stroke="#4FD1C5" stroke-width="1" opacity="0.8" />
 			<circle cx="12" cy="12" r="2.5" fill="#4FD1C5" />
 		</svg>
-		<span class="font-display text-[15px] font-semibold tracking-wide text-ink">DDA</span>
-		<span class="hidden font-mono text-[11px] text-ink-faint md:inline">/ watershed control</span>
+		<span class="font-display text-[15px] font-semibold tracking-wide text-ink">Water security Tool</span>
 	</div>
 
 	<!--

@@ -38,12 +38,12 @@
 	>
 		<defs>
 			<radialGradient id="contour-fade" cx="50%" cy="48%" r="60%">
-				<stop offset="0%" stop-color="#0D1319" stop-opacity="0" />
-				<stop offset="100%" stop-color="#090C10" stop-opacity="0.9" />
+				<stop offset="0%" stop-color="#ffffff" stop-opacity="0" />
+				<stop offset="100%" stop-color="#ffffff" stop-opacity="0.9" />
 			</radialGradient>
 			<linearGradient id="contour-stroke" x1="0" y1="0" x2="1" y2="1">
-				<stop offset="0%" stop-color="#4FD1C5" />
-				<stop offset="100%" stop-color="#2C6B65" />
+				<stop offset="0%" stop-color="#0d983b" />
+				<stop offset="100%" stop-color="#7dc3ff" />
 			</linearGradient>
 		</defs>
 
@@ -51,7 +51,7 @@
 			<path
 				d={ringPath(ring.r, ring.wobble, i * 1.3)}
 				fill="none"
-				stroke={i % 4 === 0 ? 'url(#contour-stroke)' : '#1C2932'}
+				stroke={i % 4 === 0 ? 'url(#contour-stroke)' : '#cdd9e8'}
 				stroke-width={i % 4 === 0 ? 1.1 : 0.7}
 				opacity={ring.opacity}
 			/>
@@ -64,6 +64,6 @@
 		<span
 			class="absolute h-[3px] w-[3px] rounded-full bg-diagnose/70 animate-pulse-soft"
 			style="left:{p.x}%; top:{p.y}%; animation-delay:{p.delay}s; animation-duration:{p.dur}s"
-		/>
+		></span>
 	{/each}
 </div>

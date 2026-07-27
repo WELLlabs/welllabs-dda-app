@@ -16,7 +16,7 @@ export const workspaces: WorkspaceMeta[] = [
 		verb: 'Reads the watershed',
 		description: 'Live sensor and imagery overlays surface blockages, erosion, and flow anomalies as they happen.',
 		accentClass: 'diagnose',
-		accentHex: '#4FD1C5'
+		accentHex: '#0d983b'
 	},
 	{
 		key: 'design',
@@ -24,7 +24,7 @@ export const workspaces: WorkspaceMeta[] = [
 		verb: 'Plans the intervention',
 		description: 'Draft channel and structure geometry directly on terrain, with survey-grade precision underfoot.',
 		accentClass: 'design',
-		accentHex: '#E8B75A'
+		accentHex: '#d5b443'
 	},
 	{
 		key: 'assess',
@@ -32,7 +32,7 @@ export const workspaces: WorkspaceMeta[] = [
 		verb: 'Scores the risk',
 		description: 'Every design is scored against flood, cost, and compliance models before a shovel moves.',
 		accentClass: 'assess',
-		accentHex: '#A78BFA'
+		accentHex: '#3969a7'
 	}
 ];
 
@@ -73,10 +73,10 @@ export interface Metric {
 }
 
 export const metrics: Metric[] = [
-	{ label: 'Active projects', value: 47, trend: [4, 6, 5, 8, 7, 9, 10], accent: '#4FD1C5' },
-	{ label: 'Ongoing surveys', value: 23, trend: [8, 7, 9, 6, 8, 10, 9], accent: '#E8B75A' },
-	{ label: 'Completed assessments', value: 312, trend: [30, 33, 31, 36, 40, 38, 42], accent: '#A78BFA' },
-	{ label: 'Pending reviews', value: 9, trend: [12, 10, 11, 8, 9, 7, 9], accent: '#7C8B93' }
+	{ label: 'Active projects', value: 47, trend: [4, 6, 5, 8, 7, 9, 10], accent: '#0d983b' },
+	{ label: 'Ongoing surveys', value: 23, trend: [8, 7, 9, 6, 8, 10, 9], accent: '#d5b443' },
+	{ label: 'Completed assessments', value: 312, trend: [30, 33, 31, 36, 40, 38, 42], accent: '#3969a7' },
+	{ label: 'Pending reviews', value: 9, trend: [12, 10, 11, 8, 9, 7, 9], accent: '#6b829e' }
 ];
 
 export type ProjectStatus = 'Active' | 'In Review' | 'Survey' | 'Complete';

@@ -1,7 +1,6 @@
 <script>
-	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { session } from '$lib/shared/session.svelte.js';
+	import ModuleHeader from '$lib/shared/components/ModuleHeader.svelte';
 
 	let { children } = $props();
 
@@ -15,35 +14,10 @@
 		if (href === '/settings') return page.url.pathname === '/settings';
 		return page.url.pathname.startsWith(href);
 	}
-
-	async function handleLogout() {
-		await session.logout();
-		goto('/');
-	}
 </script>
 
 <div class="flex min-h-screen flex-col bg-gray-50 font-body">
-	<header class="flex items-center justify-between border-b border-brand-navy/20 bg-brand-navy px-6 py-4 text-white">
-		<div class="flex items-center gap-3">
-			<button
-				class="cursor-pointer rounded border border-brand-sky/40 bg-transparent px-2 py-1 font-body text-sm text-white hover:bg-white/10"
-				onclick={() => goto('/home')}
-			>
-				← Home
-			</button>
-			<h1 class="m-0 font-headline text-xl font-semibold">Settings</h1>
-		</div>
-		{#if session.user}
-			<div class="flex items-center gap-2">
-				<span
-					class="flex h-7 w-7 items-center justify-center rounded-full bg-brand-blue text-xs font-semibold text-white"
-				>
-					{(session.user.name ?? '?').charAt(0).toUpperCase()}
-				</span>
-				<span class="font-body text-sm font-medium">{session.user.name}</span>
-			</div>
-		{/if}
-	</header>
+	<ModuleHeader title="Settings" />
 
 	<div class="mx-auto flex w-full max-w-5xl flex-1 gap-0">
 		<nav class="w-56 shrink-0 border-r border-brand-navy/8 bg-white py-4 pr-2 pl-4">

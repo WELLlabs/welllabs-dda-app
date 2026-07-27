@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { animate, stagger } from 'motion';
-	import ContourBackground from './ContourBackground.svelte';
 	import RiverFlow from './RiverFlow.svelte';
 
 	let words: HTMLElement[] = [];
@@ -21,9 +20,7 @@
 	const line = 'One Workspace. Every Watershed. Every Decision.'.split(' ');
 </script>
 
-<section class="relative flex h-screen min-h-[720px] w-full items-center justify-center overflow-hidden bg-void">
-	<ContourBackground intensity="hero" />
-
+<section class="relative flex h-screen min-h-[720px] w-full items-center justify-center overflow-hidden bg-transparent">
 	<div class="relative z-10 mx-auto flex max-w-4xl flex-col items-center px-6 text-center">
 		<div bind:this={meta} class="mb-7 flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.2em] text-diagnose opacity-0">
 			<span class="h-1 w-1 rounded-full bg-diagnose"></span>

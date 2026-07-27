@@ -34,66 +34,155 @@
 		await session.logout();
 		goto('/');
 	}
+
 </script>
 
 {#if session.user}
 	<div class="relative" bind:this={menuEl}>
 		<button
 			type="button"
-			class="flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-1.5 {variant === 'light'
-				? 'border-hairline bg-white/60 text-brand-navy hover:bg-white'
-				: 'border-white/20 bg-white/10 text-white hover:bg-white/20'}"
+			class="user"
 			onclick={toggle}
+			aria-label="Account menu"
 		>
-			<span
-				class="flex h-7 w-7 items-center justify-center rounded-full bg-brand-blue text-xs font-semibold text-white"
-			>
-				{(session.user.name ?? '?').charAt(0).toUpperCase()}
+			<span class="avatar">{(session.user.name ?? 'DD').trim().split(/\s+/)
+			.map((p) => p[0])
+			.slice(0, 2)
+			.join('')
+			.toUpperCase()}</span>
+			<span class="hidden text-left sm:block">
+				<span class="block font-body text-[13px] leading-tight user-name">{session.user.name || 'Guest'}</span>
+				
 			</span>
-			<span class="font-body text-sm font-medium">{session.user.name}</span>
 			<svg
-				xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"
-				class="h-4 w-4 opacity-70 transition-transform {open ? 'rotate-180' : ''}"
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="2"
+				class="chev h-3.5 w-3.5 {open ? 'rotate-180' : ''}"
 			>
-				<path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd" />
+				<path d="M6 9l6 6 6-6" stroke-linecap="round" stroke-linejoin="round" />
 			</svg>
 		</button>
 
 		{#if open}
-			<div class="absolute right-0 z-50 mt-1.5 min-w-48 overflow-hidden rounded-lg border border-brand-navy/10 bg-white shadow-lg">
+			<div class="menu">
 				<button
 					type="button"
-					class="flex w-full cursor-pointer items-center gap-2.5 border-0 bg-white px-4 py-2.5 text-left font-body text-sm text-brand-navy hover:bg-gray-50"
+					class="menu-item"
 					onclick={() => nav('/settings/organizations')}
 				>
-					<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="h-4 w-4 text-brand-steel">
-						<path d="M7 8a3 3 0 100-6 3 3 0 000 6zM14.5 9a2.5 2.5 0 100-5 2.5 2.5 0 000 5zM1.615 16.428a1.224 1.224 0 01-.569-1.175 6.002 6.002 0 0111.908 0c.058.467-.172.92-.57 1.174A9.953 9.953 0 017 18a9.953 9.953 0 01-5.385-1.572zM14.5 16h-.106c.07-.297.088-.611.048-.933a7.47 7.47 0 00-1.588-3.755 4.502 4.502 0 015.874 2.636.818.818 0 01-.36.98A7.465 7.465 0 0114.5 16z" />
-					</svg>
 					Organizations
 				</button>
 				<button
 					type="button"
-					class="flex w-full cursor-pointer items-center gap-2.5 border-0 bg-white px-4 py-2.5 text-left font-body text-sm text-brand-navy hover:bg-gray-50"
+					class="menu-item"
 					onclick={() => nav('/settings/connectors')}
 				>
-					<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="h-4 w-4 text-brand-steel">
-						<path fill-rule="evenodd" d="M1 2.75A.75.75 0 011.75 2h16.5a.75.75 0 010 1.5H18v8.75A2.75 2.75 0 0115.25 15h-1.072l.798 3.06a.75.75 0 01-1.452.38L13.41 18H6.59l-.114.44a.75.75 0 01-1.452-.38L5.822 15H4.75A2.75 2.75 0 012 12.25V3.5h-.25A.75.75 0 011 2.75zM7.373 15l-.391 1.5h6.037l-.392-1.5H7.373zm7.49-8.931a.75.75 0 01-.175 1.046 19.326 19.326 0 00-3.398 3.098.75.75 0 01-1.097.04L8.5 8.561l-2.22 2.22a.75.75 0 11-1.06-1.06l2.75-2.75a.75.75 0 011.06 0l1.664 1.663a20.786 20.786 0 013.122-2.74.75.75 0 011.046.175z" clip-rule="evenodd" />
-					</svg>
 					Connectors
 				</button>
-				<div class="border-t border-brand-navy/8"></div>
-				<button
-					type="button"
-					class="flex w-full cursor-pointer items-center gap-2.5 border-0 bg-white px-4 py-2.5 text-left font-body text-sm text-red-600 hover:bg-red-50"
-					onclick={handleSignOut}
-				>
-					<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="h-4 w-4">
-						<path fill-rule="evenodd" d="M3 4.25A2.25 2.25 0 015.25 2h5.5A2.25 2.25 0 0113 4.25v2a.75.75 0 01-1.5 0v-2a.75.75 0 00-.75-.75h-5.5a.75.75 0 00-.75.75v11.5c0 .414.336.75.75.75h5.5a.75.75 0 00.75-.75v-2a.75.75 0 011.5 0v2A2.25 2.25 0 0110.75 18h-5.5A2.25 2.25 0 013 15.75V4.25z" clip-rule="evenodd" />
-						<path fill-rule="evenodd" d="M6 10a.75.75 0 01.75-.75h9.546l-1.048-.943a.75.75 0 111.004-1.114l2.5 2.25a.75.75 0 010 1.114l-2.5 2.25a.75.75 0 11-1.004-1.114l1.048-.943H6.75A.75.75 0 016 10z" clip-rule="evenodd" />
-					</svg>
-					Sign out
-				</button>
+				<div class="menu-sep"></div>
+				<button type="button" class="menu-item danger" onclick={handleSignOut}>Sign out</button>
 			</div>
 		{/if}
 	</div>
 {/if}
+
+<style>
+	.user {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.6rem;
+		padding: 0.35rem 0.6rem 0.35rem 0.4rem;
+		border-radius: 12px;
+		border: 1px solid transparent;
+		background: none;
+		cursor: pointer;
+		transition: border-color 0.25s ease, background 0.25s ease;
+	}
+
+	.user:hover {
+		border-color: rgba(20, 40, 60, 0.1);
+		background: rgba(20, 40, 60, 0.04);
+	}
+
+	.user-name {
+		color: #1a2530;
+	}
+
+	.user-role {
+		color: #7a8794;
+	}
+
+	.chev {
+		color: #7a8794;
+		transition: transform 0.25s ease;
+	}
+
+	.avatar {
+		display: grid;
+		place-items: center;
+		height: 2.1rem;
+		width: 2.1rem;
+		border-radius: 10px;
+		font-family: var(--font-mono, monospace);
+		font-size: 12px;
+		font-weight: 600;
+		color: #ffffff;
+		background: linear-gradient(135deg, #0fb3a3, #7c5ce6);
+		box-shadow: 0 6px 16px -8px rgba(124, 92, 230, 0.55);
+	}
+
+	.menu {
+		position: absolute;
+		right: 0;
+		top: calc(100% + 0.5rem);
+		min-width: 11rem;
+		padding: 0.4rem;
+		border-radius: 14px;
+		border: 1px solid rgba(20, 40, 60, 0.08);
+		background: #ffffff;
+		box-shadow: 0 20px 45px -20px rgba(20, 40, 60, 0.35);
+		animation: pop 0.18s ease;
+	}
+
+	@keyframes pop {
+		from {
+			opacity: 0;
+			transform: translateY(-6px) scale(0.98);
+		}
+		to {
+			opacity: 1;
+			transform: none;
+		}
+	}
+
+	.menu-item {
+		display: block;
+		width: 100%;
+		padding: 0.5rem 0.7rem;
+		border: 0;
+		border-radius: 9px;
+		background: transparent;
+		font-family: var(--font-body, sans-serif);
+		font-size: 13px;
+		text-align: left;
+		color: #24303a;
+		transition: background 0.2s ease;
+		cursor: pointer;
+	}
+
+	.menu-item:hover {
+		background: rgba(20, 40, 60, 0.05);
+	}
+
+	.menu-item.danger {
+		color: #d64545;
+	}
+
+	.menu-sep {
+		height: 1px;
+		margin: 0.3rem 0;
+		background: rgba(20, 40, 60, 0.08);
+	}
+</style>

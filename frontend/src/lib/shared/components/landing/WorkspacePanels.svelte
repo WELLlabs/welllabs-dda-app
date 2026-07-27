@@ -74,7 +74,7 @@
 
 <svelte:window on:keydown={onKeydown} />
 
-<section id="workspaces" class="relative bg-void px-6 py-28 md:px-10">
+<section id="workspaces" class="relative bg-transparent px-6 py-28 md:px-10">
 	<div class="mx-auto max-w-6xl">
 		<div class="mb-14 flex flex-col gap-2">
 			<span class="font-mono text-[11px] uppercase tracking-[0.2em] text-ink-faint">Three tools, one field</span>
@@ -93,18 +93,18 @@
 					<svg viewBox="0 0 400 300" class="h-full w-full" preserveAspectRatio="xMidYMid slice">
 						<defs>
 							<pattern id="mesh-d" width="20" height="20" patternUnits="userSpaceOnUse">
-								<path d="M20 0 L0 0 0 20" fill="none" stroke="#1C2932" stroke-width="0.5" />
+								<path d="M20 0 L0 0 0 20" fill="none" stroke="#e1e7ef" stroke-width="0.5" />
 							</pattern>
 						</defs>
 						<rect width="400" height="300" fill="url(#mesh-d)" />
-						<line x1="0" y1="90" x2="400" y2="90" stroke="#4FD1C5" stroke-width="1" opacity="0.7">
+						<line x1="0" y1="90" x2="400" y2="90" stroke="#0d983b" stroke-width="1" opacity="0.7">
 							<animate attributeName="y1" values="20;280;20" dur="5s" repeatCount="indefinite" />
 							<animate attributeName="y2" values="20;280;20" dur="5s" repeatCount="indefinite" />
 						</line>
-						<circle cx="140" cy="150" r="4" fill="#4FD1C5" opacity="0.9">
+						<circle cx="140" cy="150" r="4" fill="#0d983b" opacity="0.9">
 							<animate attributeName="r" values="3;7;3" dur="2.4s" repeatCount="indefinite" />
 						</circle>
-						<circle cx="260" cy="190" r="3" fill="#4FD1C5" opacity="0.6" />
+						<circle cx="260" cy="190" r="3" fill="#0d983b" opacity="0.6" />
 					</svg>
 				</div>
 				<div class="relative z-10 flex items-center justify-between font-mono text-[11px] text-diagnose">
@@ -117,7 +117,7 @@
 						Live sensor and imagery overlays surface blockages and flow anomalies as they happen.
 					</p>
 					<span class="mt-4 inline-flex items-center gap-1.5 font-mono text-[11px] text-diagnose opacity-0 transition-opacity duration-300 group-hover:opacity-100">
-						Enter workspace \u2192
+						Enter workspace →
 					</span>
 				</div>
 			</button>
@@ -131,11 +131,11 @@
 			>
 				<div class="absolute inset-0 opacity-60 transition-opacity duration-500 group-hover:opacity-100">
 					<svg viewBox="0 0 400 300" class="h-full w-full" preserveAspectRatio="xMidYMid slice">
-						<path d="M60 220 L150 90 L250 150 L340 60" fill="none" stroke="#E8B75A" stroke-width="1.2" opacity="0.75" stroke-dasharray="5 5" />
+						<path d="M60 220 L150 90 L250 150 L340 60" fill="none" stroke="#d5b443" stroke-width="1.2" opacity="0.85" stroke-dasharray="5 5" />
 						{#each [[60, 220], [150, 90], [250, 150], [340, 60]] as [x, y]}
-							<circle cx={x} cy={y} r="4" fill="#0D1319" stroke="#E8B75A" stroke-width="1.4" />
+							<circle cx={x} cy={y} r="4" fill="#ffffff" stroke="#d5b443" stroke-width="1.4" />
 						{/each}
-						<rect x="130" y="70" width="40" height="40" fill="none" stroke="#E8B75A" stroke-width="0.7" opacity="0.5" class="group-hover:animate-pulse-soft" />
+						<rect x="130" y="70" width="40" height="40" fill="none" stroke="#d5b443" stroke-width="0.7" opacity="0.5" class="group-hover:animate-pulse-soft" />
 					</svg>
 				</div>
 				<div class="relative z-10 flex items-center justify-between font-mono text-[11px] text-design">
@@ -148,7 +148,7 @@
 						Draft channel and structure geometry directly on terrain with survey-grade precision.
 					</p>
 					<span class="mt-4 inline-flex items-center gap-1.5 font-mono text-[11px] text-design opacity-0 transition-opacity duration-300 group-hover:opacity-100">
-						Enter workspace \u2192
+						Enter workspace →
 					</span>
 				</div>
 			</button>
@@ -162,13 +162,13 @@
 			>
 				<div class="absolute inset-0 opacity-60 transition-opacity duration-500 group-hover:opacity-100">
 					<svg viewBox="0 0 400 300" class="h-full w-full" preserveAspectRatio="xMidYMid slice">
-						<circle cx="200" cy="150" r="90" fill="none" stroke="#1C2932" stroke-width="1" />
-						<circle cx="200" cy="150" r="60" fill="none" stroke="#1C2932" stroke-width="1" />
-						<circle cx="200" cy="150" r="30" fill="none" stroke="#1C2932" stroke-width="1" />
-						<line x1="200" y1="150" x2="200" y2="60" stroke="#A78BFA" stroke-width="1.4" opacity="0.85">
+						<circle cx="200" cy="150" r="90" fill="none" stroke="#e1e7ef" stroke-width="1" />
+						<circle cx="200" cy="150" r="60" fill="none" stroke="#e1e7ef" stroke-width="1" />
+						<circle cx="200" cy="150" r="30" fill="none" stroke="#e1e7ef" stroke-width="1" />
+						<line x1="200" y1="150" x2="200" y2="60" stroke="#3969a7" stroke-width="1.4" opacity="0.9">
 							<animateTransform attributeName="transform" type="rotate" from="0 200 150" to="360 200 150" dur="7s" repeatCount="indefinite" />
 						</line>
-						<circle cx="200" cy="150" r="3" fill="#A78BFA" />
+						<circle cx="200" cy="150" r="3" fill="#3969a7" />
 					</svg>
 				</div>
 				<div class="relative z-10 flex items-center justify-between font-mono text-[11px] text-assess">
@@ -181,7 +181,7 @@
 						Every design is scored against flood, cost, and compliance models before ground breaks.
 					</p>
 					<span class="mt-4 inline-flex items-center gap-1.5 font-mono text-[11px] text-assess opacity-0 transition-opacity duration-300 group-hover:opacity-100">
-						Enter workspace \u2192
+						Enter workspace →
 					</span>
 				</div>
 			</button>
@@ -200,7 +200,7 @@
 				<svg viewBox="0 0 1000 700" class="h-full w-full" preserveAspectRatio="xMidYMid slice">
 					<defs>
 						<pattern id="mesh-full" width="34" height="34" patternUnits="userSpaceOnUse">
-							<path d="M34 0 L0 0 0 34" fill="none" stroke="#1C2932" stroke-width="0.6" />
+							<path d="M34 0 L0 0 0 34" fill="none" stroke="#e1e7ef" stroke-width="0.6" />
 						</pattern>
 					</defs>
 					<rect width="1000" height="700" fill="url(#mesh-full)" />
@@ -255,3 +255,4 @@
 		</div>
 	</div>
 {/if}
+ 

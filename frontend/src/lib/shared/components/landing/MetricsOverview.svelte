@@ -38,7 +38,7 @@
 	});
 </script>
 
-<section bind:this={sectionEl} class="relative bg-void px-6 py-16 md:px-10">
+<section bind:this={sectionEl} class="relative bg-transparent px-6 py-16 md:px-10">
 	<div class="mx-auto max-w-6xl">
 		<div class="grid grid-cols-2 gap-5 lg:grid-cols-4">
 			{#each metrics as metric, i}

@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     qfield_raster_max_zoom: int = 16
     qfield_raster_max_pixels: int = 2048
 
+    # ODK Central configuration
+    odk_base_url: str = ""
+    odk_username: str = ""
+    odk_password: str = ""
+
     frontend_origin: str = "http://localhost:5173"
     session_cookie_name: str = "dda_session"
     session_ttl_days: int = 30
