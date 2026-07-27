@@ -35,12 +35,6 @@ def diagnosis_access_where(alias: str = "d") -> str:
     )"""
 
 
-def _diagnosis_exists(diagnosis_id: str) -> bool:
-    with db_cursor() as cur:
-        cur.execute("SELECT 1 FROM diagnosis WHERE id = %(id)s", {"id": diagnosis_id})
-        return cur.fetchone() is not None
-
-
 def user_can_access_diagnosis(user_id: str, diagnosis_id: str) -> bool:
     with db_cursor() as cur:
         cur.execute(
@@ -75,36 +69,82 @@ def user_is_diagnosis_admin(user_id: str, diagnosis_id: str) -> bool:
         return cur.fetchone() is not None
 
 
+def _assert_diagnosis_gate(
+    diagnosis_id: str,
+    user_id: str,
+    *,
+    forbidden_message: str,
+    access_sql: str,
+    params: dict | None = None,
+) -> None:
+    """Single round-trip: 404 if missing, 403 if the access predicate fails."""
+    query_params = {"id": diagnosis_id, "current_user_id": user_id, **(params or {})}
+    with db_cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT
+                EXISTS(SELECT 1 FROM diagnosis WHERE id = %(id)s) AS exists,
+                EXISTS(
+                    SELECT 1 FROM diagnosis d
+                    WHERE d.id = %(id)s AND ({access_sql})
+                ) AS has_access
+            """,
+            query_params,
+        )
+        row = cur.fetchone()
+
+    if not row or not row["exists"]:
+        raise HTTPException(404, "Project not found")
+    if not row["has_access"]:
+        raise HTTPException(403, forbidden_message)
+
+
 def require_diagnosis_access(project_id: str, user: dict = Depends(get_current_user)) -> dict:
     """Route dependency: 404 if the diagnosis doesn't exist, 403 if the user can't access it."""
-    if not _diagnosis_exists(project_id):
-        raise HTTPException(404, "Project not found")
-    if not user_can_access_diagnosis(user["id"], project_id):
-        raise HTTPException(403, "You do not have access to this project")
+    _assert_diagnosis_gate(
+        project_id,
+        user["id"],
+        forbidden_message="You do not have access to this project",
+        access_sql=diagnosis_access_where("d"),
+    )
     return user
 
 
 def require_diagnosis_owner(project_id: str, user: dict = Depends(get_current_user)) -> dict:
     """Route dependency: 404 if the diagnosis doesn't exist, 403 if the user isn't the owner."""
-    if not _diagnosis_exists(project_id):
-        raise HTTPException(404, "Project not found")
-    if not user_is_diagnosis_owner(user["id"], project_id):
-        raise HTTPException(403, "Only the project owner can do this")
+    _assert_diagnosis_gate(
+        project_id,
+        user["id"],
+        forbidden_message="Only the project owner can do this",
+        access_sql="d.owner_id = %(current_user_id)s",
+    )
     return user
 
 
 def require_diagnosis_admin(project_id: str, user: dict = Depends(get_current_user)) -> dict:
     """Route dependency: allows the owner or any user with admin role on the diagnosis."""
-    if not _diagnosis_exists(project_id):
-        raise HTTPException(404, "Project not found")
-    if not user_is_diagnosis_admin(user["id"], project_id):
-        raise HTTPException(403, "Only project admins can do this")
+    _assert_diagnosis_gate(
+        project_id,
+        user["id"],
+        forbidden_message="Only project admins can do this",
+        access_sql="""
+            d.owner_id = %(current_user_id)s
+            OR EXISTS (
+                SELECT 1 FROM diagnosis_users du
+                WHERE du.diagnosis_id = d.id
+                  AND du.user_id = %(current_user_id)s
+                  AND du.role = 'admin'
+            )
+        """,
+    )
     return user
 
 
 def assert_diagnosis_access(user_id: str, diagnosis_id: str) -> None:
     """Explicit check for handlers where project_id comes from a request body, not a path/query param."""
-    if not _diagnosis_exists(diagnosis_id):
-        raise HTTPException(404, "Project not found")
-    if not user_can_access_diagnosis(user_id, diagnosis_id):
-        raise HTTPException(403, "You do not have access to this project")
+    _assert_diagnosis_gate(
+        diagnosis_id,
+        user_id,
+        forbidden_message="You do not have access to this project",
+        access_sql=diagnosis_access_where("d"),
+    )

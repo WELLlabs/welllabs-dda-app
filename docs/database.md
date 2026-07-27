@@ -7,21 +7,22 @@ The backend uses PostgreSQL 16 with the PostGIS extension. The schema is defined
 ```
 users ──────────┬──── sessions
                 │
-                ├──── qfield_tokens (1:1, per-user QField Cloud token)
-                │
                 ├──── organizations ──── org_members (role: admin|member)
                 │
                 └──── diagnosis ──┬──── diagnosis_users (role: admin|member)
                                   ├──── diagnosis_orgs
-                                  ├──── observation_zones
-                                  └──── field_notes
+                                  ├──── observation_zones ──┬──── hypothesis_observation_zones
+                                  ├──── hypotheses ─────────┘
+                                  └──── field_notes (optional FK → hypotheses)
 ```
+
+QField and ODK connector credentials are stored as columns on `users` (not separate token tables).
 
 ## Tables
 
 ### users
 
-Core account table. Passwords stored as bcrypt hashes.
+Core account table. Passwords stored as bcrypt hashes. Connector tokens live on this row.
 
 | Column | Type | Notes |
 |--------|------|-------|
@@ -29,6 +30,12 @@ Core account table. Passwords stored as bcrypt hashes.
 | email | TEXT | Unique |
 | name | TEXT | Display name |
 | password_hash | TEXT | bcrypt |
+| qfield_username | TEXT | Nullable QField Cloud username |
+| qfield_token | TEXT | Nullable QField Cloud API token |
+| qfield_token_expires_at | TIMESTAMPTZ | Nullable |
+| odk_username | TEXT | Nullable ODK Central username |
+| odk_token | TEXT | Nullable ODK Central API token |
+| odk_token_expires_at | TIMESTAMPTZ | Nullable |
 | created_at | TIMESTAMPTZ | |
 | updated_at | TIMESTAMPTZ | Auto-trigger |
 
@@ -68,19 +75,6 @@ Many-to-many between organizations and users, with a role.
 | created_at | TIMESTAMPTZ | |
 
 **Rules:** Only admins can add/remove other members. Any member can leave (self-remove). The last admin cannot leave without promoting someone else first.
-
-### qfield_tokens
-
-Per-user QField Cloud API tokens. Each user links their own account via the settings page.
-
-| Column | Type | Notes |
-|--------|------|-------|
-| user_id | UUID | PK, FK → users, CASCADE |
-| qfield_username | TEXT | |
-| token | TEXT | QField Cloud API token |
-| expires_at | TIMESTAMPTZ | Nullable |
-| created_at | TIMESTAMPTZ | |
-| updated_at | TIMESTAMPTZ | Auto-trigger |
 
 ### diagnosis
 
@@ -141,11 +135,36 @@ Polygon features drawn on the map within a diagnosis project.
 | project_id | UUID | FK → diagnosis, CASCADE |
 | geom | GEOMETRY(Geometry, 4326) | Must be POLYGON or MULTIPOLYGON |
 | text | TEXT | Label |
-| description | TEXT | |
+| observations | TEXT | Field observations |
+| questions | TEXT | Questions arising from observations |
 | color | TEXT | Hex color (default: `#0d983b`) |
 | created_at | TIMESTAMPTZ | |
 | updated_at | TIMESTAMPTZ | Auto-trigger |
 | created_by | TEXT | |
+
+### hypotheses
+
+Testable statements linked to observation zones. Field notes provide evidence for validation.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID | PK |
+| project_id | UUID | FK → diagnosis, CASCADE |
+| hypothesis | TEXT | The hypothesis statement |
+| root_cause | TEXT | Populated after field testing |
+| status | TEXT | `untested`, `validated`, `invalidated`, or `discarded` |
+| created_by | UUID | FK → users |
+| created_at | TIMESTAMPTZ | |
+| updated_at | TIMESTAMPTZ | Auto-trigger |
+
+### hypothesis_observation_zones
+
+Many-to-many link between hypotheses and observation zones.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| hypothesis_id | UUID | PK part, FK → hypotheses, CASCADE |
+| zone_id | UUID | PK part, FK → observation_zones, CASCADE |
 
 ### field_notes
 
@@ -155,7 +174,9 @@ Geotagged point features with optional photo and audio attachments.
 |--------|------|-------|
 | id | UUID | PK |
 | project_id | UUID | FK → diagnosis, CASCADE |
+| hypothesis_id | UUID | FK → hypotheses, SET NULL on delete |
 | geom | GEOMETRY(Point, 4326) | |
+| title | TEXT | Short label |
 | text | TEXT | Note content |
 | photo_path | TEXT | S3 key or legacy local path |
 | audio_path | TEXT | S3 key |
@@ -173,8 +194,11 @@ Geotagged point features with optional photo and audio attachments.
 - `diagnosis_orgs_org_id_idx` on `diagnosis_orgs(org_id)`
 - `observation_zones_geom_idx` GIST on `observation_zones(geom)`
 - `observation_zones_project_id_idx` on `observation_zones(project_id)`
+- `hypotheses_project_id_idx` on `hypotheses(project_id)`
+- `hypothesis_observation_zones_zone_id_idx` on `hypothesis_observation_zones(zone_id)`
 - `field_notes_geom_idx` GIST on `field_notes(geom)`
 - `field_notes_project_id_idx` on `field_notes(project_id)`
+- `field_notes_hypothesis_id_idx` on `field_notes(hypothesis_id)`
 
 ## Triggers
 

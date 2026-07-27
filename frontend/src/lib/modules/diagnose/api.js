@@ -99,7 +99,7 @@ export async function fetchObservationZones(projectId) {
 	return request(`/observation-zones?project_id=${encodeURIComponent(projectId)}`);
 }
 
-export async function createObservationZone(projectId, geometry, text, description, color) {
+export async function createObservationZone(projectId, geometry, text, observations, questions, color) {
 	return request('/observation-zones', {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
@@ -107,7 +107,8 @@ export async function createObservationZone(projectId, geometry, text, descripti
 			project_id: projectId,
 			geometry,
 			text,
-			description,
+			observations,
+			questions,
 			color
 		})
 	});
@@ -129,11 +130,21 @@ export async function fetchFieldNotes(projectId) {
 	return request(`/field-notes?project_id=${encodeURIComponent(projectId)}`);
 }
 
-export async function createFieldNote(projectId, geometry, text, photo, audio) {
+export async function createFieldNote(
+	projectId,
+	geometry,
+	title,
+	text,
+	photo,
+	audio,
+	hypothesisId = null
+) {
 	const form = new FormData();
 	form.append('project_id', projectId);
 	form.append('geometry', JSON.stringify(geometry));
+	form.append('title', title);
 	form.append('text', text);
+	if (hypothesisId) form.append('hypothesis_id', hypothesisId);
 	if (photo) form.append('photo', photo);
 	if (audio) form.append('audio', audio);
 	const res = await fetch(`${API}/field-notes`, { method: 'POST', body: form });
@@ -153,9 +164,43 @@ export async function deleteFieldNote(id) {
 	await request(`/field-notes/${id}`, { method: 'DELETE' });
 }
 
+export async function fetchHypotheses(projectId) {
+	const data = await request(`/hypotheses?project_id=${encodeURIComponent(projectId)}`);
+	return data.hypotheses ?? [];
+}
+
+export async function createHypothesis(projectId, hypothesis, observationZoneIds) {
+	return request('/hypotheses', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({
+			project_id: projectId,
+			hypothesis,
+			observation_zone_ids: observationZoneIds
+		})
+	});
+}
+
+export async function updateHypothesis(id, data) {
+	return request(`/hypotheses/${id}`, {
+		method: 'PATCH',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify(data)
+	});
+}
+
+export async function deleteHypothesis(id) {
+	await request(`/hypotheses/${id}`, { method: 'DELETE' });
+}
+
 export function fieldNoteMediaUrl(photoPath) {
 	if (!photoPath) return null;
 	return `${API}/field-notes/media?key=${encodeURIComponent(photoPath)}`;
+}
+
+export function fieldNoteThumbnailUrl(photoPath, size = 128) {
+	if (!photoPath) return null;
+	return `${API}/field-notes/media/thumbnail?key=${encodeURIComponent(photoPath)}&size=${size}`;
 }
 
 export async function packageToQfield(projectId) {

@@ -6,7 +6,8 @@ export default defineConfig({
 	plugins: [tailwindcss(), sveltekit()],
 	server: {
 		proxy: {
-			'/api': 'http://localhost:8080',
+			// /api is handled by src/routes/api/[...path]/+server.js (SvelteKit),
+			// not Vite — keeping both causes inconsistent behaviour.
 			'/titiler': {
 				target: 'http://localhost:8000',
 				rewrite: (path) => path.replace(/^\/titiler/, '')

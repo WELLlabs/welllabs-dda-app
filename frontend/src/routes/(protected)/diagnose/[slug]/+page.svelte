@@ -4,7 +4,6 @@
 	import MapView from '$lib/modules/diagnose/components/MapView.svelte';
 	import PackageProgressPanel from '$lib/shared/components/PackageProgressPanel.svelte';
 	import {
-		fetchProject,
 		fetchProjects,
 		packageToQfieldStream,
 		syncFromQfieldStream
@@ -44,7 +43,8 @@
 				loadError = 'Project not found';
 				return;
 			}
-			currentProject = await fetchProject(match.id);
+			// fetchProjects() already returns the full project shape (_SELECT).
+			currentProject = match;
 		} catch (err) {
 			loadError = String(err);
 		} finally {

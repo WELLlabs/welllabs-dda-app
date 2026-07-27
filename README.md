@@ -98,6 +98,12 @@ cd frontend && npm run dev
 Open [http://localhost:5173](http://localhost:5173) for the landing page, or go straight to
 [http://localhost:5173/diagnose](http://localhost:5173/diagnose).
 
+**API proxying:** In development, browser requests to `/api/*` are forwarded to FastAPI
+(`localhost:8080`) by the SvelteKit catch-all at `frontend/src/routes/api/[...path]/+server.js`.
+Vite's `server.proxy` is only used for `/titiler`. In production, put a reverse proxy
+(nginx, Caddy, or an ALB) in front and route `/api/*` directly to FastAPI so large media
+uploads never pass through Node.
+
 ## Usage (Diagnose)
 
 ### Projects

@@ -63,6 +63,25 @@ def upload_bytes(key: str, data: bytes, content_type: str | None = None) -> None
     s3_client().put_object(Bucket=settings.aws_s3_bucket, Key=key, Body=data, **extra)
 
 
+async def upload_bytes_async(key: str, data: bytes, content_type: str | None = None) -> None:
+    """Non-blocking S3 put for use inside async FastAPI routes."""
+    if not is_s3_enabled():
+        raise RuntimeError("AWS_S3_BUCKET is not configured")
+    import aioboto3
+
+    region = settings.aws_default_region
+    session = aioboto3.Session()
+    extra = {}
+    if content_type:
+        extra["ContentType"] = content_type
+    async with session.client(
+        "s3",
+        region_name=region,
+        endpoint_url=f"https://s3.{region}.amazonaws.com",
+    ) as client:
+        await client.put_object(Bucket=settings.aws_s3_bucket, Key=key, Body=data, **extra)
+
+
 def upload_file(local_path: Path, key: str) -> None:
     if not is_s3_enabled():
         raise RuntimeError("AWS_S3_BUCKET is not configured")
@@ -102,6 +121,13 @@ def presigned_get_url(key: str, expires_in: int = PRESIGN_TTL) -> str:
         Params={"Bucket": settings.aws_s3_bucket, "Key": key},
         ExpiresIn=expires_in,
     )
+
+
+def get_object_bytes(key: str) -> bytes:
+    if not is_s3_enabled():
+        raise RuntimeError("AWS_S3_BUCKET is not configured")
+    resp = s3_client().get_object(Bucket=settings.aws_s3_bucket, Key=key)
+    return resp["Body"].read()
 
 
 def delete_object(key: str) -> None:

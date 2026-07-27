@@ -93,17 +93,68 @@ def _configure_external_resource(layer: QgsVectorLayer, field_name: str, viewer:
         )
 
 
-def _configure_field_notes(layer: QgsVectorLayer, project_id: str) -> None:
-    visible_fields = ("text", "photo_path", "audio_path")
+def _configure_value_relation(
+    layer: QgsVectorLayer,
+    field_name: str,
+    related_layer: QgsVectorLayer,
+    key: str,
+    value: str,
+) -> None:
+    index = layer.fields().indexFromName(field_name)
+    if index < 0:
+        return
+    layer.setEditorWidgetSetup(
+        index,
+        QgsEditorWidgetSetup(
+            "ValueRelation",
+            {
+                "AllowMulti": False,
+                "AllowNull": True,
+                "FilterExpression": "",
+                "Key": key,
+                "Layer": related_layer.id(),
+                "NofColumns": 1,
+                "OrderByValue": True,
+                "UseCompleter": False,
+                "Value": value,
+            },
+        ),
+    )
+
+
+def _configure_field_notes(
+    layer: QgsVectorLayer,
+    project_id: str,
+    hypotheses_layer: QgsVectorLayer | None = None,
+) -> None:
+    for field_name, alias in (
+        ("title", "Title"),
+        ("text", "Notes"),
+        ("photo_path", "Photo"),
+        ("audio_path", "Audio"),
+        ("hypothesis_id", "Hypothesis"),
+    ):
+        index = layer.fields().indexFromName(field_name)
+        if index >= 0:
+            layer.setFieldAlias(index, alias)
+
+    visible_fields = ("title", "text", "hypothesis_id", "photo_path", "audio_path")
     for field in layer.fields():
         name = field.name()
         if name in visible_fields:
             continue
         _configure_hidden(layer, name)
 
+    _configure_text(layer, "title")
     _configure_text(layer, "text")
     _configure_external_resource(layer, "photo_path", 1)
     _configure_external_resource(layer, "audio_path", 3)
+    if hypotheses_layer is not None and hypotheses_layer.isValid():
+        _configure_value_relation(
+            layer, "hypothesis_id", hypotheses_layer, "hypothesis_id", "hypothesis"
+        )
+    else:
+        _configure_text(layer, "hypothesis_id")
 
     project_idx = layer.fields().indexFromName("project_id")
     if project_idx >= 0:
@@ -115,7 +166,7 @@ def _configure_field_notes(layer: QgsVectorLayer, project_id: str) -> None:
     if note_idx >= 0:
         layer.setDefaultValueDefinition(note_idx, QgsDefaultValue("uuid()", applyOnUpdate=False))
 
-    layer.setDisplayExpression('coalesce("text", \'Field note\')')
+    layer.setDisplayExpression('coalesce(nullif("title", \'\'), nullif("text", \'\'), \'Field note\')')
 
     config = layer.editFormConfig()
     config.setLayout(QgsEditFormConfig.TabLayout)
@@ -126,6 +177,26 @@ def _configure_field_notes(layer: QgsVectorLayer, project_id: str) -> None:
         index = layer.fields().indexFromName(field_name)
         if index >= 0:
             root.addChildElement(QgsAttributeEditorField(field_name, index, root))
+    layer.setEditFormConfig(config)
+
+
+def _configure_hypotheses(layer: QgsVectorLayer) -> None:
+    for field_name in ("fid", "project_id", "status"):
+        _configure_hidden(layer, field_name)
+    _configure_text(layer, "hypothesis")
+    hyp_idx = layer.fields().indexFromName("hypothesis")
+    if hyp_idx >= 0:
+        layer.setFieldAlias(hyp_idx, "Hypothesis")
+    layer.setDisplayExpression('coalesce("hypothesis", \'Untitled hypothesis\')')
+
+    config = layer.editFormConfig()
+    config.setLayout(QgsEditFormConfig.TabLayout)
+    config.clearTabs()
+    root = config.invisibleRootContainer()
+    root.clear()
+    index = layer.fields().indexFromName("hypothesis")
+    if index >= 0:
+        root.addChildElement(QgsAttributeEditorField("hypothesis", index, root))
     layer.setEditFormConfig(config)
 
 
@@ -183,7 +254,11 @@ def _configure_zone_renderer(layer: QgsVectorLayer, colors: list[str]) -> None:
 
 
 def _configure_zones(layer: QgsVectorLayer, project_id: str, colors: list[str]) -> None:
-    for field_name, alias in (("text", "Title"), ("description", "Description")):
+    for field_name, alias in (
+        ("text", "Title"),
+        ("observations", "Observations"),
+        ("questions", "Questions"),
+    ):
         index = layer.fields().indexFromName(field_name)
         if index >= 0:
             layer.setFieldAlias(index, alias)
@@ -192,8 +267,10 @@ def _configure_zones(layer: QgsVectorLayer, project_id: str, colors: list[str]) 
         _configure_hidden(layer, field_name)
 
     _configure_text(layer, "text")
-    if layer.fields().indexFromName("description") >= 0:
-        _configure_text(layer, "description")
+    if layer.fields().indexFromName("observations") >= 0:
+        _configure_text(layer, "observations")
+    if layer.fields().indexFromName("questions") >= 0:
+        _configure_text(layer, "questions")
 
     project_idx = layer.fields().indexFromName("project_id")
     if project_idx >= 0:
@@ -206,8 +283,10 @@ def _configure_zones(layer: QgsVectorLayer, project_id: str, colors: list[str]) 
     layer.setMapTipsEnabled(True)
     layer.setMapTipTemplate(
         'coalesce("text", \'Untitled zone\') || '
-        'if(length(coalesce("description", \'\')) > 0, '
-        '\'\\n\' || "description", \'\')'
+        'if(length(coalesce("observations", \'\')) > 0, '
+        '\'\\nObservations: \' || "observations", \'\') || '
+        'if(length(coalesce("questions", \'\')) > 0, '
+        '\'\\nQuestions: \' || "questions", \'\')'
     )
 
     config = layer.editFormConfig()
@@ -215,7 +294,7 @@ def _configure_zones(layer: QgsVectorLayer, project_id: str, colors: list[str]) 
     config.clearTabs()
     root = config.invisibleRootContainer()
     root.clear()
-    for field_name in ("text", "description"):
+    for field_name in ("text", "observations", "questions"):
         index = layer.fields().indexFromName(field_name)
         if index >= 0:
             root.addChildElement(QgsAttributeEditorField(field_name, index, root))
@@ -268,17 +347,28 @@ def build_project(
     _set_layer_capabilities(zones, read_only=True)
     layers.append(zones)
 
+    hypotheses_path = package_dir / "hypotheses.gpkg"
+    hypotheses = QgsVectorLayer(f"{hypotheses_path}|layername=hypotheses", "Hypotheses", "ogr")
+    if not hypotheses.isValid():
+        raise RuntimeError(f"Invalid hypotheses layer: {hypotheses_path}")
+    _configure_hypotheses(hypotheses)
+    _set_offline(hypotheses)
+    _set_layer_capabilities(hypotheses, read_only=True)
+    layers.append(hypotheses)
+
     notes_path = package_dir / "field_notes.gpkg"
     notes = QgsVectorLayer(f"{notes_path}|layername=field_notes", "Field notes", "ogr")
     if not notes.isValid():
         raise RuntimeError(f"Invalid field notes layer: {notes_path}")
-    _configure_field_notes(notes, project_id)
     _set_offline(notes)
     _set_layer_capabilities(notes, read_only=False)
     layers.append(notes)
 
     for layer in layers:
         project.addMapLayer(layer, True)
+
+    # Configure after both layers are in the project so ValueRelation can use the layer id.
+    _configure_field_notes(notes, project_id, hypotheses)
 
     if extent and len(extent) == 4:
         xmin, ymin, xmax, ymax = extent

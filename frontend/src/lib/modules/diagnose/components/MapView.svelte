@@ -5,18 +5,24 @@
 
 	import {
 		createFieldNote,
+		createHypothesis,
 		createObservationZone,
 		deleteFieldNote,
+		deleteHypothesis,
 		deleteObservationZone,
 		fetchCogLayers,
 		fetchFieldNotes,
+		fetchHypotheses,
 		fetchObservationZones,
 		fieldNoteMediaUrl,
+		fieldNoteThumbnailUrl,
 		updateFieldNote,
+		updateHypothesis,
 		updateObservationZone
 	} from '$lib/modules/diagnose/api';
-	import { LULC_LEGEND, MAX_FIELD_NOTE_MEDIA_BYTES, OBSERVATION_ZONE_COLOR, FIELD_NOTE_COLOR, ZONE_COLORS } from '$lib/modules/diagnose/map-constants';
+	import { LULC_LEGEND, MAX_FIELD_NOTE_MEDIA_BYTES, OBSERVATION_ZONE_COLOR, FIELD_NOTE_COLOR, HYPOTHESIS_COLOR, ZONE_COLORS } from '$lib/modules/diagnose/map-constants';
 	import FieldNoteIcon from '$lib/modules/diagnose/components/icons/FieldNoteIcon.svelte';
+	import HypothesisIcon from '$lib/modules/diagnose/components/icons/HypothesisIcon.svelte';
 	import ObservationZoneIcon from '$lib/modules/diagnose/components/icons/ObservationZoneIcon.svelte';
 
 	const BASE_LAYERS = {
@@ -65,13 +71,32 @@
 		selectedFieldNote = null;
 		editingSelectedFieldNote = null;
 		showSelectedFieldNoteMenu = false;
+		expandedFieldNotePhoto = null;
+	}
+
+	function closeSelectedHypothesis() {
+		selectedHypothesis = null;
+		editingHypothesis = null;
+		hypothesisError = '';
+		showSelectedHypothesisMenu = false;
 	}
 
 	function selectLayer(layer) {
 		selectedLayer = layer;
-		closeSelectedZone();
-		closeSelectedFieldNote();
-		cancelPendingForms();
+		if (layer?.kind === 'primary') {
+			activePrimaryTab = layer.id;
+			closeSelectedZone();
+			closeSelectedFieldNote();
+			closeSelectedHypothesis();
+			cancelPendingForms();
+			if (layer.id === 'hypotheses') {
+				void reloadHypotheses();
+			}
+		}
+	}
+
+	function selectPrimaryTab(id) {
+		selectLayer({ kind: 'primary', id });
 	}
 
 	function cancelPendingForms() {
@@ -80,6 +105,7 @@
 		addingFieldNote = false;
 		zoneDraw = false;
 		noteText = '';
+		noteTitle = '';
 		notePhoto = undefined;
 		noteAudio = undefined;
 		if (notePhotoPreview) URL.revokeObjectURL(notePhotoPreview);
@@ -87,8 +113,13 @@
 		if (noteAudioPreview) URL.revokeObjectURL(noteAudioPreview);
 		noteAudioPreview = null;
 		noteMediaError = '';
+		noteHypothesisId = '';
+		creatingHypothesis = false;
+		newHypothesisText = '';
+		newHypothesisZoneIds = [];
 		zoneText = '';
-		zoneDescription = '';
+		zoneObservations = '';
+		zoneQuestions = '';
 		resetDrawState();
 	}
 
@@ -166,11 +197,11 @@
 	}
 
 	function clickableFeatureLayers() {
-		if (!selectedLayer || selectedLayer.kind !== 'primary') return [];
-		if (selectedLayer.id === 'observation-zones' && showZonesLayer) {
+		if (zoneDraw || pendingZone || addingFieldNote) return [];
+		if (activePrimaryTab === 'observation-zones' && showZonesLayer) {
 			return ['zones-fill', 'zones-line', 'zones-label'];
 		}
-		if (selectedLayer.id === 'field-notes' && showFieldNotesLayer) {
+		if (activePrimaryTab === 'field-notes' && showFieldNotesLayer) {
 			return ['field-notes-point'];
 		}
 		return [];
@@ -182,9 +213,9 @@
 		if (!layers.length) return false;
 		const hit = map.queryRenderedFeatures(point, { layers });
 		for (const f of hit) {
-			if (selectedLayer?.id === 'observation-zones') {
+			if (activePrimaryTab === 'observation-zones') {
 				if (zoneIdFromFeature(f)) return true;
-			} else if (selectedLayer?.id === 'field-notes') {
+			} else if (activePrimaryTab === 'field-notes') {
 				const id = String(f.properties?.id ?? f.id ?? '');
 				if (UUID_RE.test(id)) return true;
 			}
@@ -273,6 +304,7 @@
 
 	let container;
 	let map;
+	let noteTitle = $state('');
 	let noteText = $state('');
 	let notePhoto = $state(undefined);
 	let noteAudio = $state(undefined);
@@ -293,15 +325,26 @@
 	let mapReady = $state(false);
 	let cogLayers = $state([]);
 	let cogVisibility = $state({});
-	let primaryLayerOrder = $state(['observation-zones', 'field-notes']);
+	let primaryLayerOrder = $state(['observation-zones', 'hypotheses', 'field-notes']);
 	let sidebarWidth = $state(256);
 	let sidebarResizing = $state(false);
+	let rightSidebarWidth = $state(320);
+	let rightSidebarResizing = $state(false);
+	let activePrimaryTab = $state('observation-zones');
 	/** @type {{ category: 'secondary' | 'primary' | null, index: number | null }} */
 	let dragReorder = $state({ category: null, index: null });
 
 	const PRIMARY_LAYER_LABELS = {
 		'observation-zones': 'Observation zones',
+		'hypotheses': 'Hypotheses',
 		'field-notes': 'Field notes'
+	};
+
+	const HYPOTHESIS_STATUS_LABELS = {
+		untested: 'Untested',
+		validated: 'Validated',
+		invalidated: 'Invalidated',
+		discarded: 'Discarded'
 	};
 
 	let zoneDraw = $state(false);
@@ -310,18 +353,40 @@
 	let dragVertexIndex = $state(null);
 	let pendingZone = $state(null);
 	let zoneText = $state('');
-	let zoneDescription = $state('');
+	let zoneObservations = $state('');
+	let zoneQuestions = $state('');
 	let zoneColor = $state(OBSERVATION_ZONE_COLOR);
 	let savingZone = $state(false);
 	let selectedZone = $state(null);
 	let editingSelectedZone = $state(null);
 	let savedZones = $state([]);
 	let savedFieldNotes = $state([]);
+	let hypotheses = $state([]);
+	let creatingHypothesis = $state(false);
+	let newHypothesisText = $state('');
+	let newHypothesisZoneIds = $state([]);
+	let selectedHypothesis = $state(null);
+	let editingHypothesis = $state(null);
+	let savingHypothesis = $state(false);
+	let hypothesisError = $state('');
+	let noteHypothesisId = $state('');
 	let selectedFieldNote = $state(null);
 	let editingSelectedFieldNote = $state(null);
 	let showSelectedZoneMenu = $state(false);
 	let showSelectedFieldNoteMenu = $state(false);
+	let showSelectedHypothesisMenu = $state(false);
 	let savingFieldNote = $state(false);
+	/** @type {string | null} */
+	let expandedFieldNotePhoto = $state(null);
+
+	$effect(() => {
+		if (!expandedFieldNotePhoto) return;
+		function onKey(e) {
+			if (e.key === 'Escape') expandedFieldNotePhoto = null;
+		}
+		window.addEventListener('keydown', onKey);
+		return () => window.removeEventListener('keydown', onKey);
+	});
 
 	let lastTapTime = 0;
 	let lastTapIndex = -1;
@@ -372,18 +437,42 @@
 			applyBasemapVisibility(BASE_LAYERS.esri.id, baseLayer === 'esri');
 			await ensureFieldNotePinIcon();
 			loadWatershedBoundary();
-			await loadCogLayers();
-			await reloadObservationZones();
-			await reloadFieldNotes();
+			initDrawPreview();
+			updateDrawSizes();
+			ensureDrawPreviewOnTop();
+			try {
+				await loadCogLayers();
+			} catch (err) {
+				status = `Layers unavailable: ${err instanceof Error ? err.message : String(err)}`;
+			}
+			try {
+				await reloadObservationZones();
+			} catch (err) {
+				console.error('Failed to load observation zones', err);
+				status = `Could not load observation zones: ${err instanceof Error ? err.message : String(err)}`;
+			}
+			try {
+				await reloadFieldNotes();
+			} catch (err) {
+				console.error('Failed to load field notes', err);
+				status = `Could not load field notes: ${err instanceof Error ? err.message : String(err)}`;
+			}
+			try {
+				await reloadHypotheses();
+			} catch (err) {
+				console.error('Failed to load hypotheses', err);
+				status = `Could not load hypotheses: ${err instanceof Error ? err.message : String(err)}`;
+			}
 			if (cogLayers.length > 0) {
 				selectLayer({ kind: 'secondary', id: cogLayers[0].id });
 			} else {
 				selectLayer({ kind: 'primary', id: 'observation-zones' });
 			}
-			initDrawPreview();
-			updateDrawSizes();
 			ensureDrawPreviewOnTop();
-			status = 'Ready';
+			status =
+				status.startsWith('Layers unavailable') || status.startsWith('Could not load')
+					? status
+					: 'Ready';
 			requestAnimationFrame(() => map?.resize());
 		});
 
@@ -399,9 +488,13 @@
 
 		window.addEventListener('mousemove', onSidebarResizeMove);
 		window.addEventListener('mouseup', onSidebarResizeEnd);
+		window.addEventListener('mousemove', onRightSidebarResizeMove);
+		window.addEventListener('mouseup', onRightSidebarResizeEnd);
 		onDestroy(() => {
 			window.removeEventListener('mousemove', onSidebarResizeMove);
 			window.removeEventListener('mouseup', onSidebarResizeEnd);
+			window.removeEventListener('mousemove', onRightSidebarResizeMove);
+			window.removeEventListener('mouseup', onRightSidebarResizeEnd);
 		});
 
 		map.on('click', onMapClick);
@@ -422,6 +515,7 @@
 
 	$effect(() => {
 		void sidebarWidth;
+		void rightSidebarWidth;
 		if (mapReady) requestAnimationFrame(() => map?.resize());
 	});
 
@@ -435,6 +529,7 @@
 		void cursorLngLat;
 		void dragVertexIndex;
 		void zoneColor;
+		void activePrimaryTab;
 		void selectedLayer;
 		void showZonesLayer;
 		void showFieldNotesLayer;
@@ -461,14 +556,33 @@
 	$effect(() => {
 		if (!mapReady || !refreshKey) return;
 		void refreshKey;
-		void reloadObservationZones();
-		void reloadFieldNotes();
+		void (async () => {
+			try {
+				await reloadObservationZones();
+			} catch (err) {
+				console.error('Failed to refresh observation zones', err);
+				status = `Could not load observation zones: ${err instanceof Error ? err.message : String(err)}`;
+			}
+			try {
+				await reloadFieldNotes();
+			} catch (err) {
+				console.error('Failed to refresh field notes', err);
+				status = `Could not load field notes: ${err instanceof Error ? err.message : String(err)}`;
+			}
+			try {
+				await reloadHypotheses();
+			} catch (err) {
+				console.error('Failed to refresh hypotheses', err);
+				status = `Could not load hypotheses: ${err instanceof Error ? err.message : String(err)}`;
+			}
+		})();
 	});
 
 	function updatePreviewColor(color) {
 		if (!mapReady) return;
 		if (map.getLayer('draw-preview-fill')) {
 			map.setPaintProperty('draw-preview-fill', 'fill-color', color);
+			map.setPaintProperty('draw-preview-fill', 'fill-opacity', 0.35);
 			map.setPaintProperty('draw-preview-line', 'line-color', color);
 			map.setPaintProperty('draw-preview-dash', 'line-color', color);
 			map.setPaintProperty('draw-preview-vertices', 'circle-color', color);
@@ -508,6 +622,7 @@
 	}
 
 	function initDrawPreview() {
+		if (!map || map.getSource('draw-preview')) return;
 		map.addSource('draw-preview', {
 			type: 'geojson',
 			data: { type: 'FeatureCollection', features: [] }
@@ -564,7 +679,9 @@
 	}
 
 	function updateDrawPreview() {
-		if (!mapReady || !map.getSource('draw-preview')) return;
+		if (!mapReady || !map) return;
+		initDrawPreview();
+		if (!map.getSource('draw-preview')) return;
 		const features = [];
 
 		const coords = activeCoords();
@@ -630,8 +747,9 @@
 		zoneDraw = false;
 		drawCoords = [];
 		cursorLngLat = null;
-		zoneDescription = '';
-		status = 'Enter title and description — drag vertices to adjust';
+		zoneObservations = '';
+		zoneQuestions = '';
+		status = 'Enter title, observations, and questions — drag vertices to adjust';
 		setDrawPreviewFromState();
 	}
 
@@ -656,7 +774,7 @@
 		}
 
 		if (!zoneDraw && !pendingZone && !addingFieldNote) {
-			if (selectedLayer?.kind === 'primary' && selectedLayer.id === 'observation-zones') {
+			if (activePrimaryTab === 'observation-zones') {
 				const hit = map.queryRenderedFeatures(e.point, {
 					layers: ['zones-fill', 'zones-line', 'zones-label']
 				});
@@ -669,7 +787,8 @@
 						selectedZone = {
 							id,
 							text: String(f.properties?.text ?? ''),
-							description: String(f.properties?.description ?? ''),
+							observations: String(f.properties?.observations ?? ''),
+							questions: String(f.properties?.questions ?? ''),
 							color: String(f.properties?.color ?? OBSERVATION_ZONE_COLOR)
 						};
 						closeSelectedFieldNote();
@@ -678,7 +797,7 @@
 					}
 				}
 				closeSelectedZone();
-			} else if (selectedLayer?.kind === 'primary' && selectedLayer.id === 'field-notes') {
+			} else if (activePrimaryTab === 'field-notes') {
 				const hit = map.queryRenderedFeatures(e.point, {
 					layers: ['field-notes-point']
 				});
@@ -690,9 +809,11 @@
 						editingSelectedFieldNote = null;
 						selectedFieldNote = {
 							id,
+							title: String(f.properties?.title ?? ''),
 							text: String(f.properties?.text ?? ''),
 							photo_path: f.properties?.photo_path ?? null,
 							audio_path: f.properties?.audio_path ?? null,
+							hypothesis_id: f.properties?.hypothesis_id ?? null,
 							created_at: f.properties?.created_at ?? ''
 						};
 					closeSelectedZone();
@@ -833,6 +954,7 @@
 		if (map.getLayer('watershed-fill')) map.moveLayer('watershed-fill');
 		if (map.getLayer('watershed-line')) map.moveLayer('watershed-line');
 		for (const key of primaryLayerOrder) {
+			if (key === 'hypotheses') continue;
 			const ids =
 				key === 'observation-zones'
 					? ['zones-fill', 'zones-line', 'zones-label']
@@ -896,6 +1018,20 @@
 		sidebarResizing = false;
 	}
 
+	function onRightSidebarResizeStart(e) {
+		rightSidebarResizing = true;
+		e.preventDefault();
+	}
+
+	function onRightSidebarResizeMove(e) {
+		if (!rightSidebarResizing) return;
+		rightSidebarWidth = Math.min(480, Math.max(280, window.innerWidth - e.clientX));
+	}
+
+	function onRightSidebarResizeEnd() {
+		rightSidebarResizing = false;
+	}
+
 	function resetDrawState() {
 		drawCoords = [];
 		cursorLngLat = null;
@@ -907,18 +1043,26 @@
 
 	function startObservationZoneDraw() {
 		cancelPendingForms();
-		selectLayer({ kind: 'primary', id: 'observation-zones' });
+		activePrimaryTab = 'observation-zones';
+		selectedLayer = { kind: 'primary', id: 'observation-zones' };
+		closeSelectedZone();
+		closeSelectedFieldNote();
+		closeSelectedHypothesis();
+		initDrawPreview();
 		zoneDraw = true;
 		zoneColor = OBSERVATION_ZONE_COLOR;
 		ensureDrawPreviewOnTop();
 		updateDrawSizes();
+		setDrawPreviewFromState();
+		map?.doubleClickZoom.disable();
 		status = 'Click corners — double-click last point to finish';
 	}
 
 	function startFieldNoteAdd() {
 		cancelPendingForms();
-		selectLayer({ kind: 'primary', id: 'field-notes' });
+		selectPrimaryTab('field-notes');
 		addingFieldNote = true;
+		void reloadHypotheses();
 		status = 'Click the map to place the field note';
 	}
 
@@ -1040,7 +1184,8 @@
 		savedZones = data.features.map((f) => ({
 			id: String(f.id ?? ''),
 			text: String(f.properties?.text ?? ''),
-			description: String(f.properties?.description ?? ''),
+			observations: String(f.properties?.observations ?? ''),
+			questions: String(f.properties?.questions ?? ''),
 			color: String(f.properties?.color ?? OBSERVATION_ZONE_COLOR)
 		}));
 		const features = data.features.map((f) => {
@@ -1103,9 +1248,11 @@
 		const data = await fetchFieldNotes(project.id);
 		savedFieldNotes = data.features.map((f) => ({
 			id: String(f.id ?? f.properties?.id ?? ''),
+			title: String(f.properties?.title ?? ''),
 			text: String(f.properties?.text ?? ''),
 			photo_path: f.properties?.photo_path ?? null,
 			audio_path: f.properties?.audio_path ?? null,
+			hypothesis_id: f.properties?.hypothesis_id ?? null,
 			created_at: String(f.properties?.created_at ?? '')
 		}));
 		const features = data.features.map((f) => {
@@ -1148,12 +1295,14 @@
 				project.id,
 				pendingZone.geometry,
 				zoneText.trim(),
-				zoneDescription.trim(),
+				zoneObservations.trim(),
+				zoneQuestions.trim(),
 				zoneColor
 			);
 			pendingZone = null;
 			zoneText = '';
-			zoneDescription = '';
+			zoneObservations = '';
+			zoneQuestions = '';
 			resetDrawState();
 			await reloadObservationZones();
 			status = 'Observation zone saved';
@@ -1167,7 +1316,8 @@
 	function cancelPendingZone() {
 		pendingZone = null;
 		zoneText = '';
-		zoneDescription = '';
+		zoneObservations = '';
+		zoneQuestions = '';
 		resetDrawState();
 		status = 'Ready';
 	}
@@ -1188,15 +1338,17 @@
 		try {
 			const updated = await updateObservationZone(editingSelectedZone.id, {
 				text: editingSelectedZone.text.trim(),
-				description: editingSelectedZone.description.trim(),
+				observations: editingSelectedZone.observations.trim(),
+				questions: editingSelectedZone.questions.trim(),
 				color: editingSelectedZone.color
 			});
 			selectedZone = {
 				id: editingSelectedZone.id,
 				text: String(updated.properties?.text ?? editingSelectedZone.text),
-				description: String(
-					updated.properties?.description ?? editingSelectedZone.description
+				observations: String(
+					updated.properties?.observations ?? editingSelectedZone.observations
 				),
+				questions: String(updated.properties?.questions ?? editingSelectedZone.questions),
 				color: String(updated.properties?.color ?? editingSelectedZone.color)
 			};
 			editingSelectedZone = null;
@@ -1218,6 +1370,149 @@
 			closeSelectedZone();
 			await reloadObservationZones();
 			status = 'Observation zone deleted';
+		} catch (err) {
+			status = `Delete failed: ${err instanceof Error ? err.message : String(err)}`;
+		}
+	}
+
+	async function reloadHypotheses() {
+		if (!project?.id) return;
+		hypotheses = await fetchHypotheses(project.id);
+	}
+
+	function hypothesisLabel(h) {
+		const text = String(h?.hypothesis ?? '').trim();
+		return text.length > 60 ? `${text.slice(0, 60)}…` : text || 'Untitled hypothesis';
+	}
+
+	function zoneTitleById(zoneId) {
+		return savedZones.find((z) => z.id === zoneId)?.text?.trim() || 'Untitled zone';
+	}
+
+	function startCreateHypothesis() {
+		creatingHypothesis = true;
+		newHypothesisText = '';
+		newHypothesisZoneIds = [];
+		selectedHypothesis = null;
+		editingHypothesis = null;
+		hypothesisError = '';
+	}
+
+	function cancelCreateHypothesis() {
+		creatingHypothesis = false;
+		newHypothesisText = '';
+		newHypothesisZoneIds = [];
+		hypothesisError = '';
+	}
+
+	function toggleNewHypothesisZone(zoneId) {
+		if (newHypothesisZoneIds.includes(zoneId)) {
+			newHypothesisZoneIds = newHypothesisZoneIds.filter((id) => id !== zoneId);
+		} else {
+			newHypothesisZoneIds = [...newHypothesisZoneIds, zoneId];
+		}
+	}
+
+	async function saveNewHypothesis() {
+		if (!newHypothesisText.trim()) {
+			hypothesisError = 'Hypothesis text is required';
+			return;
+		}
+		savingHypothesis = true;
+		hypothesisError = '';
+		try {
+			const created = await createHypothesis(
+				project.id,
+				newHypothesisText.trim(),
+				newHypothesisZoneIds
+			);
+			creatingHypothesis = false;
+			newHypothesisText = '';
+			newHypothesisZoneIds = [];
+			await reloadHypotheses();
+			selectedHypothesis = created;
+			editingHypothesis = null;
+			status = 'Hypothesis created';
+		} catch (err) {
+			hypothesisError = err instanceof Error ? err.message : String(err);
+		} finally {
+			savingHypothesis = false;
+		}
+	}
+
+	function openHypothesis(h) {
+		selectedHypothesis = h;
+		editingHypothesis = null;
+		hypothesisError = '';
+		showSelectedHypothesisMenu = false;
+	}
+
+	function startEditHypothesis() {
+		if (!selectedHypothesis) return;
+		showSelectedHypothesisMenu = false;
+		editingHypothesis = {
+			id: selectedHypothesis.id,
+			hypothesis: selectedHypothesis.hypothesis,
+			root_cause: selectedHypothesis.root_cause ?? '',
+			status: selectedHypothesis.status,
+			observation_zone_ids: [...(selectedHypothesis.observation_zone_ids ?? [])],
+			field_note_count: selectedHypothesis.field_note_count ?? 0
+		};
+		hypothesisError = '';
+	}
+
+	function cancelEditHypothesis() {
+		editingHypothesis = null;
+		hypothesisError = '';
+	}
+
+	function toggleEditHypothesisZone(zoneId) {
+		if (!editingHypothesis) return;
+		const ids = editingHypothesis.observation_zone_ids;
+		if (ids.includes(zoneId)) {
+			editingHypothesis.observation_zone_ids = ids.filter((id) => id !== zoneId);
+		} else {
+			editingHypothesis.observation_zone_ids = [...ids, zoneId];
+		}
+	}
+
+	async function saveEditedHypothesis() {
+		if (!editingHypothesis) return;
+		if (!editingHypothesis.hypothesis.trim()) {
+			hypothesisError = 'Hypothesis text is required';
+			return;
+		}
+		savingHypothesis = true;
+		hypothesisError = '';
+		try {
+			const payload = {
+				hypothesis: editingHypothesis.hypothesis.trim(),
+				status: editingHypothesis.status,
+				observation_zone_ids: editingHypothesis.observation_zone_ids
+			};
+			if (editingHypothesis.field_note_count > 0) {
+				payload.root_cause = editingHypothesis.root_cause.trim();
+			}
+			const updated = await updateHypothesis(editingHypothesis.id, payload);
+			selectedHypothesis = updated;
+			editingHypothesis = null;
+			await reloadHypotheses();
+			status = 'Hypothesis updated';
+		} catch (err) {
+			hypothesisError = err instanceof Error ? err.message : String(err);
+		} finally {
+			savingHypothesis = false;
+		}
+	}
+
+	async function deleteSelectedHypothesis() {
+		if (!selectedHypothesis) return;
+		if (!confirm('Delete this hypothesis?')) return;
+		try {
+			await deleteHypothesis(selectedHypothesis.id);
+			closeSelectedHypothesis();
+			await reloadHypotheses();
+			status = 'Hypothesis deleted';
 		} catch (err) {
 			status = `Delete failed: ${err instanceof Error ? err.message : String(err)}`;
 		}
@@ -1274,13 +1569,16 @@
 			await createFieldNote(
 				project.id,
 				{ type: 'Point', coordinates: pendingPoint },
+				noteTitle,
 				noteText,
 				notePhoto,
-				noteAudio
+				noteAudio,
+				noteHypothesisId || null
 			);
 			cancelPendingForms();
 			addingFieldNote = false;
 			await reloadFieldNotes();
+			await reloadHypotheses();
 			status = 'Field note saved';
 		} catch (err) {
 			status = String(err);
@@ -1289,7 +1587,11 @@
 
 	function startEditSelectedFieldNote() {
 		if (!selectedFieldNote) return;
-		editingSelectedFieldNote = { ...selectedFieldNote };
+		editingSelectedFieldNote = {
+			...selectedFieldNote,
+			title: selectedFieldNote.title ?? '',
+			hypothesis_id: selectedFieldNote.hypothesis_id ?? ''
+		};
 		showSelectedFieldNoteMenu = false;
 	}
 
@@ -1302,17 +1604,22 @@
 		savingFieldNote = true;
 		try {
 			const updated = await updateFieldNote(editingSelectedFieldNote.id, {
-				text: editingSelectedFieldNote.text.trim()
+				title: editingSelectedFieldNote.title.trim(),
+				text: editingSelectedFieldNote.text.trim(),
+				hypothesis_id: editingSelectedFieldNote.hypothesis_id || null
 			});
 			selectedFieldNote = {
 				id: editingSelectedFieldNote.id,
+				title: String(updated.properties?.title ?? editingSelectedFieldNote.title),
 				text: String(updated.properties?.text ?? editingSelectedFieldNote.text),
 				photo_path: updated.properties?.photo_path ?? editingSelectedFieldNote.photo_path,
 				audio_path: updated.properties?.audio_path ?? editingSelectedFieldNote.audio_path,
+				hypothesis_id: updated.properties?.hypothesis_id ?? editingSelectedFieldNote.hypothesis_id,
 				created_at: updated.properties?.created_at ?? editingSelectedFieldNote.created_at
 			};
 			editingSelectedFieldNote = null;
 			await reloadFieldNotes();
+			await reloadHypotheses();
 			status = 'Field note updated';
 		} catch (err) {
 			status = `Update failed: ${err instanceof Error ? err.message : String(err)}`;
@@ -1433,7 +1740,7 @@
 			{#each primaryLayerOrder as layerId, index (layerId)}
 				<div
 					class="mb-1 flex min-w-0 items-center gap-1 rounded px-1 py-1.5 text-sm"
-					class:layer-row-selected={selectedLayer?.kind === 'primary' && selectedLayer.id === layerId}
+					class:layer-row-selected={activePrimaryTab === layerId && selectedLayer?.kind === 'primary'}
 					class:layer-row-dragging={dragReorder.category === 'primary' && dragReorder.index === index}
 					ondragover={onLayerDragOver}
 					ondrop={(e) => onLayerDrop('primary', index, e)}
@@ -1442,7 +1749,7 @@
 						<button
 							type="button"
 							class="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded border-0 bg-transparent p-0 text-brand-steel hover:bg-brand-sky/20 hover:text-brand-navy"
-							aria-label={showZonesLayer ? 'Hide layer' : 'Show layer'}
+							aria-label={showZonesLayer ? 'Hide zones on map' : 'Show zones on map'}
 							onclick={() => toggleZonesLayer(!showZonesLayer)}
 						>
 							{#if showZonesLayer}
@@ -1462,16 +1769,16 @@
 						<button
 							type="button"
 							class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 border-0 bg-transparent p-0 text-left text-brand-navy"
-							onclick={() => selectLayer({ kind: 'primary', id: 'observation-zones' })}
+							onclick={() => selectPrimaryTab('observation-zones')}
 						>
 							<ObservationZoneIcon size="sm" />
 							<span class="truncate">{PRIMARY_LAYER_LABELS[layerId]}</span>
 						</button>
-					{:else}
+					{:else if layerId === 'field-notes'}
 						<button
 							type="button"
 							class="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded border-0 bg-transparent p-0 text-brand-steel hover:bg-brand-sky/20 hover:text-brand-navy"
-							aria-label={showFieldNotesLayer ? 'Hide layer' : 'Show layer'}
+							aria-label={showFieldNotesLayer ? 'Hide notes on map' : 'Show notes on map'}
 							onclick={() => toggleFieldNotesLayer(!showFieldNotesLayer)}
 						>
 							{#if showFieldNotesLayer}
@@ -1491,9 +1798,19 @@
 						<button
 							type="button"
 							class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 border-0 bg-transparent p-0 text-left text-brand-navy"
-							onclick={() => selectLayer({ kind: 'primary', id: 'field-notes' })}
+							onclick={() => selectPrimaryTab('field-notes')}
 						>
 							<FieldNoteIcon size="sm" />
+							<span class="truncate">{PRIMARY_LAYER_LABELS[layerId]}</span>
+						</button>
+					{:else if layerId === 'hypotheses'}
+						<span class="flex h-7 w-7 shrink-0" aria-hidden="true"></span>
+						<button
+							type="button"
+							class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 border-0 bg-transparent p-0 text-left text-brand-navy"
+							onclick={() => selectPrimaryTab('hypotheses')}
+						>
+							<HypothesisIcon size="sm" />
 							<span class="truncate">{PRIMARY_LAYER_LABELS[layerId]}</span>
 						</button>
 					{/if}
@@ -1529,16 +1846,36 @@
 		onmousedown={onSidebarResizeStart}
 	></div>
 
-	<!-- Map (full width beside left panel; floating cards overlay the right side) -->
+	<!-- Map -->
 	<div class="relative h-full min-h-0 flex-1">
 		<div bind:this={container} class="h-full w-full"></div>
 
+		<div class="absolute bottom-2 left-2 z-10 max-w-[50%] rounded bg-white/90 px-2 py-1 text-sm shadow">
+			{status}
+		</div>
 		<div
-			class="pointer-events-none absolute top-3 right-3 z-10 flex max-h-[calc(100%-3.5rem)] w-72 flex-col gap-3 overflow-y-auto"
+			class="absolute right-2 bottom-1 z-10 max-w-[45%] truncate rounded bg-white/80 px-2 py-0.5 text-[10px] text-gray-600 shadow-sm"
 		>
+			{activeAttribution}
+		</div>
+	</div>
+	<div
+		class="sidebar-resize-handle"
+		class:sidebar-resize-active={rightSidebarResizing}
+		role="separator"
+		aria-orientation="vertical"
+		aria-label="Resize right sidebar"
+		onmousedown={onRightSidebarResizeStart}
+	></div>
+
+	<aside
+		class="flex shrink-0 flex-col overflow-hidden border-l border-brand-navy/10 bg-white font-body"
+		style:width="{rightSidebarWidth}px"
+	>
+		<div class="min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-3">
 			{#if selectedLayer?.kind === 'secondary'}
 				{@const layer = cogLayers.find((l) => l.id === selectedLayer.id)}
-				<div class="pointer-events-auto rounded-lg bg-white p-4 shadow-lg">
+				<div class="rounded-lg border border-brand-navy/10 bg-white p-4">
 					<h3 class="m-0 mb-1 text-base font-semibold">{layer?.name ?? 'Layer'}</h3>
 					<p class="m-0 mb-3 text-xs text-gray-500">LULC legend</p>
 					<ul class="m-0 list-none space-y-2 p-0">
@@ -1553,8 +1890,8 @@
 						{/each}
 					</ul>
 				</div>
-			{:else if selectedLayer?.kind === 'primary' && selectedLayer.id === 'observation-zones'}
-				<div class="pointer-events-auto rounded-lg bg-white p-4 shadow-lg">
+			{:else if selectedLayer?.kind === 'primary' && activePrimaryTab === 'observation-zones'}
+				<div class="rounded-lg border border-brand-navy/10 bg-white p-4">
 					<h3 class="m-0 mb-1 text-base font-semibold">Observation zones</h3>
 					<p class="m-0 mb-3 text-xs text-gray-500">
 						Click a zone on the map to view details, or add a new polygon.
@@ -1582,7 +1919,7 @@
 				</div>
 
 				{#if pendingZone}
-					<div class="pointer-events-auto rounded-lg bg-white p-4 shadow-lg">
+					<div class="rounded-lg border border-brand-navy/10 bg-white p-4">
 						<h3 class="m-0 mb-3 text-base font-semibold">New observation zone</h3>
 						<label for="annot-text" class="text-sm text-gray-600">Title</label>
 						<input
@@ -1592,12 +1929,20 @@
 							bind:value={zoneText}
 							placeholder="Zone title"
 						/>
-						<label for="annot-desc" class="text-sm text-gray-600">Description</label>
+						<label for="annot-observations" class="text-sm text-gray-600">Observations</label>
 						<textarea
-							id="annot-desc"
+							id="annot-observations"
 							class="my-1.5 mb-3 box-border w-full rounded border border-gray-300 p-2 text-sm"
-							bind:value={zoneDescription}
-							placeholder="Description…"
+							bind:value={zoneObservations}
+							placeholder="What did you observe?"
+							rows="3"
+						></textarea>
+						<label for="annot-questions" class="text-sm text-gray-600">Questions</label>
+						<textarea
+							id="annot-questions"
+							class="my-1.5 mb-3 box-border w-full rounded border border-gray-300 p-2 text-sm"
+							bind:value={zoneQuestions}
+							placeholder="What questions arise?"
 							rows="3"
 						></textarea>
 						<p class="m-0 mb-2 text-sm text-gray-600">Colour</p>
@@ -1632,7 +1977,7 @@
 						</div>
 					</div>
 				{:else if editingSelectedZone}
-					<div class="pointer-events-auto rounded-lg bg-white p-4 shadow-lg">
+					<div class="rounded-lg border border-brand-navy/10 bg-white p-4">
 						<h3 class="m-0 mb-3 text-base font-semibold">Edit observation zone</h3>
 						<label for="edit-text" class="text-sm text-gray-600">Title</label>
 						<input
@@ -1641,11 +1986,18 @@
 							class="my-1.5 mb-3 box-border w-full rounded border border-gray-300 p-2 text-sm"
 							bind:value={editingSelectedZone.text}
 						/>
-						<label for="edit-desc" class="text-sm text-gray-600">Description</label>
+						<label for="edit-observations" class="text-sm text-gray-600">Observations</label>
 						<textarea
-							id="edit-desc"
+							id="edit-observations"
 							class="my-1.5 mb-3 box-border w-full rounded border border-gray-300 p-2 text-sm"
-							bind:value={editingSelectedZone.description}
+							bind:value={editingSelectedZone.observations}
+							rows="3"
+						></textarea>
+						<label for="edit-questions" class="text-sm text-gray-600">Questions</label>
+						<textarea
+							id="edit-questions"
+							class="my-1.5 mb-3 box-border w-full rounded border border-gray-300 p-2 text-sm"
+							bind:value={editingSelectedZone.questions}
 							rows="3"
 						></textarea>
 						<p class="m-0 mb-2 text-sm text-gray-600">Colour</p>
@@ -1680,7 +2032,7 @@
 					</div>
 				{:else if selectedZone}
 					{@const zoneTitleColor = contrastTextColor(selectedZone.color)}
-					<div class="pointer-events-auto overflow-hidden rounded-lg bg-white shadow-lg">
+					<div class="overflow-hidden rounded-lg border border-brand-navy/10 bg-white">
 						<div
 							class="flex items-center justify-between gap-2 px-4 py-3"
 							style:background-color={selectedZone.color}
@@ -1736,14 +2088,291 @@
 							</div>
 						</div>
 						<div class="p-4">
-							<p class="m-0 text-sm leading-relaxed whitespace-pre-wrap text-brand-navy">
-								{selectedZone.description || '—'}
-							</p>
+							<div class="mb-3">
+								<span class="mb-0.5 block text-xs font-semibold text-gray-500 uppercase">Observations</span>
+								<p class="m-0 text-sm leading-relaxed whitespace-pre-wrap text-brand-navy">
+									{selectedZone.observations || '—'}
+								</p>
+							</div>
+							<div>
+								<span class="mb-0.5 block text-xs font-semibold text-gray-500 uppercase">Questions</span>
+								<p class="m-0 text-sm leading-relaxed whitespace-pre-wrap text-brand-navy">
+									{selectedZone.questions || '—'}
+								</p>
+							</div>
 						</div>
 					</div>
 				{/if}
-			{:else if selectedLayer?.kind === 'primary' && selectedLayer.id === 'field-notes'}
-				<div class="pointer-events-auto rounded-lg bg-white p-4 shadow-lg">
+			{:else if selectedLayer?.kind === 'primary' && activePrimaryTab === 'hypotheses'}
+				<div class="rounded-lg border border-brand-navy/10 bg-white p-4">
+					<h3 class="m-0 mb-1 text-base font-semibold">Hypotheses</h3>
+					<p class="m-0 mb-3 text-xs text-gray-500">
+						Create hypotheses linked to observation zones. Field notes provide evidence for validation.
+					</p>
+					<button
+						type="button"
+						class="flex w-full cursor-pointer items-center justify-center gap-2 rounded-lg border-0 px-3 py-2.5 font-body text-sm text-white hover:opacity-90"
+						style:background-color={HYPOTHESIS_COLOR}
+						onclick={startCreateHypothesis}
+					>
+						<span class="text-lg leading-none">+</span> Add hypothesis
+					</button>
+				</div>
+
+				{#if creatingHypothesis}
+					<div class="rounded-lg border border-brand-navy/10 bg-white p-4">
+						<h3 class="m-0 mb-3 text-base font-semibold">New hypothesis</h3>
+						<label for="new-hypothesis" class="text-sm text-gray-600">Hypothesis</label>
+						<textarea
+							id="new-hypothesis"
+							class="my-1.5 mb-3 box-border w-full rounded border border-gray-300 p-2 text-sm"
+							bind:value={newHypothesisText}
+							placeholder="What do you think is happening?"
+							rows="3"
+						></textarea>
+						<p class="m-0 mb-2 text-sm text-gray-600">Link observation zones</p>
+						{#if savedZones.length === 0}
+							<p class="m-0 mb-3 text-xs text-gray-500">No observation zones yet.</p>
+						{:else}
+							<ul class="m-0 mb-3 max-h-36 list-none space-y-1 overflow-y-auto p-0">
+								{#each savedZones as zone (zone.id)}
+									<li>
+										<label class="flex cursor-pointer items-center gap-2 text-sm">
+											<input
+												type="checkbox"
+												checked={newHypothesisZoneIds.includes(zone.id)}
+												onchange={() => toggleNewHypothesisZone(zone.id)}
+											/>
+											<span class="truncate">{zone.text || 'Untitled zone'}</span>
+										</label>
+									</li>
+								{/each}
+							</ul>
+						{/if}
+						{#if hypothesisError}
+							<p class="m-0 mb-2 text-xs text-red-600">{hypothesisError}</p>
+						{/if}
+						<div class="flex gap-2">
+							<button
+								class="cursor-pointer rounded border-0 bg-brand-blue px-3 py-1.5 font-body text-sm text-white disabled:opacity-60"
+								disabled={savingHypothesis}
+								onclick={saveNewHypothesis}
+							>
+								{savingHypothesis ? 'Saving…' : 'Save'}
+							</button>
+							<button
+								class="cursor-pointer rounded border-0 bg-brand-steel px-3 py-1.5 font-body text-sm text-white hover:bg-brand-navy"
+								onclick={cancelCreateHypothesis}
+							>
+								Cancel
+							</button>
+						</div>
+					</div>
+				{:else if editingHypothesis}
+					<div class="rounded-lg border border-brand-navy/10 bg-white p-4">
+						<h3 class="m-0 mb-3 text-base font-semibold">
+							{editingHypothesis.field_note_count > 0 ? 'Review hypothesis' : 'Edit hypothesis'}
+						</h3>
+						<label for="edit-hypothesis-text" class="text-sm text-gray-600">Hypothesis</label>
+						<textarea
+							id="edit-hypothesis-text"
+							class="my-1.5 mb-3 box-border w-full rounded border border-gray-300 p-2 text-sm"
+							bind:value={editingHypothesis.hypothesis}
+							rows="3"
+						></textarea>
+						<p class="m-0 mb-2 text-sm text-gray-600">Linked observation zones</p>
+						{#if savedZones.length === 0}
+							<p class="m-0 mb-3 text-xs text-gray-500">No observation zones available.</p>
+						{:else}
+							<ul class="m-0 mb-3 max-h-28 list-none space-y-1 overflow-y-auto p-0">
+								{#each savedZones as zone (zone.id)}
+									<li>
+										<label class="flex cursor-pointer items-center gap-2 text-sm">
+											<input
+												type="checkbox"
+												checked={editingHypothesis.observation_zone_ids.includes(zone.id)}
+												onchange={() => toggleEditHypothesisZone(zone.id)}
+											/>
+											<span class="truncate">{zone.text || 'Untitled zone'}</span>
+										</label>
+									</li>
+								{/each}
+							</ul>
+						{/if}
+						{#if editingHypothesis.field_note_count > 0}
+							<label for="edit-root-cause" class="text-sm text-gray-600">Root cause</label>
+							<textarea
+								id="edit-root-cause"
+								class="my-1.5 mb-3 box-border w-full rounded border border-gray-300 p-2 text-sm"
+								bind:value={editingHypothesis.root_cause}
+								placeholder="What is the underlying cause?"
+								rows="3"
+							></textarea>
+							<label for="edit-hypothesis-status" class="text-sm text-gray-600">Status</label>
+							<select
+								id="edit-hypothesis-status"
+								class="my-1.5 mb-3 box-border w-full rounded border border-gray-300 p-2 text-sm"
+								bind:value={editingHypothesis.status}
+							>
+								{#each Object.entries(HYPOTHESIS_STATUS_LABELS) as [value, label]}
+									<option value={value}>{label}</option>
+								{/each}
+							</select>
+							<p class="m-0 mb-3 text-xs text-gray-500">
+								{editingHypothesis.field_note_count} field note(s) linked as evidence.
+							</p>
+						{:else}
+							<p class="m-0 mb-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+								Link field notes to this hypothesis from the Field notes tab before adding a root
+								cause or changing status.
+							</p>
+						{/if}
+						{#if hypothesisError}
+							<p class="m-0 mb-2 text-xs text-red-600">{hypothesisError}</p>
+						{/if}
+						<div class="flex gap-2">
+							<button
+								class="cursor-pointer rounded border-0 bg-brand-blue px-3 py-1.5 font-body text-sm text-white disabled:opacity-60"
+								disabled={savingHypothesis}
+								onclick={saveEditedHypothesis}
+							>
+								{savingHypothesis ? 'Saving…' : 'Save'}
+							</button>
+							<button
+								class="cursor-pointer rounded border-0 bg-brand-steel px-3 py-1.5 font-body text-sm text-white hover:bg-brand-navy"
+								onclick={cancelEditHypothesis}
+							>
+								Cancel
+							</button>
+						</div>
+					</div>
+				{:else if selectedHypothesis}
+					<div class="rounded-lg border border-brand-navy/10 bg-white p-4">
+						<div class="mb-3 flex items-start justify-between gap-2">
+							<div class="min-w-0 flex-1">
+								<span
+									class="mb-2 inline-block rounded-full px-2 py-0.5 text-xs font-medium capitalize"
+									class:bg-gray-100={selectedHypothesis.status === 'untested' ||
+										selectedHypothesis.status === 'discarded'}
+									class:text-gray-700={selectedHypothesis.status === 'untested' ||
+										selectedHypothesis.status === 'discarded'}
+									class:bg-green-100={selectedHypothesis.status === 'validated'}
+									class:text-green-800={selectedHypothesis.status === 'validated'}
+									class:bg-red-100={selectedHypothesis.status === 'invalidated'}
+									class:text-red-800={selectedHypothesis.status === 'invalidated'}
+								>
+									{HYPOTHESIS_STATUS_LABELS[selectedHypothesis.status] ??
+										selectedHypothesis.status}
+								</span>
+								<p class="m-0 text-sm leading-relaxed whitespace-pre-wrap">
+									{selectedHypothesis.hypothesis}
+								</p>
+							</div>
+							<div class="flex shrink-0 items-center gap-1">
+								<div class="relative">
+									<button
+										type="button"
+										class="flex h-8 w-8 cursor-pointer items-center justify-center rounded border-0 bg-transparent text-gray-600 hover:bg-gray-100"
+										aria-label="More actions"
+										onclick={() => (showSelectedHypothesisMenu = !showSelectedHypothesisMenu)}
+									>
+										<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="h-5 w-5">
+											<circle cx="12" cy="5" r="1.5" />
+											<circle cx="12" cy="12" r="1.5" />
+											<circle cx="12" cy="19" r="1.5" />
+										</svg>
+									</button>
+									{#if showSelectedHypothesisMenu}
+										<div
+											class="absolute right-0 z-20 mt-1 min-w-28 overflow-hidden rounded border border-gray-200 bg-white shadow-lg"
+										>
+											<button
+												type="button"
+												class="block w-full cursor-pointer border-0 bg-white px-3 py-2 text-left text-sm hover:bg-gray-50"
+												onclick={() => {
+													showSelectedHypothesisMenu = false;
+													startEditHypothesis();
+												}}
+											>
+												Edit
+											</button>
+											<button
+												type="button"
+												class="block w-full cursor-pointer border-0 bg-white px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+												onclick={() => {
+													showSelectedHypothesisMenu = false;
+													deleteSelectedHypothesis();
+												}}
+											>
+												Delete
+											</button>
+										</div>
+									{/if}
+								</div>
+								<button
+									type="button"
+									class="cursor-pointer rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-600 hover:bg-gray-50"
+									onclick={closeSelectedHypothesis}
+								>
+									Close
+								</button>
+							</div>
+						</div>
+						{#if selectedHypothesis.root_cause && (selectedHypothesis.field_note_count ?? 0) > 0}
+							<div class="mb-3">
+								<span class="mb-0.5 block text-xs font-semibold text-gray-500 uppercase"
+									>Root cause</span
+								>
+								<p class="m-0 text-sm whitespace-pre-wrap">{selectedHypothesis.root_cause}</p>
+							</div>
+						{/if}
+						<div class="mb-3">
+							<span class="mb-0.5 block text-xs font-semibold text-gray-500 uppercase"
+								>Observation zones</span
+							>
+							{#if (selectedHypothesis.observation_zone_ids ?? []).length === 0}
+								<p class="m-0 text-sm text-gray-500">None linked</p>
+							{:else}
+								<ul class="m-0 list-disc pl-4 text-sm">
+									{#each selectedHypothesis.observation_zone_ids as zoneId}
+										<li>{zoneTitleById(zoneId)}</li>
+									{/each}
+								</ul>
+							{/if}
+						</div>
+						<p class="m-0 mb-3 text-xs text-gray-500">
+							{selectedHypothesis.field_note_count ?? 0} field note(s) linked
+						</p>
+						<button
+							type="button"
+							class="w-full cursor-pointer rounded-lg border-0 px-3 py-2.5 font-body text-sm text-white hover:opacity-90"
+							style:background-color={HYPOTHESIS_COLOR}
+							onclick={startEditHypothesis}
+						>
+							{(selectedHypothesis.field_note_count ?? 0) > 0 ? 'Review' : 'Edit'}
+						</button>
+					</div>
+				{:else if hypotheses.length > 0}
+					<div class="rounded-lg border border-brand-navy/10 bg-white p-4">
+						<h3 class="m-0 mb-2 text-sm font-semibold text-gray-700">All hypotheses</h3>
+						<ul class="m-0 list-none space-y-2 p-0">
+							{#each hypotheses as h (h.id)}
+								<li>
+									<button
+										type="button"
+										class="w-full cursor-pointer rounded border border-gray-200 bg-gray-50 px-3 py-2 text-left hover:bg-gray-100"
+										onclick={() => openHypothesis(h)}
+									>
+										<span class="mb-1 block text-xs capitalize text-gray-500">{h.status}</span>
+										<span class="block text-sm text-brand-navy">{hypothesisLabel(h)}</span>
+									</button>
+								</li>
+							{/each}
+						</ul>
+					</div>
+				{/if}
+			{:else if selectedLayer?.kind === 'primary' && activePrimaryTab === 'field-notes'}
+				<div class="rounded-lg border border-brand-navy/10 bg-white p-4">
 					<h3 class="m-0 mb-1 text-base font-semibold">Field notes</h3>
 					<p class="m-0 mb-3 text-xs text-gray-500">
 						Click a note on the map to view details, or add a new point.
@@ -1769,9 +2398,17 @@
 				</div>
 
 				{#if pendingPoint}
-					<div class="pointer-events-auto rounded-lg bg-white p-4 shadow-lg">
+					<div class="rounded-lg border border-brand-navy/10 bg-white p-4">
 						<h3 class="m-0 mb-3 text-base font-semibold">New field note</h3>
-						<label for="note-text" class="text-sm text-gray-600">Text</label>
+						<label for="note-title" class="text-sm text-gray-600">Title</label>
+						<input
+							id="note-title"
+							type="text"
+							class="my-1.5 mb-3 box-border w-full rounded border border-gray-300 p-2 text-sm"
+							bind:value={noteTitle}
+							placeholder="Note title"
+						/>
+						<label for="note-text" class="text-sm text-gray-600">Notes</label>
 						<textarea
 							id="note-text"
 							class="my-1.5 mb-3 box-border w-full rounded border border-gray-300 p-2 text-sm"
@@ -1812,6 +2449,17 @@
 						{#if noteMediaError}
 							<p class="m-0 mb-2 text-xs text-red-600">{noteMediaError}</p>
 						{/if}
+						<label for="note-hypothesis" class="text-sm text-gray-600">Link to hypothesis</label>
+						<select
+							id="note-hypothesis"
+							class="my-1.5 mb-3 box-border w-full rounded border border-gray-300 p-2 text-sm"
+							bind:value={noteHypothesisId}
+						>
+							<option value="">None</option>
+							{#each hypotheses as h (h.id)}
+								<option value={h.id}>{hypothesisLabel(h)}</option>
+							{/each}
+						</select>
 						<div class="flex gap-2">
 							<button
 								class="cursor-pointer rounded border-0 bg-blue-600 px-3 py-1.5 text-sm text-white"
@@ -1828,15 +2476,34 @@
 						</div>
 					</div>
 				{:else if editingSelectedFieldNote}
-					<div class="pointer-events-auto rounded-lg bg-white p-4 shadow-lg">
+					<div class="rounded-lg border border-brand-navy/10 bg-white p-4">
 						<h3 class="m-0 mb-3 text-base font-semibold">Edit field note</h3>
-						<label for="edit-note-text" class="text-sm text-gray-600">Text</label>
+						<label for="edit-note-title" class="text-sm text-gray-600">Title</label>
+						<input
+							id="edit-note-title"
+							type="text"
+							class="my-1.5 mb-3 box-border w-full rounded border border-gray-300 p-2 text-sm"
+							bind:value={editingSelectedFieldNote.title}
+							placeholder="Note title"
+						/>
+						<label for="edit-note-text" class="text-sm text-gray-600">Notes</label>
 						<textarea
 							id="edit-note-text"
 							class="my-1.5 mb-4 box-border w-full rounded border border-gray-300 p-2 text-sm"
 							bind:value={editingSelectedFieldNote.text}
 							rows="4"
 						></textarea>
+						<label for="edit-note-hypothesis" class="text-sm text-gray-600">Link to hypothesis</label>
+						<select
+							id="edit-note-hypothesis"
+							class="my-1.5 mb-4 box-border w-full rounded border border-gray-300 p-2 text-sm"
+							bind:value={editingSelectedFieldNote.hypothesis_id}
+						>
+							<option value="">None</option>
+							{#each hypotheses as h (h.id)}
+								<option value={h.id}>{hypothesisLabel(h)}</option>
+							{/each}
+						</select>
 						<div class="flex gap-2">
 							<button
 								class="cursor-pointer rounded border-0 bg-brand-blue px-3 py-1.5 font-body text-sm text-white disabled:opacity-60"
@@ -1854,94 +2521,130 @@
 						</div>
 					</div>
 				{:else if selectedFieldNote}
-					<div class="pointer-events-auto rounded-lg bg-white p-4 shadow-lg">
-						<div class="mb-3 flex items-start justify-between gap-2">
-							<h3 class="m-0 text-base font-semibold">Field note</h3>
-							<div class="flex shrink-0 items-center gap-1">
-								<div class="relative">
-									<button
-										type="button"
-										class="flex h-8 w-8 cursor-pointer items-center justify-center rounded border-0 bg-transparent text-gray-600 hover:bg-gray-100"
-										aria-label="More actions"
-										onclick={() => (showSelectedFieldNoteMenu = !showSelectedFieldNoteMenu)}
-									>
-										<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="h-5 w-5">
-											<circle cx="12" cy="5" r="1.5" />
-											<circle cx="12" cy="12" r="1.5" />
-											<circle cx="12" cy="19" r="1.5" />
-										</svg>
-									</button>
-									{#if showSelectedFieldNoteMenu}
-										<div
-											class="absolute right-0 z-20 mt-1 min-w-28 overflow-hidden rounded border border-gray-200 bg-white shadow-lg"
-										>
+					{@const photoUrl = fieldNoteMediaUrl(selectedFieldNote.photo_path)}
+					{@const thumbUrl =
+						photoUrl && selectedFieldNote.photo_path?.match(/\.(jpe?g|png|gif|webp)$/i)
+							? fieldNoteThumbnailUrl(selectedFieldNote.photo_path, 128)
+							: null}
+					<div class="rounded-lg border border-brand-navy/10 bg-white p-4">
+						<div class="mb-3 flex items-start gap-3">
+							<div class="min-w-0 flex-1">
+								<div class="mb-2 flex items-start justify-between gap-2">
+									<h3 class="m-0 text-base font-semibold">
+										{selectedFieldNote.title?.trim() || 'Field note'}
+									</h3>
+									<div class="flex shrink-0 items-center gap-1">
+										<div class="relative">
 											<button
 												type="button"
-												class="block w-full cursor-pointer border-0 bg-white px-3 py-2 text-left text-sm hover:bg-gray-50"
-												onclick={startEditSelectedFieldNote}
+												class="flex h-8 w-8 cursor-pointer items-center justify-center rounded border-0 bg-transparent text-gray-600 hover:bg-gray-100"
+												aria-label="More actions"
+												onclick={() => (showSelectedFieldNoteMenu = !showSelectedFieldNoteMenu)}
 											>
-												Edit
+												<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="h-5 w-5">
+													<circle cx="12" cy="5" r="1.5" />
+													<circle cx="12" cy="12" r="1.5" />
+													<circle cx="12" cy="19" r="1.5" />
+												</svg>
 											</button>
-											<button
-												type="button"
-												class="block w-full cursor-pointer border-0 bg-white px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
-												onclick={deleteSelectedFieldNote}
-											>
-												Delete
-											</button>
+											{#if showSelectedFieldNoteMenu}
+												<div
+													class="absolute right-0 z-20 mt-1 min-w-28 overflow-hidden rounded border border-gray-200 bg-white shadow-lg"
+												>
+													<button
+														type="button"
+														class="block w-full cursor-pointer border-0 bg-white px-3 py-2 text-left text-sm hover:bg-gray-50"
+														onclick={startEditSelectedFieldNote}
+													>
+														Edit
+													</button>
+													<button
+														type="button"
+														class="block w-full cursor-pointer border-0 bg-white px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+														onclick={deleteSelectedFieldNote}
+													>
+														Delete
+													</button>
+												</div>
+											{/if}
 										</div>
-									{/if}
+										<button
+											type="button"
+											class="cursor-pointer rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-600 hover:bg-gray-50"
+											onclick={closeSelectedFieldNote}
+										>
+											Close
+										</button>
+									</div>
 								</div>
+								<div class="mb-3">
+									<span class="mb-0.5 block text-xs font-semibold text-gray-500 uppercase">Notes</span>
+									<p class="m-0 text-sm whitespace-pre-wrap">{selectedFieldNote.text || '—'}</p>
+								</div>
+								{#if selectedFieldNote.hypothesis_id}
+									<div class="mb-3">
+										<span class="mb-0.5 block text-xs font-semibold text-gray-500 uppercase"
+											>Hypothesis</span
+										>
+										<p class="m-0 text-sm">
+											{hypothesisLabel(
+												hypotheses.find((h) => h.id === selectedFieldNote.hypothesis_id)
+											)}
+										</p>
+									</div>
+								{/if}
+								{#if selectedFieldNote.audio_path}
+									{@const audioUrl = fieldNoteMediaUrl(selectedFieldNote.audio_path)}
+									{#if audioUrl}
+										<audio controls src={audioUrl} class="w-full"></audio>
+									{/if}
+								{/if}
+							</div>
+							{#if thumbUrl}
 								<button
 									type="button"
-									class="cursor-pointer rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-600 hover:bg-gray-50"
-									onclick={closeSelectedFieldNote}
+									class="h-20 w-20 shrink-0 cursor-pointer overflow-hidden rounded-lg border border-brand-navy/10 bg-gray-100 p-0 hover:opacity-90"
+									aria-label="Expand photo"
+									onclick={() => (expandedFieldNotePhoto = photoUrl)}
 								>
-									Close
+									<img
+										src={thumbUrl}
+										alt=""
+										class="h-full w-full object-cover"
+										loading="lazy"
+										decoding="async"
+									/>
 								</button>
-							</div>
-						</div>
-						<div class="mb-3">
-							<span class="mb-0.5 block text-xs font-semibold text-gray-500 uppercase">Text</span>
-							<p class="m-0 text-sm whitespace-pre-wrap">{selectedFieldNote.text || '—'}</p>
-						</div>
-						{#if selectedFieldNote.photo_path}
-							{@const mediaUrl = fieldNoteMediaUrl(selectedFieldNote.photo_path)}
-							{#if mediaUrl && selectedFieldNote.photo_path.match(/\.(jpe?g|png|gif|webp)$/i)}
-								<img
-									src={mediaUrl}
-									alt="Field note photo"
-									class="mb-3 max-h-48 w-full rounded border border-gray-200 object-cover"
-								/>
-							{:else if mediaUrl}
+							{:else if photoUrl}
 								<a
-									href={mediaUrl}
+									href={photoUrl}
 									target="_blank"
 									rel="noopener noreferrer"
-									class="mb-3 block text-sm text-blue-600 underline"
+									class="flex h-20 w-20 shrink-0 items-center justify-center rounded-lg border border-brand-navy/10 bg-gray-50 text-center text-xs text-blue-600 underline"
 								>
-									View photo
+									View file
 								</a>
 							{/if}
-						{/if}
-						{#if selectedFieldNote.audio_path}
-							{@const audioUrl = fieldNoteMediaUrl(selectedFieldNote.audio_path)}
-							{#if audioUrl}
-								<audio controls src={audioUrl} class="w-full"></audio>
-							{/if}
-						{/if}
+						</div>
 					</div>
 				{/if}
 			{/if}
 		</div>
+	</aside>
 
-		<div class="absolute bottom-2 left-2 z-10 max-w-[50%] rounded bg-white/90 px-2 py-1 text-sm shadow">
-			{status}
-		</div>
-		<div
-			class="absolute right-2 bottom-1 z-10 max-w-[45%] truncate rounded bg-white/80 px-2 py-0.5 text-[10px] text-gray-600 shadow-sm"
+	{#if expandedFieldNotePhoto}
+		<button
+			type="button"
+			class="fixed inset-0 z-50 flex cursor-pointer items-center justify-center border-0 bg-black/70 p-4"
+			aria-label="Close photo"
+			onclick={() => (expandedFieldNotePhoto = null)}
 		>
-			{activeAttribution}
-		</div>
-	</div>
+			<img
+				src={expandedFieldNotePhoto}
+				alt="Field note photo"
+				class="max-h-[90vh] max-w-[90vw] rounded-lg object-contain shadow-xl"
+				onclick={(e) => e.stopPropagation()}
+			/>
+		</button>
+	{/if}
 </div>

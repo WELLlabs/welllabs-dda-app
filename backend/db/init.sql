@@ -2,12 +2,18 @@ CREATE EXTENSION IF NOT EXISTS postgis;
 
 -- Users: email/password accounts, shared across all modules
 CREATE TABLE users (
-    id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    email          TEXT NOT NULL UNIQUE,
-    name           TEXT NOT NULL,
-    password_hash  TEXT NOT NULL,
-    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+    id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email                    TEXT NOT NULL UNIQUE,
+    name                     TEXT NOT NULL,
+    password_hash            TEXT NOT NULL,
+    qfield_username          TEXT,
+    qfield_token             TEXT,
+    qfield_token_expires_at  TIMESTAMPTZ,
+    odk_username             TEXT,
+    odk_token                TEXT,
+    odk_token_expires_at     TIMESTAMPTZ,
+    created_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at               TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- Sessions: opaque token issued on login/register, read from an HttpOnly cookie
@@ -40,16 +46,6 @@ CREATE TABLE org_members (
 );
 
 CREATE INDEX org_members_user_id_idx ON org_members (user_id);
-
--- Per-user QField Cloud tokens: each user links their own QField Cloud account
-CREATE TABLE qfield_tokens (
-    user_id           UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-    qfield_username   TEXT NOT NULL,
-    token             TEXT NOT NULL,
-    expires_at        TIMESTAMPTZ,
-    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
-);
 
 -- Diagnosis: named work areas tied to a watershed boundary (owned by the Diagnose module)
 CREATE TABLE diagnosis (
@@ -91,17 +87,18 @@ CREATE TABLE diagnosis_orgs (
 CREATE INDEX diagnosis_users_user_id_idx ON diagnosis_users (user_id);
 CREATE INDEX diagnosis_orgs_org_id_idx ON diagnosis_orgs (org_id);
 
--- Observation zones: polygon with text label + description (scoped to a diagnosis project)
+-- Observation zones: polygon with text label, observations, and questions (scoped to a diagnosis project)
 CREATE TABLE observation_zones (
-    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    project_id  UUID NOT NULL REFERENCES diagnosis(id) ON DELETE CASCADE,
-    geom        GEOMETRY(Geometry, 4326) NOT NULL,
-    text        TEXT NOT NULL DEFAULT '',
-    description TEXT NOT NULL DEFAULT '',
-    color       TEXT NOT NULL DEFAULT '#0d983b',
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    created_by  TEXT,
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    project_id    UUID NOT NULL REFERENCES diagnosis(id) ON DELETE CASCADE,
+    geom          GEOMETRY(Geometry, 4326) NOT NULL,
+    text          TEXT NOT NULL DEFAULT '',
+    observations  TEXT NOT NULL DEFAULT '',
+    questions     TEXT NOT NULL DEFAULT '',
+    color         TEXT NOT NULL DEFAULT '#0d983b',
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_by    TEXT,
     CONSTRAINT observation_zones_geom_is_polygon CHECK (
         GeometryType(geom) IN ('POLYGON', 'MULTIPOLYGON')
     )
@@ -110,21 +107,48 @@ CREATE TABLE observation_zones (
 CREATE INDEX observation_zones_geom_idx ON observation_zones USING GIST (geom);
 CREATE INDEX observation_zones_project_id_idx ON observation_zones (project_id);
 
--- Field notes: geotagged point with text and optional photo (scoped to a diagnosis project)
+-- Hypotheses: testable statements linked to observation zones and field notes
+CREATE TABLE hypotheses (
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    project_id   UUID NOT NULL REFERENCES diagnosis(id) ON DELETE CASCADE,
+    hypothesis   TEXT NOT NULL DEFAULT '',
+    root_cause   TEXT NOT NULL DEFAULT '',
+    status       TEXT NOT NULL DEFAULT 'untested'
+                 CHECK (status IN ('untested', 'validated', 'invalidated', 'discarded')),
+    created_by   UUID REFERENCES users(id),
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX hypotheses_project_id_idx ON hypotheses (project_id);
+
+-- Many-to-many: hypotheses ↔ observation zones
+CREATE TABLE hypothesis_observation_zones (
+    hypothesis_id  UUID NOT NULL REFERENCES hypotheses(id) ON DELETE CASCADE,
+    zone_id        UUID NOT NULL REFERENCES observation_zones(id) ON DELETE CASCADE,
+    PRIMARY KEY (hypothesis_id, zone_id)
+);
+
+CREATE INDEX hypothesis_observation_zones_zone_id_idx ON hypothesis_observation_zones (zone_id);
+
+-- Field notes: geotagged point with title, text, and optional media (scoped to a diagnosis project)
 CREATE TABLE field_notes (
-    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    project_id  UUID NOT NULL REFERENCES diagnosis(id) ON DELETE CASCADE,
-    geom        GEOMETRY(Point, 4326) NOT NULL,
-    text        TEXT NOT NULL DEFAULT '',
-    photo_path  TEXT,
-    audio_path  TEXT,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    created_by  TEXT
+    id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    project_id     UUID NOT NULL REFERENCES diagnosis(id) ON DELETE CASCADE,
+    hypothesis_id  UUID REFERENCES hypotheses(id) ON DELETE SET NULL,
+    geom           GEOMETRY(Point, 4326) NOT NULL,
+    title          TEXT NOT NULL DEFAULT '',
+    text           TEXT NOT NULL DEFAULT '',
+    photo_path     TEXT,
+    audio_path     TEXT,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_by     TEXT
 );
 
 CREATE INDEX field_notes_geom_idx ON field_notes USING GIST (geom);
 CREATE INDEX field_notes_project_id_idx ON field_notes (project_id);
+CREATE INDEX field_notes_hypothesis_id_idx ON field_notes (hypothesis_id);
 
 -- Auto-update updated_at
 CREATE OR REPLACE FUNCTION set_updated_at()
@@ -139,10 +163,6 @@ CREATE TRIGGER users_updated_at
     BEFORE UPDATE ON users
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
-CREATE TRIGGER qfield_tokens_updated_at
-    BEFORE UPDATE ON qfield_tokens
-    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-
 CREATE TRIGGER organizations_updated_at
     BEFORE UPDATE ON organizations
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
@@ -153,6 +173,10 @@ CREATE TRIGGER diagnosis_updated_at
 
 CREATE TRIGGER observation_zones_updated_at
     BEFORE UPDATE ON observation_zones
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TRIGGER hypotheses_updated_at
+    BEFORE UPDATE ON hypotheses
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 CREATE TRIGGER field_notes_updated_at

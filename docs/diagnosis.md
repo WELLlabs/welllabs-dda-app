@@ -17,20 +17,28 @@ The Diagnose module is the core of the DDA product. It provides watershed-based 
 - Resizable left sidebar with layer controls
 - Base layer options: OpenStreetMap and ESRI satellite imagery
 - Secondary data layers: COG raster layers (e.g., LULC) served through Titiler, draggable for reorder
-- Primary layers: Observation Zones and Field Notes, with visibility toggles
-- Floating overlay cards on the right side for zone/note editing
+- Primary layers: Observation Zones, Hypotheses, and Field Notes
+- Floating overlay cards on the right side for zone/note/hypothesis editing
 
 ### Observation Zones
 
 - Polygon features drawn directly on the map using MapLibre GL Draw
-- Each zone has a text label, description, and configurable color
+- Each zone has a text label, observations, questions, and configurable color
 - Zones can be edited (geometry, text, color) and deleted
 - Stored as PostGIS geometries with POLYGON/MULTIPOLYGON constraint
+
+### Hypotheses
+
+- Testable statements created in the web app and linked to one or more observation zones
+- New hypotheses start with status `untested`
+- Field workers link field notes to a hypothesis as evidence (optional dropdown on the field note form)
+- Back in the web app, users record a root cause and set status to `validated` or `invalidated`
+- Validation requires at least one linked field note; `discarded` can be set without evidence
 
 ### Field Notes
 
 - Geotagged point features placed on the map
-- Each note has text content and optional photo and audio attachments
+- Each note has text content, optional photo and audio attachments, and an optional link to a hypothesis
 - Media files are uploaded via multipart form and stored in S3 under `{project_id}/media/`
 - Notes can be edited (text, geometry) and deleted; deletion cleans up S3 media
 
@@ -45,7 +53,7 @@ The Diagnose module is the core of the DDA product. It provides watershed-based 
 
 ### Per-User Accounts
 
-Each user connects their own QField Cloud account via the settings page. The app stores the QField Cloud API token (not credentials) in the `qfield_tokens` table. If the token expires, the user re-enters their credentials to get a fresh token.
+Each user connects their own QField Cloud account via the settings page. The app stores the QField Cloud API token (not credentials) on the `users` row (`qfield_username`, `qfield_token`, `qfield_token_expires_at`). ODK Central tokens are stored the same way (`odk_username`, `odk_token`, `odk_token_expires_at`). If a token expires, the user reconnects from Settings → Connectors.
 
 ### Packaging to QField
 
@@ -53,7 +61,7 @@ When a user packages a diagnosis project:
 
 1. A QGIS project file (`.qgs`) is generated using PyQGIS with the project's layers, data, and styling
 2. Raster layers are clipped to the watershed boundary and converted to MBTiles (zoom range configurable via `QFIELD_RASTER_MIN_ZOOM`, `QFIELD_RASTER_MAX_ZOOM`)
-3. Observation zones and field notes are exported to a GeoPackage
+3. Observation zones, hypotheses, and field notes are exported to GeoPackages (field notes include a Value Relation dropdown to pick a hypothesis)
 4. Everything is uploaded to QField Cloud using the packaging user's token
 5. The QField Cloud project is created in the user's QField Cloud account
 6. Other users with diagnosis access are added as QField Cloud collaborators
@@ -98,9 +106,9 @@ Each diagnosis project has a dedicated `/diagnose/[slug]/members` page showing:
 
 ## Design Decisions
 
-### Per-User QField Tokens Over Global Token
+### Per-User Connector Tokens on `users`
 
-Rather than a single server-wide QField Cloud token, each user connects their own account. This means projects are created under the user's QField Cloud storage, and billing/quota stays with each user.
+Rather than a separate `qfield_tokens` table or a server-wide token, each user stores their own QField Cloud and ODK Central credentials on the `users` row. Projects are created under the user's QField Cloud storage, and billing/quota stays with each user.
 
 ### Watershed as Spatial Scope
 
@@ -124,3 +132,11 @@ Cookie-based sessions (not JWTs) are used because:
 ### Diagnosis Admin Role
 
 Beyond the owner, users can be promoted to "admin" on a diagnosis. This allows delegation of sharing management without transferring ownership. Admins can add/remove users and orgs but cannot delete the project.
+
+### Hypothesis Workflow
+
+Hypotheses connect observation zones (context) to field notes (evidence). The workflow is intentionally split between desk planning and field collection:
+
+1. **Plan** — create a hypothesis and link relevant observation zones
+2. **Collect** — field users attach notes to the hypothesis while on site
+3. **Review** — back at the desk, record the root cause and mark validated or invalidated

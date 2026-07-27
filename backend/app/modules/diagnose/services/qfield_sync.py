@@ -110,13 +110,14 @@ def _fetch_zone_colors(project_id: str) -> list[str]:
 
 def _export_vectors_gpkg(
     package_dir: Path, project_id: str, progress: PackageProgress | None = None
-) -> tuple[Path, Path]:
+) -> tuple[Path, Path, Path]:
     """Export project vectors to separate GeoPackages (avoids fid/fid1 append artifacts)."""
     uuid.UUID(project_id)
     zones_gpkg = package_dir / "observation_zones.gpkg"
     notes_gpkg = package_dir / "field_notes.gpkg"
+    hypotheses_gpkg = package_dir / "hypotheses.gpkg"
     legacy_gpkg = package_dir / "vectors.gpkg"
-    for path in (zones_gpkg, notes_gpkg, legacy_gpkg):
+    for path in (zones_gpkg, notes_gpkg, hypotheses_gpkg, legacy_gpkg):
         if path.exists():
             path.unlink()
 
@@ -130,7 +131,7 @@ def _export_vectors_gpkg(
             dsn,
             "-sql",
             (
-                "SELECT id AS zone_id, project_id, text, description, color, geom "
+                "SELECT id AS zone_id, project_id, text, observations, questions, color, geom "
                 f"FROM observation_zones WHERE project_id = '{project_id}'"
             ),
             "-nln",
@@ -151,7 +152,8 @@ def _export_vectors_gpkg(
             dsn,
             "-sql",
             (
-                "SELECT id AS note_id, project_id, text, photo_path, audio_path, geom "
+                "SELECT id AS note_id, project_id, title, text, photo_path, audio_path, "
+                "hypothesis_id::text AS hypothesis_id, geom "
                 f"FROM field_notes WHERE project_id = '{project_id}'"
             ),
             "-nln",
@@ -163,12 +165,31 @@ def _export_vectors_gpkg(
         ],
         progress,
     )
-    if not zones_gpkg.is_file() or not notes_gpkg.is_file():
+    _run_gdal(
+        [
+            "ogr2ogr",
+            "-f",
+            "GPKG",
+            str(hypotheses_gpkg),
+            dsn,
+            "-sql",
+            (
+                "SELECT id::text AS hypothesis_id, project_id, hypothesis, status "
+                f"FROM hypotheses WHERE project_id = '{project_id}'"
+            ),
+            "-nln",
+            "hypotheses",
+            "-nlt",
+            "NONE",
+        ],
+        progress,
+    )
+    if not zones_gpkg.is_file() or not notes_gpkg.is_file() or not hypotheses_gpkg.is_file():
         raise RuntimeError("GeoPackage export failed")
 
     _apply_gpkg_insert_defaults(zones_gpkg, "observation_zones", project_id)
     _apply_gpkg_insert_defaults(notes_gpkg, "field_notes", project_id)
-    return zones_gpkg, notes_gpkg
+    return zones_gpkg, notes_gpkg, hypotheses_gpkg
 
 
 def _apply_gpkg_insert_defaults(gpkg_path: Path, table: str, project_id: str) -> None:
@@ -441,7 +462,11 @@ def _get_user_qfield_token(user_id: str) -> tuple[str, str]:
     """Return (qfield_username, token) for the given user, or raise ValueError."""
     with db_cursor() as cur:
         cur.execute(
-            "SELECT qfield_username, token FROM qfield_tokens WHERE user_id = %(uid)s",
+            """
+            SELECT qfield_username, qfield_token AS token
+            FROM users
+            WHERE id = %(uid)s AND qfield_token IS NOT NULL AND qfield_token <> ''
+            """,
             {"uid": user_id},
         )
         row = cur.fetchone()
@@ -459,7 +484,7 @@ def _sync_qfield_collaborators(
     with db_cursor() as cur:
         cur.execute(
             """
-            SELECT DISTINCT qt.qfield_username
+            SELECT DISTINCT u.qfield_username
             FROM (
                 SELECT user_id FROM diagnosis_users WHERE diagnosis_id = %(pid)s
                 UNION
@@ -467,8 +492,12 @@ def _sync_qfield_collaborators(
                     JOIN org_members om ON om.org_id = do.org_id
                 WHERE do.diagnosis_id = %(pid)s
             ) shared
-            JOIN qfield_tokens qt ON qt.user_id = shared.user_id
-            WHERE qt.qfield_username != %(owner)s
+            JOIN users u ON u.id = shared.user_id
+            WHERE u.qfield_username IS NOT NULL
+              AND u.qfield_username <> ''
+              AND u.qfield_token IS NOT NULL
+              AND u.qfield_token <> ''
+              AND u.qfield_username != %(owner)s
             """,
             {"pid": project_id, "owner": owner_username},
         )
@@ -519,11 +548,12 @@ def package_and_upload(
     cutline = _write_cutline(package_dir, row["watershed_geojson"])
 
     step(20, "Exporting vectors to GeoPackage…")
-    zones_gpkg, notes_gpkg = _export_vectors_gpkg(package_dir, project_id, progress)
+    zones_gpkg, notes_gpkg, hypotheses_gpkg = _export_vectors_gpkg(package_dir, project_id, progress)
     step(
         35,
         f"GeoPackages ready ({zones_gpkg.stat().st_size // 1024} KB + "
-        f"{notes_gpkg.stat().st_size // 1024} KB)",
+        f"{notes_gpkg.stat().st_size // 1024} KB + "
+        f"{hypotheses_gpkg.stat().st_size // 1024} KB)",
     )
 
     step(40, "Building watershed GeoTIFF from COG…")

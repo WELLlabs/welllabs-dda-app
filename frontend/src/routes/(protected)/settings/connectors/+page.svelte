@@ -14,7 +14,9 @@
 	let qfPassword = $state('');
 	let qfBusy = $state(false);
 
-	onMount(loadQFieldStatus);
+	onMount(async () => {
+		await loadQFieldStatus();
+	});
 
 	async function loadQFieldStatus() {
 		qfLoading = true;
@@ -60,9 +62,9 @@
 		}
 	}
 
-	function isExpired() {
-		if (!qfStatus.expires_at) return false;
-		return new Date(qfStatus.expires_at) < new Date();
+	function isExpired(expiresAt) {
+		if (!expiresAt) return false;
+		return new Date(expiresAt) < new Date();
 	}
 </script>
 
@@ -70,8 +72,8 @@
 	<title>Connectors · Settings</title>
 </svelte:head>
 
-<div class="max-w-2xl">
-	<h2 class="m-0 mb-5 font-headline text-lg font-semibold text-brand-navy">Connectors</h2>
+<div class="max-w-2xl space-y-5">
+	<h2 class="m-0 font-headline text-lg font-semibold text-brand-navy">Connectors</h2>
 
 	<section class="rounded-2xl border border-brand-navy/10 bg-white shadow-sm">
 		<div class="border-b border-brand-navy/8 px-5 py-4">
@@ -90,7 +92,7 @@
 							Connected as <span class="font-semibold">{qfStatus.qfield_username}</span>
 						</p>
 						{#if qfStatus.expires_at}
-							{#if isExpired()}
+							{#if isExpired(qfStatus.expires_at)}
 								<p class="m-0 mt-1 text-xs text-red-600">
 									Token expired — reconnect to continue using QField Cloud.
 								</p>
@@ -102,7 +104,7 @@
 						{/if}
 					</div>
 					<div class="flex gap-2">
-						{#if isExpired()}
+						{#if isExpired(qfStatus.expires_at)}
 							<button
 								type="button"
 								class="cursor-pointer rounded-lg bg-brand-blue px-3 py-1.5 font-body text-sm font-medium text-white hover:bg-brand-deep"

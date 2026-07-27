@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, EmailStr, Field
@@ -35,7 +36,7 @@ class UpdateUserRole(BaseModel):
 
 
 class AddOrgAccess(BaseModel):
-    org_id: str
+    org_id: UUID
 
 
 def _row_to_dict(row: dict) -> dict:
@@ -308,7 +309,7 @@ def add_org_access(project_id: str, body: AddOrgAccess, user: dict = Depends(req
             JOIN org_members om ON om.org_id = o.id
             WHERE o.id = %(org_id)s AND om.user_id = %(user_id)s
             """,
-            {"org_id": body.org_id, "user_id": user["id"]},
+            {"org_id": str(body.org_id), "user_id": user["id"]},
         )
         org = cur.fetchone()
         if not org:
@@ -321,7 +322,7 @@ def add_org_access(project_id: str, body: AddOrgAccess, user: dict = Depends(req
             ON CONFLICT (diagnosis_id, org_id) DO NOTHING
             RETURNING diagnosis_id
             """,
-            {"diagnosis_id": project_id, "org_id": body.org_id, "added_by": user["id"]},
+            {"diagnosis_id": project_id, "org_id": str(body.org_id), "added_by": user["id"]},
         )
         if not cur.fetchone():
             raise HTTPException(409, "That organization already has access to this project")

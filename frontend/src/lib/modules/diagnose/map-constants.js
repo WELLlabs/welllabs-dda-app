@@ -1,6 +1,7 @@
-/** Brand accents for observation zones and field notes. */
+/** Brand accents for observation zones, field notes, and hypotheses. */
 export const OBSERVATION_ZONE_COLOR = '#0d983b';
 export const FIELD_NOTE_COLOR = '#d5b443';
+export const HYPOTHESIS_COLOR = '#6366f1';
 
 /** LULC class legend (matches API colormap). */
 export const LULC_LEGEND = [

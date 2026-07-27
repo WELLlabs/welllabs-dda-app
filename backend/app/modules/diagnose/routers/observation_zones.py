@@ -1,8 +1,9 @@
 import json
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from geojson_pydantic import Feature, FeatureCollection
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.shared.access import assert_diagnosis_access
 from app.shared.auth import get_current_user
@@ -10,27 +11,30 @@ from app.shared.database import db_cursor
 
 router = APIRouter()
 
+_TEXT_MAX = 10_000
+
 _SELECT = """
-    SELECT id, project_id, text, description, color, created_at, updated_at, created_by,
+    SELECT id, project_id, text, observations, questions, color, created_at, updated_at, created_by,
            ST_AsGeoJSON(geom)::json AS geojson
     FROM observation_zones
 """
 
 
 class ObservationZoneCreate(BaseModel):
-    project_id: str
+    project_id: UUID
     geometry: dict
-    text: str = ""
-    description: str = ""
-    color: str = "#0d983b"
-    created_by: str | None = None
+    text: str = Field(default="", max_length=_TEXT_MAX)
+    observations: str = Field(default="", max_length=_TEXT_MAX)
+    questions: str = Field(default="", max_length=_TEXT_MAX)
+    color: str = Field(default="#0d983b", max_length=32)
 
 
 class ObservationZoneUpdate(BaseModel):
     geometry: dict | None = None
-    text: str | None = None
-    description: str | None = None
-    color: str | None = None
+    text: str | None = Field(default=None, max_length=_TEXT_MAX)
+    observations: str | None = Field(default=None, max_length=_TEXT_MAX)
+    questions: str | None = Field(default=None, max_length=_TEXT_MAX)
+    color: str | None = Field(default=None, max_length=32)
 
 
 def _parse_geojson(value) -> dict:
@@ -47,7 +51,8 @@ def _row_to_feature(row: dict) -> Feature:
         properties={
             "project_id": str(row["project_id"]),
             "text": row["text"],
-            "description": row.get("description") or "",
+            "observations": row.get("observations") or "",
+            "questions": row.get("questions") or "",
             "color": row.get("color") or "#0d983b",
             "created_at": row["created_at"].isoformat(),
             "updated_at": row["updated_at"].isoformat(),
@@ -78,29 +83,32 @@ def list_observation_zones(project_id: str = Query(...), user: dict = Depends(ge
 
 @router.post("", response_model=Feature, status_code=201)
 def create_observation_zone(body: ObservationZoneCreate, user: dict = Depends(get_current_user)):
-    assert_diagnosis_access(user["id"], body.project_id)
+    project_id = str(body.project_id)
+    assert_diagnosis_access(user["id"], project_id)
     with db_cursor() as cur:
         cur.execute(
             """
-            INSERT INTO observation_zones (project_id, geom, text, description, color, created_by)
+            INSERT INTO observation_zones (project_id, geom, text, observations, questions, color, created_by)
             VALUES (
                 %(project_id)s,
                 ST_SetSRID(ST_GeomFromGeoJSON(%(geojson)s), 4326),
                 %(text)s,
-                %(description)s,
+                %(observations)s,
+                %(questions)s,
                 %(color)s,
                 %(created_by)s
             )
-            RETURNING id, project_id, text, description, color, created_at, updated_at, created_by,
+            RETURNING id, project_id, text, observations, questions, color, created_at, updated_at, created_by,
                       ST_AsGeoJSON(geom)::json AS geojson
             """,
             {
-                "project_id": body.project_id,
+                "project_id": project_id,
                 "geojson": json.dumps(body.geometry),
                 "text": body.text,
-                "description": body.description,
+                "observations": body.observations,
+                "questions": body.questions,
                 "color": body.color,
-                "created_by": body.created_by,
+                "created_by": str(user["id"]),
             },
         )
         row = cur.fetchone()
@@ -114,9 +122,12 @@ def update_observation_zone(zone_id: str, body: ObservationZoneUpdate, user: dic
     if body.text is not None:
         sets.append("text = %(text)s")
         params["text"] = body.text
-    if body.description is not None:
-        sets.append("description = %(description)s")
-        params["description"] = body.description
+    if body.observations is not None:
+        sets.append("observations = %(observations)s")
+        params["observations"] = body.observations
+    if body.questions is not None:
+        sets.append("questions = %(questions)s")
+        params["questions"] = body.questions
     if body.color is not None:
         sets.append("color = %(color)s")
         params["color"] = body.color
@@ -132,7 +143,7 @@ def update_observation_zone(zone_id: str, body: ObservationZoneUpdate, user: dic
             f"""
             UPDATE observation_zones SET {", ".join(sets)}
             WHERE id = %(id)s
-            RETURNING id, project_id, text, description, color, created_at, updated_at, created_by,
+            RETURNING id, project_id, text, observations, questions, color, created_at, updated_at, created_by,
                       ST_AsGeoJSON(geom)::json AS geojson
             """,
             params,

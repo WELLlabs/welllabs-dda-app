@@ -46,9 +46,17 @@ All endpoints under `/api/` require authentication via an HttpOnly session cooki
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| POST | `/connect` | Yes | Link QField Cloud account. Body: `{username, password}`. Proxies login to QField Cloud API and stores the token. |
+| POST | `/connect` | Yes | Link QField Cloud account. Body: `{username, password}`. Proxies login to QField Cloud API and stores the token on `users`. |
 | GET | `/status` | Yes | Check connection status. Returns `{connected, qfield_username, expires_at}`. |
 | DELETE | `/disconnect` | Yes | Remove stored QField Cloud token. |
+
+### ODK Central — `/api/accounts/odk`
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/connect` | Yes | Store ODK credentials on `users`. Body: `{username, token, expires_at?}`. |
+| GET | `/status` | Yes | Check connection status. Returns `{connected, odk_username, expires_at}`. |
+| DELETE | `/disconnect` | Yes | Remove stored ODK token. |
 
 ---
 
@@ -95,7 +103,7 @@ All access management endpoints require the caller to be the project owner or a 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | GET | `/?project_id={id}` | Yes + access | List zones as GeoJSON FeatureCollection. |
-| POST | `/` | Yes + access | Create zone. Body: `{project_id, geometry, text, description, color}`. |
+| POST | `/` | Yes + access | Create zone. Body: `{project_id, geometry, text, observations, questions, color}`. |
 | PATCH | `/{zone_id}` | Yes + access | Update zone properties. |
 | DELETE | `/{zone_id}` | Yes + access | Delete zone. |
 
@@ -104,10 +112,21 @@ All access management endpoints require the caller to be the project owner or a 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | GET | `/?project_id={id}` | Yes + access | List notes as GeoJSON FeatureCollection. |
-| POST | `/` | Yes + access | Create note. Multipart form: `project_id`, `geometry` (JSON), `text`, optional `photo`, optional `audio`. |
-| PATCH | `/{note_id}` | Yes + access | Update note text or geometry. |
+| POST | `/` | Yes + access | Create note. Multipart form: `project_id`, `geometry` (JSON), `title`, `text`, optional `photo`, optional `audio`, optional `hypothesis_id`. |
+| PATCH | `/{note_id}` | Yes + access | Update note `title`, `text`, geometry, or `hypothesis_id`. |
 | DELETE | `/{note_id}` | Yes + access | Delete note and its media from S3. |
 | GET | `/media?key={s3_key}` | Yes | Serve media file (redirects to S3 or streams from local). |
+| GET | `/media/thumbnail?key={s3_key}&size={48-256}` | Yes | Square JPEG thumbnail for card previews (default size 128). |
+
+### Hypotheses — `/api/diagnose/hypotheses`
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/?project_id={id}` | Yes + access | List hypotheses with linked zone IDs and field note count. |
+| GET | `/{hypothesis_id}` | Yes + access | Get a single hypothesis. |
+| POST | `/` | Yes + access | Create hypothesis. Body: `{project_id, hypothesis, observation_zone_ids?}`. Status defaults to `untested`. |
+| PATCH | `/{hypothesis_id}` | Yes + access | Update hypothesis, root cause, status, or zone links. `validated`/`invalidated` require at least one linked field note. |
+| DELETE | `/{hypothesis_id}` | Yes + access | Delete hypothesis. |
 
 ### QField Sync — `/api/diagnose/qfield`
 

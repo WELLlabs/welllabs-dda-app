@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -14,15 +15,16 @@ router = APIRouter()
 
 
 class ProjectRequest(BaseModel):
-    project_id: str
+    project_id: UUID
 
 
 @router.post("/package")
 def package_to_qfield(body: ProjectRequest, user: dict = Depends(get_current_user)):
     """Build QGIS project for the given app project, upload to QField Cloud, and trigger packaging."""
-    assert_diagnosis_access(user["id"], body.project_id)
+    project_id = str(body.project_id)
+    assert_diagnosis_access(user["id"], project_id)
     try:
-        result = package_and_upload(body.project_id, user["id"])
+        result = package_and_upload(project_id, user["id"])
         return result
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
@@ -38,7 +40,8 @@ async def package_to_qfield_stream(body: ProjectRequest, user: dict = Depends(ge
 
     from fastapi.responses import StreamingResponse
 
-    assert_diagnosis_access(user["id"], body.project_id)
+    project_id = str(body.project_id)
+    assert_diagnosis_access(user["id"], project_id)
 
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue = asyncio.Queue()
@@ -59,7 +62,7 @@ async def package_to_qfield_stream(body: ProjectRequest, user: dict = Depends(ge
         try:
             result = await loop.run_in_executor(
                 None,
-                lambda: package_and_upload(body.project_id, user["id"], progress=progress),
+                lambda: package_and_upload(project_id, user["id"], progress=progress),
             )
             await queue.put({"type": "done", "percent": 100, "result": result})
         except ValueError as exc:
@@ -92,9 +95,10 @@ async def package_to_qfield_stream(body: ProjectRequest, user: dict = Depends(ge
 @router.post("/sync")
 def sync_from_qfield(body: ProjectRequest, user: dict = Depends(get_current_user)):
     """Pull QField Cloud project files and migrate field media to S3."""
-    assert_diagnosis_access(user["id"], body.project_id)
+    project_id = str(body.project_id)
+    assert_diagnosis_access(user["id"], project_id)
     try:
-        return sync_from_cloud(body.project_id, user["id"])
+        return sync_from_cloud(project_id, user["id"])
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     except Exception as e:
@@ -109,7 +113,8 @@ async def sync_from_qfield_stream(body: ProjectRequest, user: dict = Depends(get
 
     from fastapi.responses import StreamingResponse
 
-    assert_diagnosis_access(user["id"], body.project_id)
+    project_id = str(body.project_id)
+    assert_diagnosis_access(user["id"], project_id)
 
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue = asyncio.Queue()
@@ -130,7 +135,7 @@ async def sync_from_qfield_stream(body: ProjectRequest, user: dict = Depends(get
         try:
             result = await loop.run_in_executor(
                 None,
-                lambda: sync_from_cloud(body.project_id, user["id"], progress=progress),
+                lambda: sync_from_cloud(project_id, user["id"], progress=progress),
             )
             await queue.put({"type": "done", "percent": 100, "result": result})
         except ValueError as exc:
@@ -161,16 +166,17 @@ async def sync_from_qfield_stream(body: ProjectRequest, user: dict = Depends(get
 
 
 class CleanupRequest(BaseModel):
-    project_id: str
+    project_id: UUID
     dry_run: bool = False
 
 
 @router.post("/cleanup")
 def cleanup_s3(body: CleanupRequest, user: dict = Depends(get_current_user)):
     """Remove orphaned media and legacy package files from S3 for a project."""
-    assert_diagnosis_access(user["id"], body.project_id)
+    project_id = str(body.project_id)
+    assert_diagnosis_access(user["id"], project_id)
     try:
-        return cleanup_project_s3(body.project_id, dry_run=body.dry_run)
+        return cleanup_project_s3(project_id, dry_run=body.dry_run)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     except Exception as e:

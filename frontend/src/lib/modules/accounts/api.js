@@ -65,19 +65,6 @@ export async function deleteOrg(orgId) {
 	await request(`/orgs/${orgId}`, { method: 'DELETE' });
 }
 
-export async function fetchOrgProjects(orgId) {
-	const data = await request(`/orgs/${orgId}/projects`);
-	return data.projects ?? [];
-}
-
-export async function updateMemberRole(orgId, userId, role) {
-	return request(`/orgs/${orgId}/members/${userId}/role`, {
-		method: 'PATCH',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ role })
-	});
-}
-
 export async function connectQFieldAccount(username, password) {
 	return request('/qfield/connect', {
 		method: 'POST',
@@ -92,4 +79,17 @@ export async function getQFieldStatus() {
 
 export async function disconnectQFieldAccount() {
 	await request('/qfield/disconnect', { method: 'DELETE' });
+}
+
+export async function fetchOrgProjects(orgId) {
+	const data = await request(`/orgs/${orgId}/projects`);
+	return data.projects ?? [];
+}
+
+export async function updateMemberRole(orgId, userId, role) {
+	return request(`/orgs/${orgId}/members/${userId}/role`, {
+		method: 'PATCH',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ role })
+	});
 }

@@ -1,4 +1,4 @@
-"""Connect / disconnect a user's QField Cloud account."""
+"""Connect / disconnect a user's QField Cloud account (tokens stored on users)."""
 
 import logging
 
@@ -22,7 +22,7 @@ class QFieldConnectRequest(BaseModel):
 
 @router.post("/connect")
 def connect_qfield(body: QFieldConnectRequest, user: dict = Depends(get_current_user)):
-    """Authenticate against QField Cloud and store the token for this user."""
+    """Authenticate against QField Cloud and store the token on the user row."""
     login_url = settings.qfield_cloud_url.rstrip("/") + "/auth/login/"
     try:
         resp = httpx.post(
@@ -51,12 +51,11 @@ def connect_qfield(body: QFieldConnectRequest, user: dict = Depends(get_current_
     with db_cursor() as cur:
         cur.execute(
             """
-            INSERT INTO qfield_tokens (user_id, qfield_username, token, expires_at)
-            VALUES (%(uid)s, %(qfu)s, %(tok)s, %(exp)s)
-            ON CONFLICT (user_id) DO UPDATE
-                SET qfield_username = EXCLUDED.qfield_username,
-                    token           = EXCLUDED.token,
-                    expires_at      = EXCLUDED.expires_at
+            UPDATE users
+            SET qfield_username = %(qfu)s,
+                qfield_token = %(tok)s,
+                qfield_token_expires_at = %(exp)s
+            WHERE id = %(uid)s
             """,
             {"uid": user["id"], "qfu": body.username, "tok": token, "exp": expires_at},
         )
@@ -69,12 +68,15 @@ def qfield_status(user: dict = Depends(get_current_user)):
     """Return whether the current user has a linked QField Cloud account."""
     with db_cursor() as cur:
         cur.execute(
-            "SELECT qfield_username, expires_at FROM qfield_tokens WHERE user_id = %(uid)s",
+            """
+            SELECT qfield_username, qfield_token, qfield_token_expires_at AS expires_at
+            FROM users WHERE id = %(uid)s
+            """,
             {"uid": user["id"]},
         )
         row = cur.fetchone()
 
-    if not row:
+    if not row or not row.get("qfield_token"):
         return {"connected": False}
 
     return {
@@ -88,5 +90,14 @@ def qfield_status(user: dict = Depends(get_current_user)):
 def disconnect_qfield(user: dict = Depends(get_current_user)):
     """Remove the stored QField Cloud token for this user."""
     with db_cursor() as cur:
-        cur.execute("DELETE FROM qfield_tokens WHERE user_id = %(uid)s", {"uid": user["id"]})
+        cur.execute(
+            """
+            UPDATE users
+            SET qfield_username = NULL,
+                qfield_token = NULL,
+                qfield_token_expires_at = NULL
+            WHERE id = %(uid)s
+            """,
+            {"uid": user["id"]},
+        )
     return {"connected": False}

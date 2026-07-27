@@ -124,7 +124,7 @@ def import_field_notes_from_gpkg(project_id: str, project_root: Path) -> dict:
 
             cur.execute(
                 """
-                SELECT ST_AsGeoJSON(geom)::text AS geojson, text, photo_path, audio_path
+                SELECT ST_AsGeoJSON(geom)::text AS geojson, title, text, photo_path, audio_path, hypothesis_id
                 FROM field_notes WHERE id = %(id)s
                 """,
                 {"id": note_id},
@@ -132,7 +132,11 @@ def import_field_notes_from_gpkg(project_id: str, project_root: Path) -> dict:
             existing = cur.fetchone()
             exists = existing is not None
 
+            incoming_title = props.get("title") or ""
             incoming_text = props.get("text") or ""
+            incoming_hypothesis = props.get("hypothesis_id")
+            if incoming_hypothesis is not None:
+                incoming_hypothesis = str(incoming_hypothesis).strip() or None
             incoming_geojson = json.dumps(geometry)
             photo_path = _resolve_media_path(
                 existing.get("photo_path") if existing else None,
@@ -143,11 +147,29 @@ def import_field_notes_from_gpkg(project_id: str, project_root: Path) -> dict:
                 props.get("audio_path"),
             )
 
+            if incoming_hypothesis:
+                cur.execute(
+                    "SELECT 1 FROM hypotheses WHERE id = %(id)s AND project_id = %(project_id)s",
+                    {"id": incoming_hypothesis, "project_id": project_id},
+                )
+                if not cur.fetchone():
+                    logger.warning(
+                        "Clearing invalid hypothesis_id %s on note %s",
+                        incoming_hypothesis,
+                        note_id,
+                    )
+                    incoming_hypothesis = None
+
             if exists:
+                existing_hypothesis = (
+                    str(existing["hypothesis_id"]) if existing.get("hypothesis_id") else None
+                )
                 # Skip write if nothing actually changed
                 existing_geojson = existing.get("geojson") or ""
                 no_change = (
-                    existing.get("text") == incoming_text
+                    (existing.get("title") or "") == incoming_title
+                    and existing.get("text") == incoming_text
+                    and existing_hypothesis == incoming_hypothesis
                     and photo_path == existing.get("photo_path")
                     and audio_path == existing.get("audio_path")
                     and _geojson_eq(existing_geojson, incoming_geojson)
@@ -158,43 +180,53 @@ def import_field_notes_from_gpkg(project_id: str, project_root: Path) -> dict:
                 cur.execute(
                     """
                     UPDATE field_notes SET
-                        geom       = ST_SetSRID(ST_GeomFromGeoJSON(%(geojson)s), 4326),
-                        text       = %(text)s,
-                        photo_path = %(photo_path)s,
-                        audio_path = %(audio_path)s,
-                        updated_at = now()
+                        geom          = ST_SetSRID(ST_GeomFromGeoJSON(%(geojson)s), 4326),
+                        title         = %(title)s,
+                        text          = %(text)s,
+                        photo_path    = %(photo_path)s,
+                        audio_path    = %(audio_path)s,
+                        hypothesis_id = %(hypothesis_id)s,
+                        updated_at    = now()
                     WHERE id = %(id)s AND project_id = %(project_id)s
                     """,
                     {
                         "id": note_id,
                         "project_id": project_id,
                         "geojson": incoming_geojson,
+                        "title": incoming_title,
                         "text": incoming_text,
                         "photo_path": photo_path,
                         "audio_path": audio_path,
+                        "hypothesis_id": incoming_hypothesis,
                     },
                 )
                 updated += 1
             else:
                 cur.execute(
                     """
-                    INSERT INTO field_notes (id, project_id, geom, text, photo_path, audio_path)
+                    INSERT INTO field_notes (
+                        id, project_id, geom, title, text, photo_path, audio_path, hypothesis_id
+                    )
                     VALUES (
                         %(id)s,
                         %(project_id)s,
                         ST_SetSRID(ST_GeomFromGeoJSON(%(geojson)s), 4326),
+                        %(title)s,
                         %(text)s,
                         %(photo_path)s,
-                        %(audio_path)s
+                        %(audio_path)s,
+                        %(hypothesis_id)s
                     )
                     """,
                     {
                         "id": note_id,
                         "project_id": project_id,
                         "geojson": incoming_geojson,
+                        "title": incoming_title,
                         "text": incoming_text,
                         "photo_path": photo_path,
                         "audio_path": audio_path,
+                        "hypothesis_id": incoming_hypothesis,
                     },
                 )
                 imported += 1
@@ -317,7 +349,10 @@ def _resolve_qfield_token(user_id: str, project_id: str) -> str:
     """Return a QField Cloud token for sync: the user's own, or the project owner's."""
     with db_cursor() as cur:
         cur.execute(
-            "SELECT token FROM qfield_tokens WHERE user_id = %(uid)s",
+            """
+            SELECT qfield_token AS token FROM users
+            WHERE id = %(uid)s AND qfield_token IS NOT NULL AND qfield_token <> ''
+            """,
             {"uid": user_id},
         )
         row = cur.fetchone()
@@ -326,9 +361,11 @@ def _resolve_qfield_token(user_id: str, project_id: str) -> str:
 
         cur.execute(
             """
-            SELECT qt.token FROM diagnosis d
-            JOIN qfield_tokens qt ON qt.user_id = d.qfield_project_owner
+            SELECT u.qfield_token AS token FROM diagnosis d
+            JOIN users u ON u.id = d.qfield_project_owner
             WHERE d.id = %(pid)s
+              AND u.qfield_token IS NOT NULL
+              AND u.qfield_token <> ''
             """,
             {"pid": project_id},
         )
