@@ -21,7 +21,7 @@ def _clear_catalog_cache():
 
 
 def test_default_catalog_loads_lulc_palette():
-    layer = get_layer_for_key("lulc250k_2023_24_classed_cog.tif")
+    layer = get_layer_for_key("rasters/lulc250k_2023_24_classed_cog.tif")
     assert layer is not None
     assert layer.id == "lulc250k"
     assert layer.render_type == "categorical"
@@ -67,7 +67,7 @@ def test_catalog_includes_wiser_and_dem_layers():
     dem = catalog.by_id("dem")
     assert dem is not None
     assert dem.render_type == "continuous"
-    assert dem.continuous.get("colormap") == "terrain"
+    assert dem.continuous.get("colormap") == "gist_earth"
 
     pop = catalog.by_id("baseline_population")
     assert pop is not None
@@ -77,7 +77,7 @@ def test_catalog_includes_wiser_and_dem_layers():
 
 
 def test_gdaldem_file_covers_0_to_18(tmp_path: Path):
-    layer = get_layer_for_key("lulc250k_2023_24_classed_cog.tif")
+    layer = get_layer_for_key("rasters/lulc250k_2023_24_classed_cog.tif")
     assert layer is not None
     out = tmp_path / "colors.txt"
     layer.write_gdaldem_color_file(out)

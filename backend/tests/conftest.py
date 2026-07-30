@@ -12,8 +12,8 @@ from fastapi.testclient import TestClient
 def client():
     """FastAPI test client with DB pool startup disabled (no Postgres required)."""
     with (
-        patch("app.main.init_pool"),
-        patch("app.main.close_pool"),
+        patch("app.shared.database.init_pool"),
+        patch("app.shared.database.close_pool"),
     ):
         from app.main import app
 
