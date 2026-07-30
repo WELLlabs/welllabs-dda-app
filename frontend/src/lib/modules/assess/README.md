@@ -1,6 +1,12 @@
 # Assess module (frontend)
 
-Scaffold — components, stores, and API client for the Assess module go here, mirroring
-`lib/modules/diagnose/`. The boilerplate page at `routes/assess/+page.svelte` currently renders
-a placeholder using `lib/shared/components/ModuleHeader.svelte`; wire it up to real components
-from this folder as the Assess flow is built.
+ODK Central-backed monitoring UI.
+
+| Piece | Role |
+|-------|------|
+| `api.js` | Client for `/api/assess` (import projects, forms, submissions) |
+| `components/AssessProjects.svelte` | List + import/refresh ODK projects |
+| `components/AssessForms.svelte` | Forms for the active project |
+| `components/AssessSubmissions.svelte` | Submission list and detail |
+
+Wired from `routes/(protected)/assess/+page.svelte` as a simple projects → forms → submissions flow.

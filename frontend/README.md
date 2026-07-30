@@ -1,42 +1,35 @@
-# sv
+# Frontend (SvelteKit)
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+Web UI for the Water Security Tool. See the [root README](../README.md) and [docs/](../docs/)
+for product overview, setup, and API details.
 
-## Creating a project
+## Stack
 
-If you're seeing this, you've probably already done this step. Congrats!
+- SvelteKit + Tailwind
+- MapLibre GL (Diagnose 2D map)
+- Plotly.js (Diagnose 3D DEM / layer drape)
 
-```sh
-# create a new project
-npx sv create my-app
-```
-
-To recreate this project with the same configuration:
+## Develop
 
 ```sh
-# recreate this project
-npx sv@0.16.1 create --template minimal --types ts --no-install .
-```
-
-## Developing
-
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
-
-```sh
+npm install
 npm run dev
-
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
 ```
 
-## Building
+Opens on `http://localhost:5173`. `/api/*` is proxied to the FastAPI backend; `/titiler` via Vite.
 
-To create a production version of your app:
+## Modules
+
+| Path | Module |
+|------|--------|
+| `src/lib/modules/diagnose/` | Map, 3D terrain, layers, zones, notes, hypotheses |
+| `src/lib/modules/assess/` | ODK projects / forms / submissions |
+| `src/lib/modules/design/` | Scaffold |
+| `src/routes/(protected)/` | Authenticated Diagnose / Design / Assess pages |
+
+## Build
 
 ```sh
 npm run build
+npm run preview
 ```
-
-You can preview the production build with `npm run preview`.
-
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.

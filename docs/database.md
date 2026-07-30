@@ -9,6 +9,8 @@ users ──────────┬──── sessions
                 │
                 ├──── organizations ──── org_members (role: admin|member)
                 │
+                ├──── assess_projects (odk_project_id)
+                │
                 └──── diagnosis ──┬──── diagnosis_users (role: admin|member)
                                   ├──── diagnosis_orgs
                                   ├──── observation_zones ──┬──── hypothesis_observation_zones
@@ -75,6 +77,21 @@ Many-to-many between organizations and users, with a role.
 | created_at | TIMESTAMPTZ | |
 
 **Rules:** Only admins can add/remove other members. Any member can leave (self-remove). The last admin cannot leave without promoting someone else first.
+
+### assess_projects
+
+ODK Central projects synced into the Assess module.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | UUID | PK |
+| name | TEXT | |
+| owner_id | UUID | FK → users |
+| description | TEXT | Default `''` |
+| status | TEXT | `draft`, `active`, or `archived` |
+| odk_project_id | TEXT | Nullable; unique per `(owner_id, odk_project_id)` |
+| created_at | TIMESTAMPTZ | |
+| updated_at | TIMESTAMPTZ | Auto-trigger |
 
 ### diagnosis
 
@@ -190,6 +207,8 @@ Geotagged point features with optional photo and audio attachments.
 - `org_members_user_id_idx` on `org_members(user_id)`
 - `diagnosis_watershed_geom_idx` GIST on `diagnosis(watershed_geom)`
 - `diagnosis_owner_id_idx` on `diagnosis(owner_id)`
+- `assess_projects_owner_id_idx` on `assess_projects(owner_id)`
+- Unique `(owner_id, odk_project_id)` on `assess_projects`
 - `diagnosis_users_user_id_idx` on `diagnosis_users(user_id)`
 - `diagnosis_orgs_org_id_idx` on `diagnosis_orgs(org_id)`
 - `observation_zones_geom_idx` GIST on `observation_zones(geom)`

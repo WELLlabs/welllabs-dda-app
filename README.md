@@ -1,26 +1,27 @@
-# DDA Product
+# Water Security Tool (DDA)
 
 A watershed-first toolkit for diagnosing field conditions, designing interventions, and
-assessing outcomes. AWS COG base layers → SvelteKit web map → PostGIS vector storage → QField
-offline sync.
+assessing outcomes. AWS COG / FlatGeobuf base layers → SvelteKit web map → PostGIS vector
+storage → QField offline sync → ODK Central monitoring.
 
 The product is organized into three modules, each with its own data and API namespace:
 
 | Module | Status | Description |
 |--------|--------|-------------|
-| **Diagnose** | Available | Map watersheds, draw observation zones, capture geotagged field notes, sync offline via QField |
+| **Diagnose** | Available | Map watersheds, secondary COG/vector layers, watershed analysis, 3D DEM draping, observation zones, hypotheses, field notes, QField offline sync |
 | **Design** | Boilerplate | Plan and design interventions on top of diagnosed watersheds |
-| **Assess** | Boilerplate | Track outcomes and assess impact of implemented designs |
+| **Assess** | Partial | Sync ODK Central projects, browse forms and submissions in the web UI |
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    S3[(AWS S3 COGs)] --> Titiler[Titiler]
+    S3[(AWS S3 COGs + FGB)] --> Titiler[Titiler]
     Titiler --> Web[SvelteKit + MapLibre]
     Web --> API[FastAPI]
     API --> PG[(PostGIS)]
     API --> QFC[QField Cloud]
+    API --> ODK[ODK Central]
     QFC --> QF[QField Mobile]
     QF -->|offline edits| QFC
     QFC -->|delta sync| PG
@@ -28,41 +29,44 @@ flowchart LR
 
 | Component | Role |
 |-----------|------|
-| **S3 + Titiler** | Serve COG rasters as map tiles |
-| **SvelteKit** | Landing page + per-module UIs (Diagnose today; Design/Assess boilerplate) |
-| **PostGIS** | Diagnose module owns `diagnosis` (projects), `observation_zones` (polygons + text), `field_notes` (geotag + text/photo) |
-| **QField Cloud** | Package a diagnosis project for mobile; sync offline edits back to PostGIS |
+| **S3 + Titiler** | Serve COG rasters as map tiles; FlatGeobufs for secondary vectors and watersheds |
+| **SvelteKit** | Landing page + Diagnose / Design / Assess UIs (MapLibre 2D + Plotly 3D in Diagnose) |
+| **PostGIS** | Diagnose projects, observation zones, hypotheses, field notes; Assess project rows synced from ODK |
+| **QField Cloud** | Package a diagnosis for mobile; sync offline edits back to PostGIS |
+| **ODK Central** | Source of Assess monitoring projects, forms, and submissions |
 
 ## Repository structure
 
 ```
 geo-field-pipeline/
-├── backend/                        # FastAPI app + infra
+├── backend/
 │   ├── app/
 │   │   ├── main.py                 # Router registration, CORS
-│   │   ├── shared/                 # Cross-module infra: config, DB, S3, watershed lookup
+│   │   ├── shared/                 # Config, DB, S3, auth, access, ODK client
 │   │   └── modules/
-│   │       ├── diagnose/           # routers + services: projects, layers, observation
-│   │       │   │                   # zones, field notes, QField sync
-│   │       │   └── qgis/           # QGIS project build script + templates (Diagnose-only)
-│   │       ├── design/             # boilerplate router (/api/design)
-│   │       └── assess/             # boilerplate router (/api/assess)
+│   │       ├── accounts/           # Auth, users, orgs, QField / ODK connectors
+│   │       ├── diagnose/           # Projects, layers, analysis, 3D drape, QField
+│   │       │   └── config/         # layers.yaml — styling + analysis catalog
+│   │       ├── design/             # Boilerplate (/api/design)
+│   │       └── assess/             # ODK project sync + forms/submissions
 │   ├── db/init.sql                 # PostGIS schema
+│   ├── scripts/
+│   │   ├── run_tests.sh            # Pytest inside the API container
+│   │   └── prepare_secondary_layers.sh
+│   ├── tests/                      # Unit / API smoke tests
 │   ├── docker-compose.yml          # PostGIS, Titiler, API
 │   └── Dockerfile
-└── frontend/                       # SvelteKit + MapLibre
+├── docs/                           # Module + setup + API docs
+└── frontend/                       # SvelteKit + MapLibre + Plotly
     └── src/
-        ├── routes/
-        │   ├── +page.svelte        # Landing page (nav to Diagnose/Design/Assess)
-        │   ├── diagnose/            # Project picker + /diagnose/[slug] map view
-        │   ├── design/              # Boilerplate page
-        │   └── assess/              # Boilerplate page
-        └── lib/
-            ├── shared/              # Cross-module infra: layout, pickers, API client, slug utils
-            └── modules/
-                ├── diagnose/        # Components, API client, map constants
-                ├── design/          # (scaffold, ready for Design UI)
-                └── assess/          # (scaffold, ready for Assess UI)
+        ├── routes/(protected)/
+        │   ├── diagnose/           # Project picker + map + members
+        │   ├── design/             # Boilerplate page
+        │   └── assess/             # ODK projects → forms → submissions
+        └── lib/modules/
+            ├── diagnose/           # MapView, Terrain3DView, API client
+            ├── design/
+            └── assess/             # AssessProjects / Forms / Submissions
 ```
 
 ## Quick start
@@ -72,7 +76,8 @@ geo-field-pipeline/
 ```bash
 cd backend
 cp .env.example .env
-# Edit .env with your AWS credentials, S3 bucket, COG keys, and QField Cloud token
+# Edit .env with AWS credentials, S3 bucket, COG_LAYERS, VECTOR_LAYERS, watersheds key,
+# QField Cloud settings, and optional ODK Central credentials
 ```
 
 Get a QField Cloud token at [app.qfield.cloud/user/settings](https://app.qfield.cloud/user/settings/).
@@ -95,80 +100,109 @@ This starts:
 cd frontend && npm run dev
 ```
 
-Open [http://localhost:5173](http://localhost:5173) for the landing page, or go straight to
-[http://localhost:5173/diagnose](http://localhost:5173/diagnose).
+Open [http://localhost:5173](http://localhost:5173).
 
 **API proxying:** In development, browser requests to `/api/*` are forwarded to FastAPI
 (`localhost:8080`) by the SvelteKit catch-all at `frontend/src/routes/api/[...path]/+server.js`.
-Vite's `server.proxy` is only used for `/titiler`. In production, put a reverse proxy
-(nginx, Caddy, or an ALB) in front and route `/api/*` directly to FastAPI so large media
-uploads never pass through Node.
+Vite's `server.proxy` is only used for `/titiler`.
+
+### 4. Run backend tests (optional)
+
+```bash
+cd backend
+bash scripts/run_tests.sh
+```
 
 ## Usage (Diagnose)
 
 ### Projects
 
-1. Open `/diagnose` — you'll see existing projects or **New project**
+1. Open `/diagnose` — existing projects or **New project**
 2. Enter a name and click the map to set a location
-3. The app looks up the watershed from `watersheds.fbg` on S3 and creates the project
-4. The map opens (at `/diagnose/{project-slug}`) zoomed to that watershed; LULC is clipped to
-   the watershed bounds
+3. The app looks up the watershed from the configured FlatGeobuf/GPKG on S3
+4. The map opens at `/diagnose/{project-slug}` zoomed to that watershed
 
 ### Web map (inside a project)
 
-- **Pan** — navigate the map
-- **+** button — draw an observation zone (polygon) with a label and description
-- **Field Note** — click a location, enter text and optionally attach a photo
-- **Package to QField** — packages the **current project** (watershed-clipped LULC as MBTiles +
-  project-scoped vectors) to QField Cloud
+- **2D / 3D toggle** — MapLibre map or Plotly DEM terrain with secondary layers draped on the surface
+- **Secondary layers** — COGs (LULC, DEM, JRC water) and vectors (aquifers, WISER stress/resilience, villages) from `COG_LAYERS` / `VECTOR_LAYERS`, styled via `layers.yaml`
+- **Watershed analysis** — per-layer meaning, uncertainty, field checks, and zonal stats for the active watershed
+- **Observation zones** — draw polygons with label, observations, questions, color
+- **Hypotheses** — link zones, collect field-note evidence, validate / invalidate
+- **Field notes** — geotagged points with optional photo/audio and hypothesis link
+- **Package to QField** — watershed-clipped rasters (MBTiles) + project vectors to QField Cloud
 
 ### QField mobile
 
-1. Sign in to your QField Cloud account in the QField app
+1. Sign in to QField Cloud in the QField app
 2. Download the project (named `{QFIELD_PROJECT_NAME}-{your-project-name}`)
-3. Edit **Observation zones** and **Field notes** offline
-4. Sync when back online — changes push as deltas to PostGIS
+3. Edit observation zones and field notes offline
+4. Sync when back online — deltas apply to PostGIS
 
-## PostGIS schema
+## Usage (Assess)
 
-**diagnosis** — `name`, `watershed_id`, `watershed_name`, `watershed_geom`, seed coordinates
-**observation_zones** — `project_id` (→ `diagnosis`), `geom` (polygon/multipolygon only), `text`, `description`, `color`
-**field_notes** — `project_id` (→ `diagnosis`), point `geom`, `text`, optional `photo_path`/`audio_path`
+1. Connect ODK Central credentials (Settings / connectors, or env `ODK_*` for server-side sync)
+2. Open `/assess` and **Import** projects from ODK Central
+3. Drill into forms and submissions for a synced project
+
+## PostGIS schema (high level)
+
+**diagnosis** — name, watershed, seed coordinates, QField Cloud ids  
+**observation_zones** / **hypotheses** / **field_notes** — Diagnose field data  
+**assess_projects** — ODK-synced Assess work areas (`odk_project_id`, status)  
+**users** / **organizations** / **sessions** — accounts and sharing
+
+See [docs/database.md](docs/database.md) for the full schema.
 
 ## Important: PostGIS must be reachable from QField
 
-For offline editing sync, QField Cloud applies deltas to your PostGIS database when the device
-syncs. The database must be reachable at the host configured in `POSTGIS_PUBLIC_HOST` (a public
-IP or domain — not `localhost`).
+For offline sync, QField Cloud must reach the host in `POSTGIS_PUBLIC_HOST` (not `localhost`).
+For local development, use a tunnel (ngrok, Cloudflare Tunnel) or a cloud VM.
 
-For local development, use a tunnel (e.g. ngrok, Cloudflare Tunnel) or deploy PostGIS to a cloud
-VM.
-
-## API endpoints
+## API (summary)
 
 ### Diagnose (`/api/diagnose/...`)
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/diagnose/projects` | List diagnosis projects |
-| POST | `/api/diagnose/projects` | Create project (name + coordinate → watershed lookup) |
-| GET | `/api/diagnose/projects/{id}` | Get project with watershed geometry |
-| POST | `/api/diagnose/watersheds/lookup` | Preview watershed at a coordinate |
-| GET | `/api/diagnose/layers/cog?bbox=w,s,e,n` | COG layers clipped to bbox |
-| GET/POST/PATCH/DELETE | `/api/diagnose/observation-zones?project_id=` | Project-scoped observation zones (polygons only) |
-| GET/POST/PATCH/DELETE | `/api/diagnose/field-notes?project_id=` | Project-scoped field notes |
-| POST | `/api/diagnose/qfield/package` | Package current project to QField (`{project_id}`) |
-| POST | `/api/diagnose/qfield/sync` | Sync offline edits from QField Cloud back into PostGIS |
+| Area | Examples |
+|------|----------|
+| Projects | `GET/POST /projects`, access grants under `/projects/{id}/access` |
+| Layers | `/layers/cog`, `/layers/vector`, tile proxy, `/layers/dem/mesh`, `/{id}/drape-grid` |
+| Analysis | `/layers/analysis/batch`, `/layers/cog|vector/{id}/analysis` |
+| Field data | observation-zones, field-notes, hypotheses |
+| QField | `/qfield/package`, `/qfield/sync` (+ SSE variants) |
 
-### Design / Assess (boilerplate)
+### Assess (`/api/assess/...`)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/design/status` | Placeholder status endpoint |
-| GET | `/api/assess/status` | Placeholder status endpoint |
+| GET | `/status` | Module status placeholder |
+| GET | `/odk/projects` | Sync/list ODK Central projects into `assess_projects` |
+| GET | `/projects` | List synced Assess projects |
+| GET | `/projects/{id}/forms` | List forms |
+| GET | `/projects/{id}/forms/{form}/submissions` | List submissions |
+| GET | `/projects/{id}/forms/{form}/submissions/{iid}` | Single submission |
+
+### Design
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/design/status` | Placeholder |
+
+Full reference: [docs/api.md](docs/api.md).
+
+## Documentation
+
+| Doc | Contents |
+|-----|----------|
+| [docs/setup.md](docs/setup.md) | Environment, Docker, S3 layout, tests |
+| [docs/diagnosis.md](docs/diagnosis.md) | Diagnose capabilities, layers, 3D, QField, access |
+| [docs/assess.md](docs/assess.md) | Assess / ODK status |
+| [docs/design.md](docs/design.md) | Design placeholder |
+| [docs/database.md](docs/database.md) | Schema |
+| [docs/api.md](docs/api.md) | Endpoint reference |
 
 ## Next steps
 
-- Build out the Design and Assess data models, routers, and UIs
-- Add more layers to the diagnose piece
-- Deploy for production
+- Complete Design module data models and UI
+- Finish Assess Metabase embed (config keys exist; router still to land)
+- Production deploy (HTTPS, reverse proxy for `/api`, public PostGIS for QField)

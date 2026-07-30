@@ -87,10 +87,20 @@ All access management endpoints require the caller to be the project owner or a 
 
 ### Layers — `/api/diagnose/layers`
 
+Enabled layers come from `COG_LAYERS` / `VECTOR_LAYERS`; styling and analysis metadata from `layers.yaml`.
+
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/cog?bbox=&project_id=` | Yes | List COG raster layers with status and bounds. |
+| GET | `/cog?bbox=&project_id=` | Yes | List COG raster layers with status, bounds, and catalog metadata. |
 | GET | `/cog/{layer_id}/tiles/WebMercatorQuad/{z}/{x}/{y}` | Yes | Proxy a COG tile, optionally clipped to the project watershed. |
+| GET | `/cog/{layer_id}/analysis?project_id=` | Yes + access | Watershed analysis for one COG layer. |
+| GET | `/vector` | Yes | List configured FlatGeobuf vector layers from the catalog. |
+| GET | `/vector/{layer_id}/data?project_id=` | Yes + access | Vector features clipped / filtered to the project watershed. |
+| GET | `/vector/{layer_id}/analysis?project_id=` | Yes + access | Watershed analysis for one vector layer. |
+| GET | `/analysis/batch?project_id=` | Yes + access | Batch analysis for all active secondary layers. |
+| GET | `/dem/mesh?project_id=` | Yes + access | Downsampled DEM elevation grid (EPSG:4326) for the 3D viewer. |
+| GET | `/{layer_id}/drape-grid?project_id=` | Yes + access | Layer values + colorscale sampled onto the DEM mesh for 3D draping. |
+| GET | `/{layer_id}/drape?project_id=` | Yes + access | PNG drape texture aligned to the DEM mesh (legacy / alternate). |
 
 ### Watersheds — `/api/diagnose/watersheds`
 
@@ -146,11 +156,20 @@ All access management endpoints require the caller to be the project owner or a 
 |--------|------|------|-------------|
 | GET | `/api/design/status` | No | Returns `{"module": "design", "status": "not_implemented"}` |
 
-## Assess Module (stub)
+## Assess Module — `/api/assess`
+
+ODK Central-backed monitoring. See [assess.md](assess.md).
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/api/assess/status` | No | Returns `{"module": "assess", "status": "not_implemented"}` |
+| GET | `/status` | No | Placeholder: `{"module": "assess", "status": "not_implemented"}` |
+| GET | `/odk/projects` | Yes | Sync ODK Central projects into `assess_projects` and return them. |
+| GET | `/projects` | Yes | List Assess projects stored in PostGIS. |
+| GET | `/projects/{project_id}/forms` | Yes | List ODK forms for a project. |
+| GET | `/projects/{project_id}/forms/{xml_form_id}/submissions` | Yes | List submissions (OData). |
+| GET | `/projects/{project_id}/forms/{xml_form_id}/submissions/{instance_id}` | Yes | Fetch one submission. |
+
+`main.py` also registers `/api/assess/metabase` for a future signed-embed router; that module is not present yet.
 
 ---
 

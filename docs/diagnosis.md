@@ -1,84 +1,100 @@
 # Diagnose Module
 
-The Diagnose module is the core of the DDA product. It provides watershed-based field mapping with observation zones, geotagged field notes, and offline sync via QField Cloud.
+The Diagnose module is the core of the Water Security Tool. It provides watershed-based field
+mapping with secondary data layers, watershed analysis, 3D DEM draping, observation zones,
+hypotheses, geotagged field notes, and offline sync via QField Cloud.
 
 ## Capabilities
 
 ### Watershed-Scoped Projects
 
 - A user creates a diagnosis project by clicking a point on the map
-- The backend looks up the watershed boundary at that coordinate using a FlatGeobuf file stored in S3
+- The backend looks up the watershed boundary at that coordinate using a FlatGeobuf/GPKG file on S3 (`WATERSHEDS_FGB_KEY`)
 - The project is tied to the detected watershed polygon, which defines its spatial extent
-- The watershed geometry is stored in PostGIS and used to clip raster tiles and scope data queries
+- The watershed geometry is stored in PostGIS and used to clip raster tiles, scope vector queries, and drive analysis
 
-### Interactive Map
+### Interactive Map (2D)
 
 - Built with MapLibre GL JS
 - Resizable left sidebar with layer controls
 - Base layer options: OpenStreetMap and ESRI satellite imagery
-- Secondary data layers: COG raster layers (e.g., LULC) served through Titiler, draggable for reorder
+- Secondary layers: COG rasters (Titiler) and FlatGeobuf vectors, reorderable
 - Primary layers: Observation Zones, Hypotheses, and Field Notes
-- Floating overlay cards on the right side for zone/note/hypothesis editing
+- Floating overlay cards for zone / note / hypothesis editing and layer analysis panels
+
+### 3D Terrain Viewer
+
+- Toggle **3D** on the map to open a Plotly surface of the watershed DEM
+- DEM mesh comes from `GET /api/diagnose/layers/dem/mesh`
+- Selecting a secondary layer drapes it on the DEM via `GET /api/diagnose/layers/{layer_id}/drape-grid`
+- Categorical layers use stepped colorscales from `layers.yaml`; continuous / choropleth layers use their catalog styling
+- Turntable rotation; relief can be kept minimal so drape colors stay readable
+
+### Secondary Layers & Catalog
+
+Layer enablement is env-driven; styling and analysis copy live in
+`backend/app/modules/diagnose/config/layers.yaml`:
+
+| Env | Role |
+|-----|------|
+| `COG_LAYERS` | Comma-separated COG keys (e.g. LULC, DEM, JRC occurrence/transition) |
+| `VECTOR_LAYERS` | Comma-separated FlatGeobuf keys (aquifers, gw_stress, village_resilience, villages) |
+
+Typical catalog entries today:
+
+- **Raster:** LULC 250k, DEM, JRC surface water occurrence / transitions
+- **Vector:** Aquifers, WISER groundwater stress, irrigation access / kharif / rabi resilience, baseline population, marginalized % SC/ST
+
+Each layer can declare `analysis_type`, legend classes or choropleth stops, meaning, uncertainty, and field-check text. The map preloads batch analysis for the watershed and shows evidence stats in the sidebar.
 
 ### Observation Zones
 
-- Polygon features drawn directly on the map using MapLibre GL Draw
+- Polygon features drawn with MapLibre GL Draw
 - Each zone has a text label, observations, questions, and configurable color
-- Zones can be edited (geometry, text, color) and deleted
 - Stored as PostGIS geometries with POLYGON/MULTIPOLYGON constraint
 
 ### Hypotheses
 
-- Testable statements created in the web app and linked to one or more observation zones
+- Testable statements linked to one or more observation zones
 - New hypotheses start with status `untested`
-- Field workers link field notes to a hypothesis as evidence (optional dropdown on the field note form)
-- Back in the web app, users record a root cause and set status to `validated` or `invalidated`
-- Validation requires at least one linked field note; `discarded` can be set without evidence
+- Field notes can link to a hypothesis as evidence
+- Desk review records a root cause and sets `validated` or `invalidated` (requires ≥1 linked note); `discarded` needs no evidence
 
 ### Field Notes
 
-- Geotagged point features placed on the map
-- Each note has text content, optional photo and audio attachments, and an optional link to a hypothesis
-- Media files are uploaded via multipart form and stored in S3 under `{project_id}/media/`
-- Notes can be edited (text, geometry) and deleted; deletion cleans up S3 media
+- Geotagged points with title, text, optional photo/audio, optional hypothesis link
+- Media uploaded multipart and stored in S3 under `{project_id}/media/`
+- Delete cleans up S3 media
 
-### COG Raster Layers
+### COG Raster Tiles
 
-- Cloud-Optimized GeoTIFF layers stored in S3
-- Served as map tiles through a Titiler proxy
-- Tiles can be clipped to the project's watershed boundary
-- Configurable via the `COG_LAYERS` environment variable
+- Cloud-Optimized GeoTIFFs in S3, tiled via Titiler (proxied through the API)
+- Optional watershed clip for project views
+- Per-layer colormaps from the catalog (categorical gdaldem / Titiler colormap, continuous colormaps)
 
 ## QField Cloud Integration
 
 ### Per-User Accounts
 
-Each user connects their own QField Cloud account via the settings page. The app stores the QField Cloud API token (not credentials) on the `users` row (`qfield_username`, `qfield_token`, `qfield_token_expires_at`). ODK Central tokens are stored the same way (`odk_username`, `odk_token`, `odk_token_expires_at`). If a token expires, the user reconnects from Settings → Connectors.
+Each user connects their own QField Cloud account via settings. The app stores the API token on
+`users` (`qfield_username`, `qfield_token`, `qfield_token_expires_at`). ODK tokens are stored
+the same way for Assess. Expired tokens are renewed from Settings → Connectors.
 
 ### Packaging to QField
 
-When a user packages a diagnosis project:
-
-1. A QGIS project file (`.qgs`) is generated using PyQGIS with the project's layers, data, and styling
-2. Raster layers are clipped to the watershed boundary and converted to MBTiles (zoom range configurable via `QFIELD_RASTER_MIN_ZOOM`, `QFIELD_RASTER_MAX_ZOOM`)
-3. Observation zones, hypotheses, and field notes are exported to GeoPackages (field notes include a Value Relation dropdown to pick a hypothesis)
-4. Everything is uploaded to QField Cloud using the packaging user's token
-5. The QField Cloud project is created in the user's QField Cloud account
-6. Other users with diagnosis access are added as QField Cloud collaborators
-7. Progress is streamed to the frontend via Server-Sent Events
+1. A QGIS project (`.qgs`) is generated with project layers, data, and styling
+2. Rasters are clipped to the watershed and converted to MBTiles (`QFIELD_RASTER_MIN_ZOOM` / `MAX_ZOOM`)
+3. Observation zones, hypotheses, and field notes export to GeoPackages
+4. Package uploads to QField Cloud under the packaging user's token
+5. Collaborators with diagnosis access are added on QField Cloud
+6. Progress streams to the frontend via Server-Sent Events
 
 ### Syncing from QField
 
-When a user syncs from QField Cloud:
-
-1. Changes made in QField (offline edits, new notes, photos) are pulled down
-2. Media files are migrated from QField Cloud to S3
-3. The PostGIS database is updated with the synced data
-4. Progress is streamed via SSE
-
-### Collaborator Sync
-
-When packaging, all users with access to the diagnosis (direct users and org members) are automatically added as collaborators on the QField Cloud project. This allows the whole team to sync from the same project in QField.
+1. Offline edits and new notes/photos are pulled from QField Cloud
+2. Media migrate to S3
+3. PostGIS updates with synced data
+4. Progress streams via SSE
 
 ## Access Control
 
@@ -86,57 +102,55 @@ When packaging, all users with access to the diagnosis (direct users and org mem
 
 | Role | Capabilities |
 |------|-------------|
-| **Owner** | Full control. Can delete the project, manage all sharing, create/edit/delete zones and notes. |
-| **Admin** | Can manage sharing (add/remove users and orgs, change roles). Can create/edit/delete zones and notes. |
-| **Member** | Can view the project, create/edit/delete zones and notes. Cannot manage sharing. |
+| **Owner** | Full control including delete and sharing |
+| **Admin** | Manage sharing; create/edit/delete zones and notes |
+| **Member** | View project; create/edit/delete zones and notes; no sharing admin |
 
-### Sharing Mechanisms
+### Sharing
 
-1. **Direct user grants**: The owner or an admin adds a user by email. Each granted user gets a role (admin or member).
-2. **Organization grants**: The owner or an admin shares with an entire organization. All org members get access.
+1. **Direct user grants** by email (`admin` or `member`)
+2. **Organization grants** — all org members get access
 
 ### Members Page
 
-Each diagnosis project has a dedicated `/diagnose/[slug]/members` page showing:
-- The project owner at the top with a purple "owner" badge
-- All users with direct access, with role badges and management actions
-- All organizations with access
-- Admins see controls to add/remove users and orgs, change roles
-- Non-owner members see a "Leave" button to remove their own access
+`/diagnose/[slug]/members` lists the owner, direct users, and orgs, with admin controls to
+add/remove grants and change roles. Non-owner members can leave.
 
 ## Design Decisions
 
-### Per-User Connector Tokens on `users`
+### Per-User Connector Tokens
 
-Rather than a separate `qfield_tokens` table or a server-wide token, each user stores their own QField Cloud and ODK Central credentials on the `users` row. Projects are created under the user's QField Cloud storage, and billing/quota stays with each user.
+QField Cloud and ODK Central credentials live on the `users` row so quota and project ownership
+stay with each user.
 
 ### Watershed as Spatial Scope
 
-Projects are scoped to a watershed boundary rather than arbitrary bounding boxes. This provides a natural ecological unit for field work and enables meaningful raster clipping.
+Projects use watershed boundaries (not arbitrary boxes) for clipping, analysis, and 3D mesh extents.
 
-### S3 for Media Storage
+### Layer Catalog vs Env Enablement
 
-Field note photos and audio are stored in S3 rather than locally. This decouples media storage from the API server and enables scalable access.
+`COG_LAYERS` / `VECTOR_LAYERS` decide what is active; `layers.yaml` owns colors, legends, and
+analysis semantics so styling is not hard-coded in the frontend.
 
-### SSE for Progress Streaming
+### Dual-Surface 3D Drape
 
-Packaging and syncing can take significant time. Server-Sent Events provide real-time progress updates without polling or WebSocket complexity.
+The DEM provides elevation; a second Plotly surface carries layer colors sampled onto the same
+EPSG:4326 mesh so categorical and choropleth layers stay aligned with terrain.
 
-### Session-Based Auth with HttpOnly Cookies
+### S3 for Media
 
-Cookie-based sessions (not JWTs) are used because:
-- Server-side session revocation is straightforward
-- No token refresh logic needed on the client
-- HttpOnly cookies prevent XSS-based token theft
+Field note media stays in S3 so the API remains stateless for blobs.
 
-### Diagnosis Admin Role
+### SSE for Progress
 
-Beyond the owner, users can be promoted to "admin" on a diagnosis. This allows delegation of sharing management without transferring ownership. Admins can add/remove users and orgs but cannot delete the project.
+Packaging and sync can take minutes; SSE avoids polling and WebSocket complexity.
+
+### Session Auth
+
+HttpOnly cookie sessions (`dda_session`) for server-side revocation and no client JWT refresh.
 
 ### Hypothesis Workflow
 
-Hypotheses connect observation zones (context) to field notes (evidence). The workflow is intentionally split between desk planning and field collection:
-
-1. **Plan** — create a hypothesis and link relevant observation zones
-2. **Collect** — field users attach notes to the hypothesis while on site
-3. **Review** — back at the desk, record the root cause and mark validated or invalidated
+1. **Plan** — create hypothesis and link zones  
+2. **Collect** — attach field notes as evidence  
+3. **Review** — root cause + validated / invalidated  

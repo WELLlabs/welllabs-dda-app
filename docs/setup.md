@@ -4,31 +4,33 @@
 
 - Docker and Docker Compose
 - Node.js 20+
-- An AWS account with S3 access (for COG layers, watershed data, and media storage)
+- An AWS account with S3 access (COG layers, vector FlatGeobufs, watersheds, media)
 
 ## Project Structure
 
 ```
 geo-field-pipeline/
 ├── backend/          FastAPI + PostGIS + GDAL
-│   ├── app/          Application code
-│   │   ├── main.py              App entry point, router wiring
-│   │   ├── shared/              Config, auth, DB, S3, access control
+│   ├── app/
+│   │   ├── main.py              App entry, router wiring
+│   │   ├── shared/              Config, auth, DB, S3, access, ODK client
 │   │   └── modules/
-│   │       ├── accounts/        Auth, users, orgs, QField accounts
-│   │       ├── diagnose/        Projects, zones, notes, QField sync
-│   │       ├── design/          (boilerplate)
-│   │       └── assess/          (boilerplate)
+│   │       ├── accounts/        Auth, users, orgs, QField / ODK connectors
+│   │       ├── diagnose/        Projects, layers, analysis, 3D drape, QField
+│   │       │   └── config/      layers.yaml catalog
+│   │       ├── design/          Boilerplate
+│   │       └── assess/          ODK sync + forms/submissions
 │   ├── db/init.sql              PostGIS schema
+│   ├── scripts/                 run_tests.sh, prepare_secondary_layers.sh
+│   ├── tests/                   Pytest suite
 │   ├── docker-compose.yml       postgis + titiler + api
-│   ├── Dockerfile               Python 3.12-slim + GDAL + Docker CLI
+│   ├── Dockerfile
 │   └── requirements.txt
-└── frontend/         SvelteKit + Tailwind + MapLibre GL
+├── docs/
+└── frontend/         SvelteKit + Tailwind + MapLibre + Plotly
     └── src/
-        ├── lib/
-        │   ├── shared/          Session store, API client, components
-        │   └── modules/         Per-module API clients and components
-        └── routes/              SvelteKit file-based routing
+        ├── lib/modules/         Per-module API clients and components
+        └── routes/(protected)/  Diagnose / Design / Assess pages
 ```
 
 ## Backend Setup
@@ -40,22 +42,22 @@ cd backend
 cp .env.example .env
 ```
 
-2. Configure the required environment variables in `.env`:
+2. Configure environment variables in `.env` (see `.env.example` for the full list):
 
 | Variable | Description |
 |----------|-------------|
-| `AWS_ACCESS_KEY_ID` | IAM key with S3 `GetObject`, `PutObject`, `DeleteObject` |
-| `AWS_SECRET_ACCESS_KEY` | Corresponding secret |
-| `AWS_S3_BUCKET` | S3 bucket name for COG layers, watersheds, and media |
-| `AWS_DEFAULT_REGION` | AWS region (default: `us-east-1`) |
-| `COG_LAYERS` | Comma-separated COG raster keys in the bucket |
-| `WATERSHEDS_FGB_KEY` | FlatGeobuf watershed file key in the bucket |
-| `POSTGIS_PUBLIC_HOST` | Public hostname QField can reach (not `localhost`) |
-| `POSTGIS_PUBLIC_PORT` | Public PostgreSQL port (default: `5432`) |
-| `QFIELD_CLOUD_URL` | QField Cloud API base URL |
-| `QFIELD_PROJECT_NAME` | Prefix for QField Cloud project names |
-| `FRONTEND_ORIGIN` | Frontend URL for CORS (default: `http://localhost:5173`) |
-| `SESSION_COOKIE_SECURE` | Set `true` in production (HTTPS) |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | S3 access |
+| `AWS_S3_BUCKET` / `AWS_DEFAULT_REGION` | Bucket and region |
+| `COG_LAYERS` | Comma-separated COG keys under `rasters/` |
+| `VECTOR_LAYERS` | Comma-separated FlatGeobuf keys under `vector/` |
+| `WATERSHEDS_FGB_KEY` | Watershed boundaries (`.fgb` or `.gpkg`) under `vector/` |
+| `POSTGIS_PUBLIC_HOST` / `POSTGIS_PUBLIC_PORT` | Host QField can reach (not `localhost`) |
+| `QFIELD_CLOUD_URL` / `QFIELD_PROJECT_NAME` | QField Cloud API + project name prefix |
+| `QFIELD_RASTER_MIN_ZOOM` / `QFIELD_RASTER_MAX_ZOOM` | MBTiles zoom range for packages |
+| `FRONTEND_ORIGIN` | CORS origin (default `http://localhost:5173`) |
+| `SESSION_COOKIE_SECURE` | `true` in production (HTTPS) |
+| `ODK_BASE_URL` / `ODK_USERNAME` / `ODK_PASSWORD` | Optional; Assess ODK sync |
+| `metabase_embed_secret_key` / `metabase_dashboard_id` | Optional settings fields for a future Metabase embed (not in `.env.example` yet) |
 
 3. Start all services:
 
@@ -63,52 +65,55 @@ cp .env.example .env
 docker compose up -d
 ```
 
-This starts three containers:
-- **postgis** — PostGIS 16 with the schema from `db/init.sql`
-- **titiler** — COG tile server for raster layers
-- **api** — FastAPI application on port 8080
+Containers:
+- **postgis** — PostGIS 16, schema from `db/init.sql`
+- **titiler** — COG tile server
+- **api** — FastAPI on port 8080 (volume-mounts `./app` for hot reload)
 
-The API container volume-mounts `./app` for hot-reload during development.
-
-4. Verify the backend is running:
+4. Verify:
 
 ```bash
 curl http://localhost:8080/health
 # {"status":"ok"}
 ```
 
-## Frontend Setup
+> **Note:** If `main.py` imports a missing Assess Metabase router, the API process may fail to start until that module exists or the import is removed. Diagnose and Assess ODK routes are otherwise independent.
 
-1. Install dependencies:
+## Backend tests
+
+```bash
+cd backend
+bash scripts/run_tests.sh
+```
+
+Runs pytest inside the API image with `tests/` mounted. Most suite coverage is unit-level
+(accounts, diagnose catalog/helpers, access). App smoke tests need a loadable `app.main`.
+
+## Frontend Setup
 
 ```bash
 cd frontend
 npm install
-```
-
-2. Start the dev server:
-
-```bash
 npm run dev
 ```
 
-The frontend runs on `http://localhost:5173` and proxies API requests to `http://localhost:8080`.
+Dev server: `http://localhost:5173`. `/api/*` is proxied to FastAPI; `/titiler` via Vite proxy.
 
 ## S3 Bucket Layout
 
 ```
 your-bucket/
-├── lulc.cog.tif                     Shared COG raster layer(s)
-├── watersheds.fbg                   FlatGeobuf watershed boundaries
+├── rasters/*.tif                    Shared COG rasters (LULC, DEM, JRC, …)
+├── vector/*.fgb|*.gpkg              Secondary vectors + watershed boundaries
 ├── {project_id}/media/{file}        Field note photos/audio
 └── {project_id}/packages/{...}      QField package artifacts
 ```
 
-IAM permissions needed: `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` on `arn:aws:s3:::your-bucket/*`.
+IAM: `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` on `arn:aws:s3:::your-bucket/*`.
+
+Layer styling is not stored in S3 — edit `backend/app/modules/diagnose/config/layers.yaml`.
 
 ## Database Reset
-
-To reset the database and rebuild from the schema:
 
 ```bash
 cd backend
@@ -116,4 +121,4 @@ docker compose down -v
 docker compose up -d
 ```
 
-The `-v` flag removes the PostgreSQL data volume, so `init.sql` runs again on startup.
+`-v` drops the PostgreSQL volume so `init.sql` runs again.
