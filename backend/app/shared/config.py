@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     aws_s3_bucket: str = ""
     aws_default_region: str = "us-east-1"
     cog_layers: str = "lulc.cog.tif"
+    vector_layers: str = ""
     watersheds_fgb_key: str = "watersheds.fbg"
     qfield_cloud_url: str = "https://app.qfield.cloud/api/v1/"
     qfield_project_name: str = "geo-field-pipeline"

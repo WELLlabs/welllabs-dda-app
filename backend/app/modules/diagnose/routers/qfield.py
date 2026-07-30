@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from app.modules.diagnose.services.package_progress import PackageProgress
 from app.modules.diagnose.services.qfield_media_sync import sync_from_cloud
 from app.modules.diagnose.services.qfield_sync import package_and_upload
-from app.modules.diagnose.services.s3_cleanup import cleanup_project_s3
+from app.modules.diagnose.services.s3_cleanup import cleanup_orphan_projects, cleanup_project_s3
 from app.shared.access import assert_diagnosis_access
 from app.shared.auth import get_current_user
 
@@ -170,9 +170,22 @@ class CleanupRequest(BaseModel):
     dry_run: bool = False
 
 
+class OrphanCleanupRequest(BaseModel):
+    dry_run: bool = False
+
+
+@router.post("/cleanup-orphans")
+def cleanup_orphan_s3(body: OrphanCleanupRequest, user: dict = Depends(get_current_user)):
+    """Remove S3 prefixes for diagnosis projects that were deleted from the database."""
+    try:
+        return cleanup_orphan_projects(dry_run=body.dry_run)
+    except Exception as e:
+        raise HTTPException(500, f"Orphan cleanup failed: {e}") from e
+
+
 @router.post("/cleanup")
 def cleanup_s3(body: CleanupRequest, user: dict = Depends(get_current_user)):
-    """Remove orphaned media and legacy package files from S3 for a project."""
+    """Remove orphaned field-note media from S3 for a project."""
     project_id = str(body.project_id)
     assert_diagnosis_access(user["id"], project_id)
     try:

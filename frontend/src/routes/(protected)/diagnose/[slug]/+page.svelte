@@ -3,6 +3,7 @@
 	import { goto } from '$app/navigation';
 	import MapView from '$lib/modules/diagnose/components/MapView.svelte';
 	import PackageProgressPanel from '$lib/shared/components/PackageProgressPanel.svelte';
+	import ModuleHeader from '$lib/shared/components/ModuleHeader.svelte';
 	import {
 		fetchProjects,
 		packageToQfieldStream,
@@ -192,42 +193,21 @@
 	</div>
 {:else}
 	<div class="relative flex h-screen flex-col bg-white font-body">
-		<header class="flex items-center justify-between bg-brand-navy px-6 py-3 text-white">
-			<div class="flex items-center gap-3">
-				<button
-					class="cursor-pointer rounded border border-brand-sky/40 bg-transparent px-2 py-1 font-body text-sm text-white hover:bg-white/10"
-					onclick={backToProjects}
-				>
-					← Projects
-				</button>
-				<div>
-					<h1 class="m-0 font-headline text-lg font-semibold">{currentProject.name}</h1>
-					<p class="m-0 font-body text-xs text-brand-sky/90">{currentProject.watershed_name}</p>
-				</div>
-			</div>
-			<nav class="flex flex-wrap gap-1.5">
-				<button
-					class="cursor-pointer rounded border border-brand-sky/40 bg-transparent px-3 py-1.5 font-body text-sm text-white hover:bg-white/10"
-					onclick={() => goto(`/diagnose/${slug}/members`)}
-				>
-					Members
-				</button>
-				<button
-					class="cursor-pointer rounded border border-brand-sky/40 bg-transparent px-3 py-1.5 font-body text-sm text-white hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
-					disabled={packaging || syncing}
-					onclick={handlePackage}
-				>
-					{packaging ? 'Packaging…' : 'Package to QField'}
-				</button>
-				<button
-					class="cursor-pointer rounded border border-brand-blue bg-brand-blue px-3 py-1.5 font-body text-sm text-white hover:bg-brand-deep disabled:cursor-not-allowed disabled:opacity-60"
-					disabled={packaging || syncing}
-					onclick={handleSync}
-				>
-					{syncing ? 'Syncing…' : 'Sync from QField'}
-				</button>
-			</nav>
-		</header>
+		<ModuleHeader
+			title="Diagnose"
+			titleHref="/diagnose"
+			project={currentProject.name}
+			subtitle={currentProject.watershed_name}
+			wide
+		>
+			<button type="button" onclick={() => goto(`/diagnose/${slug}/members`)}>Members</button>
+			<button type="button" disabled={packaging || syncing} onclick={handlePackage}>
+				{packaging ? 'Packaging…' : 'Package to QField'}
+			</button>
+			<button type="button" class="primary" disabled={packaging || syncing} onclick={handleSync}>
+				{syncing ? 'Syncing…' : 'Sync from QField'}
+			</button>
+		</ModuleHeader>
 
 		{#if syncMsg && !syncing}
 			<div

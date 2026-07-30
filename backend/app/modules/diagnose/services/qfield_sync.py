@@ -16,9 +16,10 @@ from qfieldcloud_sdk import sdk
 from app.shared.config import settings
 from app.shared.database import db_cursor
 from app.shared import s3_storage
-from app.modules.diagnose.services.lulc_colormap import write_gdaldem_color_file
+from app.modules.diagnose.services.layer_catalog import get_layer_for_key
 from app.modules.diagnose.services.package_progress import PackageProgress
 from app.modules.diagnose.services.qgis_package import build_qfield_project_with_qgis
+from app.modules.diagnose.services.s3_cleanup import cleanup_project_s3
 
 logger = logging.getLogger(__name__)
 
@@ -329,6 +330,29 @@ def _clip_to_geotiff(
     shutil.rmtree(work_dir, ignore_errors=True)
 
 
+def _prune_package_dir(package_dir: Path, project_name: str) -> None:
+    """Keep only files that belong in the current QField / S3 package."""
+    keep_names = {
+        f"{project_name}.qgs",
+        "observation_zones.gpkg",
+        "field_notes.gpkg",
+        "hypotheses.gpkg",
+    }
+    for path in package_dir.glob("*.tif"):
+        keep_names.add(path.name)
+    for path in package_dir.glob("*.tif.aux.xml"):
+        keep_names.add(path.name)
+
+    for path in list(package_dir.iterdir()):
+        if path.is_dir():
+            logger.info("Pruning stale package directory: %s", path.name)
+            shutil.rmtree(path, ignore_errors=True)
+            continue
+        if path.is_file() and path.name not in keep_names:
+            logger.info("Pruning stale package file: %s", path.name)
+            path.unlink(missing_ok=True)
+
+
 def _cleanup_stale_rasters(package_dir: Path) -> None:
     """Remove leftovers from older packaging (full COGs in rasters_tmp, etc.)."""
     stale_tmp = package_dir / "rasters_tmp"
@@ -346,7 +370,7 @@ def _cleanup_stale_rasters(package_dir: Path) -> None:
         path.unlink()
     for path in package_dir.glob("IndiaSat_*.tif"):
         path.unlink()
-    for path in package_dir.glob("lulc_colors.txt"):
+    for path in package_dir.glob("*_colors.txt"):
         path.unlink()
     raster_dir = package_dir / "rasters"
     if raster_dir.exists():
@@ -362,9 +386,6 @@ def _build_watershed_rasters(
     if not s3_storage.is_s3_enabled():
         return []
 
-    colormap_file = package_dir / "lulc_colors.txt"
-    write_gdaldem_color_file(colormap_file)
-
     raster_filenames: list[str] = []
     for key in settings.cog_layers.split(","):
         key = key.strip()
@@ -374,6 +395,14 @@ def _build_watershed_rasters(
         tif_name = f"{name}.tif"
         dest = package_dir / tif_name
         src = f"/vsis3/{settings.aws_s3_bucket}/{key}"
+        layer_cfg = get_layer_for_key(key)
+        if not layer_cfg or layer_cfg.render_type != "categorical":
+            raise ValueError(
+                f"No categorical render config for COG '{key}'. "
+                "Add a layers.yaml entry with render.type=categorical."
+            )
+        colormap_file = package_dir / f"{name}_colors.txt"
+        layer_cfg.write_gdaldem_color_file(colormap_file)
         logger.info("Clipping s3://%s/%s to watershed GeoTIFF", settings.aws_s3_bucket, key)
         if progress:
             progress.log(f"Clipping {name} to watershed GeoTIFF")
@@ -615,6 +644,9 @@ def package_and_upload(
     for stray_bak in package_dir.glob("*.qgs~"):
         stray_bak.unlink(missing_ok=True)
 
+    step(68, "Pruning stale package files…")
+    _prune_package_dir(package_dir, project_name)
+
     step(70, "Connecting to QField Cloud…")
     client = sdk.Client(url=settings.qfield_cloud_url, token=qfield_token)
     qfc_project = _get_or_create_project(client, project_name)
@@ -681,7 +713,12 @@ def package_and_upload(
         s3_keys = s3_storage.sync_directory_to_s3(
             package_dir, s3_storage.packages_prefix(project_id)
         )
-        step(98, f"S3 backup: {len(s3_keys)} file(s)")
+        step(97, f"S3 backup: {len(s3_keys)} file(s)")
+        cleanup_stats = cleanup_project_s3(project_id)
+        if cleanup_stats.get("deleted") and progress:
+            progress.log(
+                f"S3 cleanup: removed {cleanup_stats['deleted']} orphaned media file(s)"
+            )
 
     step(100, "Packaging complete")
 

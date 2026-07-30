@@ -13,17 +13,21 @@
 		fetchCogLayers,
 		fetchFieldNotes,
 		fetchHypotheses,
+		fetchLayerAnalysis,
+		fetchBatchLayerAnalysis,
 		fetchObservationZones,
+		fetchVectorLayers,
 		fieldNoteMediaUrl,
 		fieldNoteThumbnailUrl,
 		updateFieldNote,
 		updateHypothesis,
 		updateObservationZone
 	} from '$lib/modules/diagnose/api';
-	import { LULC_LEGEND, MAX_FIELD_NOTE_MEDIA_BYTES, OBSERVATION_ZONE_COLOR, FIELD_NOTE_COLOR, HYPOTHESIS_COLOR, ZONE_COLORS } from '$lib/modules/diagnose/map-constants';
+	import { MAX_FIELD_NOTE_MEDIA_BYTES, OBSERVATION_ZONE_COLOR, FIELD_NOTE_COLOR, HYPOTHESIS_COLOR, ZONE_COLORS } from '$lib/modules/diagnose/map-constants';
 	import FieldNoteIcon from '$lib/modules/diagnose/components/icons/FieldNoteIcon.svelte';
 	import HypothesisIcon from '$lib/modules/diagnose/components/icons/HypothesisIcon.svelte';
 	import ObservationZoneIcon from '$lib/modules/diagnose/components/icons/ObservationZoneIcon.svelte';
+	import Terrain3DView from '$lib/modules/diagnose/components/Terrain3DView.svelte';
 
 	const BASE_LAYERS = {
 		osm: {
@@ -81,7 +85,20 @@
 		showSelectedHypothesisMenu = false;
 	}
 
-	function selectLayer(layer) {
+	function showOnlySecondaryLayer(layerId) {
+		for (const l of secondaryLayers) {
+			const visible = l.id === layerId && l.map_render !== false;
+			cogVisibility = { ...cogVisibility, [l.id]: visible };
+			if (l.kind === 'vector') {
+				setLayerVisibility(`vec-${l.id}-fill`, visible);
+				setLayerVisibility(`vec-${l.id}-line`, visible);
+			} else {
+				setLayerVisibility(`cog-${l.id}`, visible);
+			}
+		}
+	}
+
+	async function selectLayer(layer) {
 		selectedLayer = layer;
 		if (layer?.kind === 'primary') {
 			activePrimaryTab = layer.id;
@@ -91,6 +108,14 @@
 			cancelPendingForms();
 			if (layer.id === 'hypotheses') {
 				void reloadHypotheses();
+			}
+		} else if (layer?.kind === 'secondary') {
+			if (mapReady) {
+				const meta = secondaryLayers.find((l) => l.id === layer.id);
+				if (meta?.kind === 'vector' && meta.map_render !== false) {
+					await ensureVectorLayerOnMap(meta);
+				}
+				showOnlySecondaryLayer(layer.id);
 			}
 		}
 	}
@@ -302,6 +327,93 @@
 		}
 	}
 
+	function removeVectorLayers() {
+		if (!map) return;
+		for (const layer of vectorLayers) {
+			const fillId = `vec-${layer.id}-fill`;
+			const lineId = `vec-${layer.id}-line`;
+			const sourceId = `vec-${layer.id}`;
+			if (map.getLayer(lineId)) map.removeLayer(lineId);
+			if (map.getLayer(fillId)) map.removeLayer(fillId);
+			if (map.getSource(sourceId)) map.removeSource(sourceId);
+		}
+	}
+
+	function rebuildSecondaryList(cogs, vectors) {
+		return [
+			...cogs.map((l) => ({ ...l, kind: 'cog' })),
+			...vectors.map((l) => ({ ...l, kind: 'vector' }))
+		];
+	}
+
+	function matchColorExpression(column, classes, fallback = '#e6e9eb') {
+		const expr = ['match', ['to-string', ['get', column]]];
+		for (const c of classes || []) {
+			if (c.value == null) continue;
+			expr.push(String(c.value), c.color);
+		}
+		expr.push(fallback);
+		return expr;
+	}
+
+	function stepColorExpression(column, stops, fallback = '#e6e9eb') {
+		const sorted = [...(stops || [])].sort((a, b) => a.min - b.min);
+		if (!sorted.length) return fallback;
+		const expr = ['step', ['to-number', ['get', column]], sorted[0].color];
+		for (let i = 1; i < sorted.length; i++) {
+			expr.push(sorted[i].min, sorted[i].color);
+		}
+		return expr;
+	}
+
+	function vectorFillColor(layer) {
+		const column = layer.style_column;
+		if (!column) return '#94a3b8';
+		if (layer.render_type === 'choropleth') {
+			return stepColorExpression(column, layer.choropleth_stops);
+		}
+		return matchColorExpression(column, layer.legend);
+	}
+
+	/** Legend entries actually present in watershed features (or full for COG). */
+	function legendFromFeatures(layer, features) {
+		if (!layer) return [];
+		if (layer.render_type === 'continuous') {
+			// gist_earth gradient: dark-green (low) → brown (mid) → off-white (high)
+			return [
+				{ label: 'Lower elevation', color: '#2a4a1e', continuous: true },
+				{ label: 'Mid elevation', color: '#8c6d3f', continuous: true },
+				{ label: 'Higher elevation', color: '#e8e0d0', continuous: true }
+			];
+		}
+		if (layer.kind === 'cog' || !features?.length) {
+			return layer.legend || [];
+		}
+		const column = layer.style_column;
+		if (layer.render_type === 'choropleth' && layer.choropleth_stops?.length) {
+			const nums = features
+				.map((f) => Number(f.properties?.[column]))
+				.filter((n) => Number.isFinite(n));
+			return (layer.choropleth_stops || []).filter((s) =>
+				nums.some((n) => n >= s.min && n < s.max)
+			);
+		}
+		const present = new Set(
+			features
+				.map((f) => f.properties?.[column])
+				.filter((v) => v != null && v !== '')
+				.map((v) => String(v))
+		);
+		return (layer.legend || []).filter((item) => present.has(String(item.value)));
+	}
+
+	const mapLegendItems = $derived.by(() => {
+		if (selectedLayer?.kind !== 'secondary') return [];
+		const layer = secondaryLayers.find((l) => l.id === selectedLayer.id);
+		if (!layer) return [];
+		return layerActiveLegend[layer.id] || layer.legend || [];
+	});
+
 	let container;
 	let map;
 	let noteTitle = $state('');
@@ -315,6 +427,8 @@
 	let status = $state('Loading map…');
 
 	let baseLayer = $state('osm');
+	/** @type {'flat' | '3d'} */
+	let mapMode = $state('flat');
 	const activeAttribution = $derived(
 		baseLayer === 'osm' ? BASE_LAYERS.osm.attribution : BASE_LAYERS.esri.attribution
 	);
@@ -324,15 +438,24 @@
 	let showFieldNotesLayer = $state(true);
 	let mapReady = $state(false);
 	let cogLayers = $state([]);
+	let vectorLayers = $state([]);
+	let secondaryLayers = $state([]);
 	let cogVisibility = $state({});
+	let layerAnalysis = $state({});
+	let layerAnalysisLoading = $state({});
+	/** @type {Record<string, Array<{value?: any, label: string, color: string, continuous?: boolean}>>} */
+	let layerActiveLegend = $state({});
+	let analysisPreloadDone = $state(false);
 	let primaryLayerOrder = $state(['observation-zones', 'hypotheses', 'field-notes']);
-	let sidebarWidth = $state(256);
+	let sidebarWidth = $state(280);
 	let sidebarResizing = $state(false);
-	let rightSidebarWidth = $state(320);
+	let rightSidebarWidth = $state(360);
 	let rightSidebarResizing = $state(false);
 	let activePrimaryTab = $state('observation-zones');
 	/** @type {{ category: 'secondary' | 'primary' | null, index: number | null }} */
 	let dragReorder = $state({ category: null, index: null });
+	/** @type {number | null} */
+	let dragOverIndex = $state(null);
 
 	const PRIMARY_LAYER_LABELS = {
 		'observation-zones': 'Observation zones',
@@ -432,6 +555,8 @@
 
 		map.on('load', async () => {
 			mapReady = true;
+			map.setPitch(0);
+			map.setBearing(0);
 			map.setMaxBounds(null);
 			applyBasemapVisibility(BASE_LAYERS.osm.id, baseLayer === 'osm');
 			applyBasemapVisibility(BASE_LAYERS.esri.id, baseLayer === 'esri');
@@ -442,6 +567,8 @@
 			ensureDrawPreviewOnTop();
 			try {
 				await loadCogLayers();
+				await loadVectorLayers();
+				await preloadAllSecondaryData();
 			} catch (err) {
 				status = `Layers unavailable: ${err instanceof Error ? err.message : String(err)}`;
 			}
@@ -463,10 +590,10 @@
 				console.error('Failed to load hypotheses', err);
 				status = `Could not load hypotheses: ${err instanceof Error ? err.message : String(err)}`;
 			}
-			if (cogLayers.length > 0) {
-				selectLayer({ kind: 'secondary', id: cogLayers[0].id });
+			if (secondaryLayers.length > 0) {
+				await selectLayer({ kind: 'secondary', id: secondaryLayers[0].id });
 			} else {
-				selectLayer({ kind: 'primary', id: 'observation-zones' });
+				await selectLayer({ kind: 'primary', id: 'observation-zones' });
 			}
 			ensureDrawPreviewOnTop();
 			status =
@@ -892,6 +1019,7 @@
 		for (const layer of map.getStyle().layers ?? []) {
 			if (
 				layer.id.startsWith('cog-') ||
+				layer.id.startsWith('vec-') ||
 				layer.id.startsWith('zones-') ||
 				layer.id.startsWith('field-notes-')
 			) {
@@ -947,9 +1075,16 @@
 
 	function applyLayerStackOrder() {
 		if (!mapReady) return;
-		for (const layer of cogLayers) {
-			const id = `cog-${layer.id}`;
-			if (map.getLayer(id)) map.moveLayer(id);
+		for (const layer of secondaryLayers) {
+			if (layer.kind === 'cog') {
+				const id = `cog-${layer.id}`;
+				if (map.getLayer(id)) map.moveLayer(id);
+			} else {
+				const fillId = `vec-${layer.id}-fill`;
+				const lineId = `vec-${layer.id}-line`;
+				if (map.getLayer(fillId)) map.moveLayer(fillId);
+				if (map.getLayer(lineId)) map.moveLayer(lineId);
+			}
 		}
 		if (map.getLayer('watershed-fill')) map.moveLayer('watershed-fill');
 		if (map.getLayer('watershed-line')) map.moveLayer('watershed-line');
@@ -975,6 +1110,7 @@
 
 	function startLayerDrag(category, index, e) {
 		dragReorder = { category, index };
+		dragOverIndex = index;
 		e.dataTransfer.effectAllowed = 'move';
 		e.dataTransfer.setData('text/plain', `${category}:${index}`);
 	}
@@ -984,24 +1120,52 @@
 		e.dataTransfer.dropEffect = 'move';
 	}
 
-	function onLayerDrop(category, targetIndex, e) {
+	/** Live-reorder so the whole row slides as you drag over siblings. */
+	function onLayerDragEnter(category, targetIndex, e) {
 		e.preventDefault();
 		const { category: srcCategory, index: srcIndex } = dragReorder;
 		if (srcCategory !== category || srcIndex === null || srcIndex === targetIndex) {
-			endLayerDrag();
+			dragOverIndex = targetIndex;
 			return;
 		}
 		if (category === 'secondary') {
-			cogLayers = reorderList(cogLayers, srcIndex, targetIndex);
+			secondaryLayers = reorderList(secondaryLayers, srcIndex, targetIndex);
 		} else {
 			primaryLayerOrder = reorderList(primaryLayerOrder, srcIndex, targetIndex);
 		}
-		endLayerDrag();
+		dragReorder = { category, index: targetIndex };
+		dragOverIndex = targetIndex;
 		applyLayerStackOrder();
+	}
+
+	function onLayerDrop(category, targetIndex, e) {
+		e.preventDefault();
+		e.stopPropagation();
+		const { category: srcCategory, index: srcIndex } = dragReorder;
+		if (srcCategory === category && srcIndex !== null && srcIndex !== targetIndex) {
+			if (category === 'secondary') {
+				secondaryLayers = reorderList(secondaryLayers, srcIndex, targetIndex);
+			} else {
+				primaryLayerOrder = reorderList(primaryLayerOrder, srcIndex, targetIndex);
+			}
+			applyLayerStackOrder();
+		}
+		endLayerDrag();
 	}
 
 	function endLayerDrag() {
 		dragReorder = { category: null, index: null };
+		dragOverIndex = null;
+	}
+
+	function onRowDragStart(category, index, e) {
+		// Don't start a row drag from the visibility toggle
+		const t = e.target;
+		if (t instanceof Element && t.closest('[data-no-drag]')) {
+			e.preventDefault();
+			return;
+		}
+		startLayerDrag(category, index, e);
 	}
 
 	function onSidebarResizeStart(e) {
@@ -1077,35 +1241,306 @@
 			removeCogLayers();
 			const { cog_layers } = await fetchCogLayers(watershedBounds, project.id);
 			cogLayers = cog_layers;
-			if (cog_layers.length === 0) {
-				status = 'No COG layers configured (set COG_LAYERS in .env)';
+			secondaryLayers = rebuildSecondaryList(cogLayers, vectorLayers);
+			if (cog_layers.length === 0 && vectorLayers.length === 0) {
+				status = 'No secondary layers configured (set COG_LAYERS / VECTOR_LAYERS in .env)';
 				return;
 			}
-			for (const layer of cog_layers) {
-				if (layer.status === 'error') {
-					status = `LULC error: ${layer.error ?? 'unknown'}`;
-					continue;
-				}
-				cogVisibility = { ...cogVisibility, [layer.id]: true };
-				const sourceId = `cog-${layer.id}`;
-				const tileUrl = cogTileUrl(layer.id);
-				map.addSource(sourceId, {
-					type: 'raster',
-					tiles: [tileUrl],
-					tileSize: 256,
-					...(watershedBounds ? { bounds: watershedBounds } : {})
-				});
-				const beforeId = map.getLayer('watershed-fill') ? 'watershed-fill' : undefined;
-				map.addLayer(
-					{ id: sourceId, type: 'raster', source: sourceId, paint: { 'raster-opacity': 1 } },
-					beforeId
-				);
-				ensureCogAboveBasemaps();
-				ensureDrawPreviewOnTop();
+		for (const layer of cog_layers) {
+			if (layer.status === 'error') {
+				status = `${layer.name} error: ${layer.error ?? 'unknown'}`;
+				cogVisibility = { ...cogVisibility, [layer.id]: false };
+				continue;
 			}
+			cogVisibility = { ...cogVisibility, [layer.id]: false };
+			const sourceId = `cog-${layer.id}`;
+			const tileUrl = cogTileUrl(layer.id);
+			map.addSource(sourceId, {
+				type: 'raster',
+				tiles: [tileUrl],
+				tileSize: 256,
+				minzoom: 7,
+				maxzoom: 14,
+				...(watershedBounds ? { bounds: watershedBounds } : {})
+			});
+			const beforeId = map.getLayer('watershed-fill') ? 'watershed-fill' : undefined;
+			map.addLayer(
+				{
+					id: sourceId,
+					type: 'raster',
+					source: sourceId,
+					layout: { visibility: 'none' },
+					paint: { 'raster-opacity': 0.85 }
+				},
+				beforeId
+			);
+		}
+			ensureCogAboveBasemaps();
+			ensureDrawPreviewOnTop();
 			fitToWatershed();
 		} catch (err) {
-			status = `LULC unavailable: ${err instanceof Error ? err.message : String(err)}`;
+			status = `Raster layers unavailable: ${err instanceof Error ? err.message : String(err)}`;
+		}
+	}
+
+	function enrichVillageProperties(features, needPctScst) {
+		if (!needPctScst) return features;
+		return features.map((f) => {
+			const p = { ...(f.properties || {}) };
+			if (p.pct_scst == null || p.pct_scst === '') {
+				const pop = Number(p.Total_Popu ?? p.total_popu ?? 0);
+				const sc = Number(p.Total_SC_P ?? p.total_sc_p ?? 0);
+				const st = Number(p.Total_ST_P ?? p.total_st_p ?? 0);
+				p.pct_scst = pop > 0 ? ((sc + st) / pop) * 100 : 0;
+			}
+			return { ...f, properties: p };
+		});
+	}
+
+	const GW_NORMALIZE = {
+		safe: 'Safe',
+		'semi-critical': 'Semi-critical',
+		semicritical: 'Semi-critical',
+		'semi critical': 'Semi-critical',
+		critical: 'Critical',
+		'over-exploited': 'Over-exploited',
+		overexploited: 'Over-exploited',
+		'over exploited': 'Over-exploited',
+		oe: 'Over-exploited',
+		saline: 'Saline'
+	};
+
+	const RANK_NORMALIZE = {
+		'very low': 'Very low',
+		verylow: 'Very low',
+		low: 'Low',
+		moderate: 'Moderate',
+		medium: 'Moderate',
+		high: 'High',
+		'very high': 'Very high',
+		veryhigh: 'Very high',
+		na: 'NA',
+		'n/a': 'NA',
+		none: 'NA'
+	};
+
+	function pickProp(props, candidates) {
+		const keys = Object.keys(props || {});
+		const lower = Object.fromEntries(keys.map((k) => [k.toLowerCase(), k]));
+		for (const c of candidates) {
+			if (c && lower[c.toLowerCase()]) return props[lower[c.toLowerCase()]];
+		}
+		for (const k of keys) {
+			const lk = k.toLowerCase();
+			if (candidates.some((c) => c && lk.includes(String(c).toLowerCase()))) {
+				return props[k];
+			}
+		}
+		return undefined;
+	}
+
+	/** Normalize raw GPKG columns into the style_column expected by layers.yaml. */
+	function normalizeVectorFeatures(features, layer) {
+		const column = layer.style_column;
+		if (!column || !features?.length) return features;
+		const atype = layer.analysis_type;
+
+		return features.map((f) => {
+			const p = { ...(f.properties || {}) };
+			if (p[column] != null && p[column] !== '') {
+				return { ...f, properties: p };
+			}
+
+			if (atype === 'wiser_gw_stress') {
+				const raw = pickProp(p, [
+					'__wiser_gw_stress_class',
+					'category',
+					'Category',
+					'stage',
+					'status',
+					'gw_stress'
+				]);
+				const key = String(raw ?? '')
+					.trim()
+					.toLowerCase();
+				p[column] = GW_NORMALIZE[key] || (raw ? String(raw).trim() : 'Groundwater class unavailable');
+			} else if (atype === 'wiser_rank') {
+				const preferred =
+					column === '__wiser_irrigation_access_class'
+						? ['Irr_access', column]
+						: column === '__wiser_kharif_resilience_class'
+							? ['Kharif_res', column]
+							: column === '__wiser_rabi_resilience_class'
+								? ['Rabi_res', column]
+								: [column, 'Irr_access', 'Kharif_res', 'Rabi_res'];
+				const raw = pickProp(p, preferred);
+				const key = String(raw ?? '')
+					.trim()
+					.toLowerCase();
+				p[column] = RANK_NORMALIZE[key] || (raw ? String(raw).trim() : 'NA');
+			} else if (atype === 'aquifers') {
+				const raw = pickProp(p, ['aquifer', 'Major_Aqui', 'aquifers']);
+				p[column] = raw != null ? String(raw) : 'Other';
+			}
+
+			return { ...f, properties: p };
+		});
+	}
+
+	async function fetchClippedGeoJSON(url) {
+		const response = await fetch(url, { credentials: 'include' });
+		if (!response.ok) {
+			throw new Error(`Failed to fetch vector layer (${response.status})`);
+		}
+		return response.json();
+	}
+
+	/** Metadata only — geometries load on demand when the user selects a layer. */
+	async function loadVectorLayers() {
+		try {
+			removeVectorLayers();
+			const { vector_layers } = await fetchVectorLayers(project?.id);
+			vectorLayers = vector_layers;
+			secondaryLayers = rebuildSecondaryList(cogLayers, vectorLayers);
+			for (const layer of vector_layers) {
+				cogVisibility = {
+					...cogVisibility,
+					[layer.id]: false
+				};
+				if (layer.status === 'error') {
+					status = `${layer.name} error: ${layer.error ?? 'unavailable'}`;
+				}
+			}
+		} catch (err) {
+			console.error('Vector layers failed', err);
+			status = `Vector layers unavailable: ${err instanceof Error ? err.message : String(err)}`;
+		}
+	}
+
+	async function ensureVectorLayerOnMap(layer) {
+		if (!map || !layer?.id) return;
+		const sourceId = `vec-${layer.id}`;
+		if (map.getSource(sourceId)) return;
+		if (!layer.url || layer.map_render === false) return;
+
+		status = `Loading ${layer.name}…`;
+		let data;
+		try {
+			data = await fetchClippedGeoJSON(layer.url);
+		} catch (fetchErr) {
+			console.error(`Failed to load ${layer.name}:`, fetchErr);
+			status = `${layer.name} failed: ${fetchErr instanceof Error ? fetchErr.message : String(fetchErr)}`;
+			return;
+		}
+
+		let features = enrichVillageProperties(
+			data.features ?? [],
+			layer.analysis_type === 'demographics_marginalized' || layer.style_column === 'pct_scst'
+		);
+		features = normalizeVectorFeatures(features, layer);
+		data = { type: 'FeatureCollection', features };
+		layerActiveLegend = {
+			...layerActiveLegend,
+			[layer.id]: legendFromFeatures(layer, features)
+		};
+
+		const fillId = `${sourceId}-fill`;
+		const lineId = `${sourceId}-line`;
+		const beforeId = map.getLayer('watershed-fill') ? 'watershed-fill' : undefined;
+		const fillColor = vectorFillColor(layer);
+
+		map.addSource(sourceId, { type: 'geojson', data });
+		map.addLayer(
+			{
+				id: fillId,
+				type: 'fill',
+				source: sourceId,
+				layout: { visibility: 'none' },
+				paint: { 'fill-color': fillColor, 'fill-opacity': 0.65 }
+			},
+			beforeId
+		);
+		map.addLayer(
+			{
+				id: lineId,
+				type: 'line',
+				source: sourceId,
+				layout: { visibility: 'none' },
+				paint: { 'line-color': '#334155', 'line-width': 0.6, 'line-opacity': 0.5 }
+			},
+			beforeId
+		);
+		applyLayerStackOrder();
+		ensureDrawPreviewOnTop();
+		status = 'Ready';
+	}
+
+	async function preloadAllSecondaryData() {
+		if (!project?.id) return;
+		status = 'Loading watershed layers & analysis…';
+
+		// Seed COG legends (full catalog; class filter needs raster sampling later)
+		for (const layer of secondaryLayers.filter((l) => l.kind === 'cog')) {
+			layerActiveLegend = {
+				...layerActiveLegend,
+				[layer.id]: legendFromFeatures(layer, null)
+			};
+		}
+
+		const vectorJobs = secondaryLayers
+			.filter((l) => l.kind === 'vector' && l.map_render !== false && l.status !== 'error')
+			.map((l) => ensureVectorLayerOnMap(l));
+
+		let analysisJobs = [];
+		try {
+			layerAnalysisLoading = Object.fromEntries(
+				secondaryLayers.map((l) => [l.id, true])
+			);
+			const { analyses } = await fetchBatchLayerAnalysis(project.id);
+			const next = { ...layerAnalysis };
+			for (const a of analyses || []) {
+				next[a.layer_id] = a;
+			}
+			layerAnalysis = next;
+			analysisPreloadDone = true;
+		} catch (err) {
+			console.error('Batch analysis failed', err);
+			// Fall back to per-layer
+			analysisJobs = secondaryLayers.map((l) => ensureLayerAnalysis(l.id));
+		} finally {
+			layerAnalysisLoading = Object.fromEntries(
+				secondaryLayers.map((l) => [l.id, false])
+			);
+		}
+
+		await Promise.all([...vectorJobs, ...analysisJobs]);
+		status = 'Ready';
+	}
+
+	async function ensureLayerAnalysis(layerId) {
+		if (!project?.id || !layerId) return;
+		if (layerAnalysis[layerId]?.stats || layerAnalysisLoading[layerId]) return;
+		const meta = secondaryLayers.find((l) => l.id === layerId);
+		if (!meta) return;
+		layerAnalysisLoading = { ...layerAnalysisLoading, [layerId]: true };
+		try {
+			const isCog = meta.kind === 'cog';
+			const result = await fetchLayerAnalysis(layerId, project.id, { isCog });
+			layerAnalysis = { ...layerAnalysis, [layerId]: result };
+		} catch (err) {
+			layerAnalysis = {
+				...layerAnalysis,
+				[layerId]: {
+					layer_id: layerId,
+					stats: {},
+					interpretation: meta.interpretation || '',
+					field_check: meta.field_check || '',
+					status: 'error',
+					error: err instanceof Error ? err.message : String(err)
+				}
+			};
+		} finally {
+			layerAnalysisLoading = { ...layerAnalysisLoading, [layerId]: false };
 		}
 	}
 
@@ -1644,21 +2079,42 @@
 
 	function toggleCog(id, visible) {
 		cogVisibility = { ...cogVisibility, [id]: visible };
-		setLayerVisibility(`cog-${id}`, visible);
+		const meta = secondaryLayers.find((l) => l.id === id);
+		if (meta?.kind === 'vector') {
+			setLayerVisibility(`vec-${id}-fill`, visible);
+			setLayerVisibility(`vec-${id}-line`, visible);
+		} else {
+			setLayerVisibility(`cog-${id}`, visible);
+		}
+	}
+
+	function setMapMode(mode) {
+		if (mode !== 'flat' && mode !== '3d') return;
+		mapMode = mode;
+		if (mode === 'flat') {
+			if (map) {
+				map.setTerrain?.(null);
+				map.easeTo({ pitch: 0, bearing: 0, duration: 400 });
+				requestAnimationFrame(() => map?.resize());
+			}
+			status = 'Ready';
+		} else {
+			status = 'Loading 3D DEM terrain…';
+		}
 	}
 </script>
 
 <div class="flex h-full min-h-0 w-full">
 	<aside
-		class="flex shrink-0 flex-col overflow-hidden bg-white font-body"
+		class="layer-sidebar flex shrink-0 flex-col overflow-hidden bg-white font-body"
 		style:width="{sidebarWidth}px"
 	>
-		<div class="border-b border-brand-navy/10 p-3">
-			<h3 class="m-0 mb-2 font-headline text-xs font-semibold tracking-wide text-brand-navy/60 uppercase">
+		<div class="border-b border-brand-navy/10 px-3 py-4">
+			<h3 class="sidebar-section-title font-headline text-[11px] font-semibold tracking-[0.08em] text-brand-navy/55 uppercase">
 				Base layer
 			</h3>
 			<select
-				class="w-full cursor-pointer rounded border border-brand-navy/20 bg-white px-2 py-1.5 font-body text-sm text-brand-navy"
+				class="basemap-select w-full cursor-pointer rounded-lg border border-brand-navy/15 bg-white font-body text-sm text-brand-navy"
 				value={baseLayer}
 				onchange={(e) => setBaseLayer(e.currentTarget.value)}
 			>
@@ -1667,173 +2123,186 @@
 			</select>
 		</div>
 
-		<div class="min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-3">
-			<h3 class="m-0 mb-2 font-headline text-xs font-semibold tracking-wide text-brand-navy/60 uppercase">
+		<div class="min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-4">
+			<h3 class="sidebar-section-title font-headline text-[11px] font-semibold tracking-[0.08em] text-brand-navy/55 uppercase">
 				Secondary data
 			</h3>
-			{#each cogLayers as layer, index (layer.id)}
-				<div
-					class="mb-1 flex min-w-0 items-center gap-1 rounded px-1 py-1.5 text-sm"
-					class:layer-row-selected={selectedLayer?.kind === 'secondary' && selectedLayer.id === layer.id}
-					class:layer-row-dragging={dragReorder.category === 'secondary' && dragReorder.index === index}
-					ondragover={onLayerDragOver}
-					ondrop={(e) => onLayerDrop('secondary', index, e)}
-				>
-					<button
-						type="button"
-						class="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded border-0 bg-transparent p-0 text-brand-steel hover:bg-brand-sky/20 hover:text-brand-navy disabled:opacity-40"
-						disabled={layer.status === 'error'}
-						aria-label={(cogVisibility[layer.id] ?? true) ? 'Hide layer' : 'Show layer'}
-						onclick={() => toggleCog(layer.id, !(cogVisibility[layer.id] ?? true))}
-					>
-						{#if cogVisibility[layer.id] ?? true}
-							<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
-								<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-								<circle cx="12" cy="12" r="3" />
-							</svg>
-						{:else}
-							<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
-								<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
-								<path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
-								<path d="M1 1l22 22" />
-								<path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
-							</svg>
-						{/if}
-					</button>
-					<button
-						type="button"
-						class="min-w-0 flex-1 cursor-pointer truncate border-0 bg-transparent p-0 text-left text-brand-navy"
-						title={layer.name}
-						onclick={() => selectLayer({ kind: 'secondary', id: layer.id })}
-					>
-						{layer.name}
-					</button>
+			<div class="layer-list mb-5 flex flex-col gap-1.5">
+				{#each secondaryLayers as layer, index (layer.id)}
 					<div
-						class="layer-drag-handle"
+						class="layer-row"
+						class:layer-row-selected={selectedLayer?.kind === 'secondary' && selectedLayer.id === layer.id}
+						class:layer-row-dragging={dragReorder.category === 'secondary' && dragReorder.index === index}
+						class:layer-row-over={dragReorder.category === 'secondary' && dragOverIndex === index && dragReorder.index !== index}
 						draggable="true"
-						role="button"
-						tabindex="-1"
-						aria-label="Drag to reorder layer"
-						ondragstart={(e) => startLayerDrag('secondary', index, e)}
+						role="listitem"
+						ondragstart={(e) => onRowDragStart('secondary', index, e)}
 						ondragend={endLayerDrag}
+						ondragover={onLayerDragOver}
+						ondragenter={(e) => onLayerDragEnter('secondary', index, e)}
+						ondrop={(e) => onLayerDrop('secondary', index, e)}
 					>
-						<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="h-4 w-4" aria-hidden="true">
-							<circle cx="9" cy="6" r="1.4" fill="currentColor" />
-							<circle cx="15" cy="6" r="1.4" fill="currentColor" />
-							<circle cx="9" cy="12" r="1.4" fill="currentColor" />
-							<circle cx="15" cy="12" r="1.4" fill="currentColor" />
-							<circle cx="9" cy="18" r="1.4" fill="currentColor" />
-							<circle cx="15" cy="18" r="1.4" fill="currentColor" />
-						</svg>
+					<button
+						type="button"
+						data-no-drag
+						class="layer-eye"
+						disabled={layer.status === 'error' || layer.map_render === false}
+						title={layer.map_render === false ? 'Map rendering disabled — dataset too large' : undefined}
+						aria-label={(cogVisibility[layer.id] ?? false) ? 'Hide layer' : 'Show layer'}
+						onclick={(e) => {
+							e.stopPropagation();
+							toggleCog(layer.id, !(cogVisibility[layer.id] ?? false));
+						}}
+					>
+						{#if cogVisibility[layer.id] ?? false}
+								<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
+									<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+									<circle cx="12" cy="12" r="3" />
+								</svg>
+							{:else}
+								<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
+									<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+									<path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+									<path d="M1 1l22 22" />
+									<path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
+								</svg>
+							{/if}
+						</button>
+						<button
+							type="button"
+							class="layer-label"
+							title={layer.name}
+							onclick={() => selectLayer({ kind: 'secondary', id: layer.id })}
+						>
+							{layer.name}
+						</button>
+						<span class="layer-drag-handle" aria-hidden="true" title="Drag to reorder">
+							<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="h-4 w-4">
+								<circle cx="9" cy="6" r="1.4" fill="currentColor" />
+								<circle cx="15" cy="6" r="1.4" fill="currentColor" />
+								<circle cx="9" cy="12" r="1.4" fill="currentColor" />
+								<circle cx="15" cy="12" r="1.4" fill="currentColor" />
+								<circle cx="9" cy="18" r="1.4" fill="currentColor" />
+								<circle cx="15" cy="18" r="1.4" fill="currentColor" />
+							</svg>
+						</span>
 					</div>
-				</div>
-				{#if layer.error}
-					<p class="m-0 mb-2 truncate px-2 text-xs text-red-600" title={layer.error}>{layer.error}</p>
-				{/if}
-			{:else}
-				<p class="m-0 text-xs text-brand-steel">No secondary layers configured</p>
-			{/each}
+					{#if layer.error}
+						<p class="m-0 mb-1 truncate px-2 text-xs text-red-600" title={layer.error}>{layer.error}</p>
+					{/if}
+				{:else}
+					<p class="m-0 px-1 text-xs text-brand-steel">No secondary layers configured</p>
+				{/each}
+			</div>
 
-			<h3 class="m-0 mt-4 mb-2 font-headline text-xs font-semibold tracking-wide text-brand-navy/60 uppercase">
+			<h3 class="sidebar-section-title font-headline text-[11px] font-semibold tracking-[0.08em] text-brand-navy/55 uppercase">
 				Primary layers
 			</h3>
-			{#each primaryLayerOrder as layerId, index (layerId)}
-				<div
-					class="mb-1 flex min-w-0 items-center gap-1 rounded px-1 py-1.5 text-sm"
-					class:layer-row-selected={activePrimaryTab === layerId && selectedLayer?.kind === 'primary'}
-					class:layer-row-dragging={dragReorder.category === 'primary' && dragReorder.index === index}
-					ondragover={onLayerDragOver}
-					ondrop={(e) => onLayerDrop('primary', index, e)}
-				>
-					{#if layerId === 'observation-zones'}
-						<button
-							type="button"
-							class="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded border-0 bg-transparent p-0 text-brand-steel hover:bg-brand-sky/20 hover:text-brand-navy"
-							aria-label={showZonesLayer ? 'Hide zones on map' : 'Show zones on map'}
-							onclick={() => toggleZonesLayer(!showZonesLayer)}
-						>
-							{#if showZonesLayer}
-								<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
-									<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-									<circle cx="12" cy="12" r="3" />
-								</svg>
-							{:else}
-								<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
-									<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
-									<path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
-									<path d="M1 1l22 22" />
-									<path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
-								</svg>
-							{/if}
-						</button>
-						<button
-							type="button"
-							class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 border-0 bg-transparent p-0 text-left text-brand-navy"
-							onclick={() => selectPrimaryTab('observation-zones')}
-						>
-							<ObservationZoneIcon size="sm" />
-							<span class="truncate">{PRIMARY_LAYER_LABELS[layerId]}</span>
-						</button>
-					{:else if layerId === 'field-notes'}
-						<button
-							type="button"
-							class="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded border-0 bg-transparent p-0 text-brand-steel hover:bg-brand-sky/20 hover:text-brand-navy"
-							aria-label={showFieldNotesLayer ? 'Hide notes on map' : 'Show notes on map'}
-							onclick={() => toggleFieldNotesLayer(!showFieldNotesLayer)}
-						>
-							{#if showFieldNotesLayer}
-								<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
-									<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-									<circle cx="12" cy="12" r="3" />
-								</svg>
-							{:else}
-								<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
-									<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
-									<path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
-									<path d="M1 1l22 22" />
-									<path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
-								</svg>
-							{/if}
-						</button>
-						<button
-							type="button"
-							class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 border-0 bg-transparent p-0 text-left text-brand-navy"
-							onclick={() => selectPrimaryTab('field-notes')}
-						>
-							<FieldNoteIcon size="sm" />
-							<span class="truncate">{PRIMARY_LAYER_LABELS[layerId]}</span>
-						</button>
-					{:else if layerId === 'hypotheses'}
-						<span class="flex h-7 w-7 shrink-0" aria-hidden="true"></span>
-						<button
-							type="button"
-							class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 border-0 bg-transparent p-0 text-left text-brand-navy"
-							onclick={() => selectPrimaryTab('hypotheses')}
-						>
-							<HypothesisIcon size="sm" />
-							<span class="truncate">{PRIMARY_LAYER_LABELS[layerId]}</span>
-						</button>
-					{/if}
+			<div class="layer-list flex flex-col gap-1.5">
+				{#each primaryLayerOrder as layerId, index (layerId)}
 					<div
-						class="layer-drag-handle"
+						class="layer-row"
+						class:layer-row-selected={activePrimaryTab === layerId && selectedLayer?.kind === 'primary'}
+						class:layer-row-dragging={dragReorder.category === 'primary' && dragReorder.index === index}
+						class:layer-row-over={dragReorder.category === 'primary' && dragOverIndex === index && dragReorder.index !== index}
 						draggable="true"
-						role="button"
-						tabindex="-1"
-						aria-label="Drag to reorder layer"
-						ondragstart={(e) => startLayerDrag('primary', index, e)}
+						role="listitem"
+						ondragstart={(e) => onRowDragStart('primary', index, e)}
 						ondragend={endLayerDrag}
+						ondragover={onLayerDragOver}
+						ondragenter={(e) => onLayerDragEnter('primary', index, e)}
+						ondrop={(e) => onLayerDrop('primary', index, e)}
 					>
-						<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="h-4 w-4" aria-hidden="true">
-							<circle cx="9" cy="6" r="1.4" fill="currentColor" />
-							<circle cx="15" cy="6" r="1.4" fill="currentColor" />
-							<circle cx="9" cy="12" r="1.4" fill="currentColor" />
-							<circle cx="15" cy="12" r="1.4" fill="currentColor" />
-							<circle cx="9" cy="18" r="1.4" fill="currentColor" />
-							<circle cx="15" cy="18" r="1.4" fill="currentColor" />
-						</svg>
+						{#if layerId === 'observation-zones'}
+							<button
+								type="button"
+								data-no-drag
+								class="layer-eye"
+								aria-label={showZonesLayer ? 'Hide zones on map' : 'Show zones on map'}
+								onclick={(e) => {
+									e.stopPropagation();
+									toggleZonesLayer(!showZonesLayer);
+								}}
+							>
+								{#if showZonesLayer}
+									<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
+										<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+										<circle cx="12" cy="12" r="3" />
+									</svg>
+								{:else}
+									<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
+										<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+										<path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+										<path d="M1 1l22 22" />
+										<path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
+									</svg>
+								{/if}
+							</button>
+							<button
+								type="button"
+								class="layer-label layer-label-icon"
+								onclick={() => selectPrimaryTab('observation-zones')}
+							>
+								<ObservationZoneIcon size="sm" />
+								<span class="truncate">{PRIMARY_LAYER_LABELS[layerId]}</span>
+							</button>
+						{:else if layerId === 'field-notes'}
+							<button
+								type="button"
+								data-no-drag
+								class="layer-eye"
+								aria-label={showFieldNotesLayer ? 'Hide notes on map' : 'Show notes on map'}
+								onclick={(e) => {
+									e.stopPropagation();
+									toggleFieldNotesLayer(!showFieldNotesLayer);
+								}}
+							>
+								{#if showFieldNotesLayer}
+									<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
+										<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+										<circle cx="12" cy="12" r="3" />
+									</svg>
+								{:else}
+									<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
+										<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+										<path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+										<path d="M1 1l22 22" />
+										<path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
+									</svg>
+								{/if}
+							</button>
+							<button
+								type="button"
+								class="layer-label layer-label-icon"
+								onclick={() => selectPrimaryTab('field-notes')}
+							>
+								<FieldNoteIcon size="sm" />
+								<span class="truncate">{PRIMARY_LAYER_LABELS[layerId]}</span>
+							</button>
+						{:else if layerId === 'hypotheses'}
+							<span class="layer-eye-spacer" aria-hidden="true"></span>
+							<button
+								type="button"
+								class="layer-label layer-label-icon"
+								onclick={() => selectPrimaryTab('hypotheses')}
+							>
+								<HypothesisIcon size="sm" />
+								<span class="truncate">{PRIMARY_LAYER_LABELS[layerId]}</span>
+							</button>
+						{/if}
+						<span class="layer-drag-handle" aria-hidden="true" title="Drag to reorder">
+							<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="h-4 w-4">
+								<circle cx="9" cy="6" r="1.4" fill="currentColor" />
+								<circle cx="15" cy="6" r="1.4" fill="currentColor" />
+								<circle cx="9" cy="12" r="1.4" fill="currentColor" />
+								<circle cx="15" cy="12" r="1.4" fill="currentColor" />
+								<circle cx="9" cy="18" r="1.4" fill="currentColor" />
+								<circle cx="15" cy="18" r="1.4" fill="currentColor" />
+							</svg>
+						</span>
 					</div>
-				</div>
-			{/each}
+				{/each}
+			</div>
 		</div>
 	</aside>
 
@@ -1848,16 +2317,94 @@
 
 	<!-- Map -->
 	<div class="relative h-full min-h-0 flex-1">
-		<div bind:this={container} class="h-full w-full"></div>
-
-		<div class="absolute bottom-2 left-2 z-10 max-w-[50%] rounded bg-white/90 px-2 py-1 text-sm shadow">
-			{status}
-		</div>
 		<div
-			class="absolute right-2 bottom-1 z-10 max-w-[45%] truncate rounded bg-white/80 px-2 py-0.5 text-[10px] text-gray-600 shadow-sm"
+			bind:this={container}
+			class="h-full w-full"
+			class:invisible={mapMode === '3d'}
+			class:pointer-events-none={mapMode === '3d'}
+		></div>
+
+		{#if mapMode === '3d' && project?.id}
+			<div class="absolute inset-0 z-[5]">
+				{#key `${project.id}:${selectedLayer?.kind === 'secondary' ? selectedLayer.id : 'dem'}`}
+					<Terrain3DView
+						projectId={project.id}
+						layerId={selectedLayer?.kind === 'secondary' ? selectedLayer.id : 'dem'}
+					/>
+				{/key}
+			</div>
+		{/if}
+
+		<div
+			class="absolute top-3 left-12 z-20 flex overflow-hidden rounded-lg border border-brand-navy/15 bg-white/95 text-xs shadow-md backdrop-blur-sm"
+			role="group"
+			aria-label="Map view mode"
 		>
-			{activeAttribution}
+			<button
+				type="button"
+				class="px-3 py-1.5 font-medium transition-colors"
+				class:bg-brand-navy={mapMode === 'flat'}
+				class:text-white={mapMode === 'flat'}
+				class:text-brand-navy={mapMode !== 'flat'}
+				onclick={() => setMapMode('flat')}
+			>
+				Flat
+			</button>
+			<button
+				type="button"
+				class="px-3 py-1.5 font-medium transition-colors"
+				class:bg-brand-navy={mapMode === '3d'}
+				class:text-white={mapMode === '3d'}
+				class:text-brand-navy={mapMode !== '3d'}
+				onclick={() => setMapMode('3d')}
+			>
+				3D
+			</button>
 		</div>
+
+		{#if selectedLayer?.kind === 'secondary' && mapLegendItems.length && mapMode === 'flat'}
+			{@const layer = secondaryLayers.find((l) => l.id === selectedLayer.id)}
+			<div
+				class="pointer-events-none absolute top-3 right-3 z-10 max-h-[70%] max-w-[220px] overflow-y-auto rounded-lg border border-brand-navy/10 bg-white/95 p-3 shadow-md backdrop-blur-sm"
+			>
+				<p class="m-0 mb-2 text-[10px] font-semibold tracking-wide text-brand-navy/55 uppercase">
+					{layer?.name ?? 'Legend'}
+				</p>
+				{#if layer?.render_type === 'continuous' || mapLegendItems[0]?.continuous}
+					<div
+						class="mb-1 h-2.5 w-full rounded border border-gray-200"
+						style="background: linear-gradient(90deg, #2c7bb6, #abd9e9, #ffffbf, #fdae61, #d7191c)"
+					></div>
+					<div class="flex justify-between text-[10px] text-gray-500">
+						<span>Low</span>
+						<span>High</span>
+					</div>
+				{:else}
+					<ul class="m-0 list-none space-y-1.5 p-0">
+						{#each mapLegendItems as item}
+							<li class="flex items-center gap-2 text-xs">
+								<span
+									class="inline-block h-3.5 w-3.5 shrink-0 rounded border border-gray-300"
+									style="background-color: {item.color}"
+								></span>
+								<span class="text-gray-700">{item.label}</span>
+							</li>
+						{/each}
+					</ul>
+				{/if}
+			</div>
+		{/if}
+
+		{#if mapMode === 'flat'}
+			<div class="absolute bottom-2 left-2 z-10 max-w-[50%] rounded bg-white/90 px-2 py-1 text-sm shadow">
+				{status}
+			</div>
+			<div
+				class="absolute right-2 bottom-1 z-10 max-w-[45%] truncate rounded bg-white/80 px-2 py-0.5 text-[10px] text-gray-600 shadow-sm"
+			>
+				{activeAttribution}
+			</div>
+		{/if}
 	</div>
 	<div
 		class="sidebar-resize-handle"
@@ -1874,21 +2421,81 @@
 	>
 		<div class="min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-3">
 			{#if selectedLayer?.kind === 'secondary'}
-				{@const layer = cogLayers.find((l) => l.id === selectedLayer.id)}
+				{@const layer = secondaryLayers.find((l) => l.id === selectedLayer.id)}
+				{@const analysis = layerAnalysis[selectedLayer.id]}
+				{@const analysisBusy = layerAnalysisLoading[selectedLayer.id] && !analysis}
+				{@const meaning = analysis?.meaning || layer?.meaning || layer?.interpretation || ''}
+				{@const uncertainty = analysis?.uncertainty || layer?.uncertainty || ''}
+				{@const fieldCheck = analysis?.field_check || layer?.field_check || ''}
+				{@const evidence =
+					analysis?.evidence ||
+					(analysis?.stats && Object.keys(analysis.stats).length
+						? Object.entries(analysis.stats)
+								.map(([k, v]) => `${k}: ${v}`)
+								.join('; ')
+						: '')}
 				<div class="rounded-lg border border-brand-navy/10 bg-white p-4">
 					<h3 class="m-0 mb-1 text-base font-semibold">{layer?.name ?? 'Layer'}</h3>
-					<p class="m-0 mb-3 text-xs text-gray-500">LULC legend</p>
-					<ul class="m-0 list-none space-y-2 p-0">
-						{#each LULC_LEGEND as item}
-							<li class="flex items-center gap-2 text-sm">
-								<span
-									class="inline-block h-4 w-4 shrink-0 rounded border border-gray-300"
-									style="background-color: {item.color}"
-								></span>
-								<span class="text-gray-700">{item.label}</span>
-							</li>
-						{/each}
-					</ul>
+					<p class="m-0 mb-4 text-xs text-gray-500">
+						Evidence, interpretation, uncertainty, and field checks
+					</p>
+
+					{#if analysisBusy}
+						<p class="m-0 text-sm text-gray-500">Loading watershed analysis…</p>
+					{:else if analysis?.error}
+						<p class="m-0 text-sm text-red-600">{analysis.error}</p>
+					{:else}
+						<section class="mb-4">
+							<h4 class="m-0 mb-1.5 text-[11px] font-semibold tracking-wide text-brand-navy/60 uppercase">
+								Evidence
+							</h4>
+							{#if analysis?.stats && Object.keys(analysis.stats).length}
+								<dl class="m-0 space-y-1.5">
+									{#each Object.entries(analysis.stats) as [key, value]}
+										<div class="flex items-start justify-between gap-3 text-sm">
+											<dt class="text-gray-500">{key}</dt>
+											<dd class="m-0 text-right font-medium text-brand-navy">{value}</dd>
+										</div>
+									{/each}
+								</dl>
+							{:else if evidence}
+								<p class="m-0 text-sm leading-relaxed text-gray-700">{evidence}</p>
+							{:else}
+								<p class="m-0 text-sm text-gray-500 italic">
+									Field verification should fill this signal.
+								</p>
+							{/if}
+						</section>
+
+						<section class="mb-4">
+							<h4 class="m-0 mb-1.5 text-[11px] font-semibold tracking-wide text-brand-navy/60 uppercase">
+								What it may mean
+							</h4>
+							<p class="m-0 text-sm leading-relaxed text-gray-700">
+								{meaning || '—'}
+							</p>
+						</section>
+
+						<section class="mb-4">
+							<h4 class="m-0 mb-1.5 text-[11px] font-semibold tracking-wide text-brand-navy/60 uppercase">
+								Uncertainty
+							</h4>
+							<p class="m-0 text-sm leading-relaxed text-gray-700">
+								{uncertainty || '—'}
+							</p>
+						</section>
+
+						{#if fieldCheck}
+							<div
+								class="rounded-md border-l-4 border-[#0fb3a3] bg-[color-mix(in_srgb,#0fb3a3_8%,white)] px-3 py-2"
+							>
+								<p class="m-0 mb-1 text-[11px] font-semibold tracking-wide text-[#0a5c55] uppercase">
+									Field check
+								</p>
+								<p class="m-0 text-sm leading-relaxed text-brand-navy">{fieldCheck}</p>
+							</div>
+						{/if}
+					{/if}
 				</div>
 			{:else if selectedLayer?.kind === 'primary' && activePrimaryTab === 'observation-zones'}
 				<div class="rounded-lg border border-brand-navy/10 bg-white p-4">
@@ -2648,3 +3255,122 @@
 		</button>
 	{/if}
 </div>
+
+<style>
+	.sidebar-section-title {
+		margin: 0 0 1.25rem;
+	}
+
+	.basemap-select {
+		appearance: none;
+		-webkit-appearance: none;
+		box-sizing: border-box;
+		min-height: 2.75rem;
+		padding: 0.7rem 2.25rem 0.7rem 0.9rem;
+		background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236b7885' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+		background-repeat: no-repeat;
+		background-position: right 0.75rem center;
+		background-size: 1rem;
+	}
+
+	.layer-row {
+		display: flex;
+		min-width: 0;
+		align-items: center;
+		gap: 0.4rem;
+		padding: 0.55rem 0.5rem;
+		border-radius: 0.65rem;
+		border: 1px solid transparent;
+		background: transparent;
+		font-size: 0.875rem;
+		cursor: grab;
+		transition:
+			background 0.15s ease,
+			border-color 0.15s ease,
+			box-shadow 0.15s ease,
+			opacity 0.15s ease,
+			transform 0.15s ease;
+	}
+	.layer-row:hover {
+		background: rgba(15, 179, 163, 0.06);
+	}
+	.layer-row-selected {
+		background: color-mix(in srgb, #0fb3a3 14%, white);
+		border-color: color-mix(in srgb, #0fb3a3 38%, transparent);
+		box-shadow: inset 3px 0 0 #0fb3a3;
+	}
+	.layer-row-selected .layer-label {
+		font-weight: 600;
+		color: #0a5c55;
+	}
+	.layer-row-dragging {
+		opacity: 0.55;
+		cursor: grabbing;
+		background: color-mix(in srgb, #0fb3a3 10%, white);
+		box-shadow: 0 8px 20px -10px rgba(20, 40, 60, 0.35);
+		transform: scale(0.98);
+	}
+	.layer-row-over {
+		border-color: color-mix(in srgb, #0fb3a3 45%, transparent);
+		background: color-mix(in srgb, #0fb3a3 8%, white);
+	}
+
+	.layer-eye,
+	.layer-eye-spacer {
+		display: flex;
+		height: 1.85rem;
+		width: 1.85rem;
+		flex-shrink: 0;
+		align-items: center;
+		justify-content: center;
+		border: 0;
+		border-radius: 0.45rem;
+		background: transparent;
+		padding: 0;
+		color: #6b7885;
+	}
+	.layer-eye {
+		cursor: pointer;
+	}
+	.layer-eye:hover:not(:disabled) {
+		background: rgba(15, 179, 163, 0.12);
+		color: #1a2530;
+	}
+	.layer-eye:disabled {
+		opacity: 0.4;
+		cursor: not-allowed;
+	}
+
+	.layer-label {
+		min-width: 0;
+		flex: 1;
+		cursor: pointer;
+		border: 0;
+		background: transparent;
+		padding: 0.15rem 0;
+		text-align: left;
+		color: #1a2530;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.layer-label-icon {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+
+	.layer-drag-handle {
+		display: flex;
+		height: 1.85rem;
+		width: 1.5rem;
+		flex-shrink: 0;
+		align-items: center;
+		justify-content: center;
+		color: #9aa5b1;
+		pointer-events: none;
+	}
+	.layer-row:hover .layer-drag-handle {
+		color: #5b6b7a;
+	}
+</style>

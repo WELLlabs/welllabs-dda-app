@@ -95,6 +95,57 @@ export async function fetchCogLayers(bounds, projectId) {
 	return request(`/layers/cog${layerQuery(bounds, projectId)}`);
 }
 
+export async function fetchVectorLayers(projectId) {
+	const q = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
+	return request(`/layers/vector${q}`);
+}
+
+export async function fetchLayerAnalysis(layerId, projectId, { isCog = false } = {}) {
+	const base = isCog ? '/layers/cog' : '/layers/vector';
+	return request(
+		`${base}/${encodeURIComponent(layerId)}/analysis?project_id=${encodeURIComponent(projectId)}`
+	);
+}
+
+export async function fetchBatchLayerAnalysis(projectId) {
+	return request(
+		`/layers/analysis/batch?project_id=${encodeURIComponent(projectId)}`
+	);
+}
+
+/** Downsampled watershed DEM elevation grid for the 3D terrain viewer. */
+export async function fetchDemMesh(projectId) {
+	return request(`/layers/dem/mesh?project_id=${encodeURIComponent(projectId)}`);
+}
+
+/** Plotly surfacecolor grid for draping a layer on the DEM mesh. */
+export async function fetchLayerDrapeGrid(layerId, projectId) {
+	return request(
+		`/layers/${encodeURIComponent(layerId)}/drape-grid?project_id=${encodeURIComponent(projectId)}`
+	);
+}
+
+/** Blob URL for a layer drape PNG aligned to the DEM mesh. Caller must revoke. */
+export async function fetchLayerDrapeUrl(layerId, projectId) {
+	const res = await fetch(
+		`${API}/layers/${encodeURIComponent(layerId)}/drape?project_id=${encodeURIComponent(projectId)}`,
+		{ credentials: 'include' }
+	);
+	if (!res.ok) {
+		const text = await res.text();
+		let message = text || res.statusText;
+		try {
+			const json = JSON.parse(text);
+			if (json.detail) message = typeof json.detail === 'string' ? json.detail : JSON.stringify(json.detail);
+		} catch {
+			/* keep raw */
+		}
+		throw new Error(message);
+	}
+	const blob = await res.blob();
+	return URL.createObjectURL(blob);
+}
+
 export async function fetchObservationZones(projectId) {
 	return request(`/observation-zones?project_id=${encodeURIComponent(projectId)}`);
 }

@@ -91,18 +91,28 @@ def upload_file(local_path: Path, key: str) -> None:
 
 
 def sync_directory_to_s3(local_dir: Path, s3_prefix: str) -> list[str]:
-    """Upload all files under local_dir to s3_prefix, preserving relative paths."""
+    """Upload all files under local_dir to s3_prefix; delete stale S3 keys (mirror sync)."""
     if not is_s3_enabled():
         return []
     if not s3_prefix.endswith("/"):
         s3_prefix += "/"
 
+    if not local_dir.is_dir():
+        logger.warning("Package directory missing for S3 mirror sync: %s", local_dir)
+        stale = list_keys(s3_prefix)
+        if stale:
+            delete_keys(stale)
+        return []
+
     uploaded: list[str] = []
+    expected_keys: set[str] = set()
+
     for path in local_dir.rglob("*"):
         if not path.is_file():
             continue
         rel = path.relative_to(local_dir).as_posix()
         key = f"{s3_prefix}{rel}"
+        expected_keys.add(key)
         try:
             upload_file(path, key)
             uploaded.append(key)
@@ -110,7 +120,33 @@ def sync_directory_to_s3(local_dir: Path, s3_prefix: str) -> list[str]:
         except ClientError as exc:
             code = exc.response.get("Error", {}).get("Code", "S3Error")
             logger.warning("S3 package upload failed (%s) for %s", code, key)
+
+    stale = [key for key in list_keys(s3_prefix) if key not in expected_keys]
+    if stale:
+        deleted = delete_keys(stale)
+        logger.info(
+            "Removed %d stale package object(s) under s3://%s/%s",
+            deleted,
+            settings.aws_s3_bucket,
+            s3_prefix,
+        )
+
     return uploaded
+
+
+def list_top_level_prefixes() -> list[str]:
+    """Return top-level key prefixes in the bucket (e.g. project UUID folders)."""
+    if not is_s3_enabled():
+        return []
+    client = s3_client()
+    paginator = client.get_paginator("list_objects_v2")
+    prefixes: list[str] = []
+    for page in paginator.paginate(Bucket=settings.aws_s3_bucket, Delimiter="/"):
+        for entry in page.get("CommonPrefixes", []):
+            prefix = entry.get("Prefix", "").rstrip("/")
+            if prefix:
+                prefixes.append(prefix)
+    return prefixes
 
 
 def presigned_get_url(key: str, expires_in: int = PRESIGN_TTL) -> str:

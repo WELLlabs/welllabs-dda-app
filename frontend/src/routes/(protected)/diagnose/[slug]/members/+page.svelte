@@ -4,6 +4,7 @@
 	import { onMount } from 'svelte';
 	import { session } from '$lib/shared/session.svelte.js';
 	import { findBySlug } from '$lib/shared/slug.js';
+	import ModuleHeader from '$lib/shared/components/ModuleHeader.svelte';
 	import {
 		fetchProjects,
 		fetchProject,
@@ -208,18 +209,15 @@
 	</div>
 {:else}
 	<div class="flex min-h-screen flex-col bg-gray-50 font-body">
-		<header class="flex items-center gap-3 bg-brand-navy px-6 py-3 text-white">
-			<button
-				class="cursor-pointer rounded border border-brand-sky/40 bg-transparent px-2 py-1 font-body text-sm text-white hover:bg-white/10"
-				onclick={backToProject}
-			>
-				← Back
-			</button>
-			<div>
-				<h1 class="m-0 font-headline text-lg font-semibold">{project.name}</h1>
-				<p class="m-0 font-body text-xs text-brand-sky/90">Members &amp; Access</p>
-			</div>
-		</header>
+		<ModuleHeader
+			title="Diagnose"
+			titleHref="/diagnose"
+			project={project.name}
+			subtitle="Members & Access"
+			wide
+		>
+			<button type="button" onclick={backToProject}>Back to map</button>
+		</ModuleHeader>
 
 		<main class="flex-1 overflow-auto p-6">
 			<div class="mx-auto max-w-2xl space-y-6">

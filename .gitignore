@@ -21,5 +21,10 @@ packages/
 # QGIS
 *.qgz
 
+# Local research / conversion artifacts (do not commit)
+clinton_code.py
+clinton_code_updated.ipynb
+conversions/
+
 # OS
 .DS_Store

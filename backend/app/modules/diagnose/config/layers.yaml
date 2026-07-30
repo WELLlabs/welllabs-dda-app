@@ -1,0 +1,292 @@
+# Per-layer render + analysis catalog.
+# COG_LAYERS / VECTOR_LAYERS in .env enable which s3_keys are active; this file owns styling.
+
+colors:
+  deep_blue: "#00306d"
+  bright_blue: "#1c75e9"
+  green: "#1c7a1a"
+  brown: "#6e3f2e"
+  rust: "#b5523a"
+  golden_ochre: "#fcb912"
+  sky_blue: "#a3d8f4"
+  light_grey: "#e6e9eb"
+  soft_cream: "#fff1e5"
+  white: "#ffffff"
+  black: "#000000"
+
+layers:
+  # ── Raster COGs ──────────────────────────────────────────────────────────
+  - id: lulc250k
+    s3_key: rasters/lulc250k_2023_24_classed_cog.tif
+    name: LULC 250k 2023-24
+    source: cog
+    analysis_type: categorical_area
+    render:
+      type: categorical
+      nodata: 0
+      classes:
+        - { value: 0, label: Background/No Data, color: "#00000000" }
+        - { value: 1, label: Built-up, color: "#ff0000" }
+        - { value: 2, label: Kharif Crop, color: "#ffd100" }
+        - { value: 3, label: Rabi Crop, color: "#ff9e00" }
+        - { value: 4, label: Zaid Crop, color: "#9e512b" }
+        - { value: 5, label: Double/Triple Crop, color: "#9ecf1f" }
+        - { value: 6, label: Current Fallow, color: "#f5f5db" }
+        - { value: 7, label: Plantation, color: "#00cc00" }
+        - { value: 8, label: Evergreen Forest, color: "#005e00" }
+        - { value: 9, label: Deciduous Forest, color: "#6b781f" }
+        - { value: 10, label: Degraded/Scrub Forest, color: "#73b82b" }
+        - { value: 11, label: Littoral Swamp, color: "#05825e" }
+        - { value: 12, label: Grassland, color: "#b8ea78" }
+        - { value: 13, label: Shifting Cultivation, color: "#9e1feb" }
+        - { value: 14, label: Wasteland, color: "#d1b585" }
+        - { value: 15, label: Rann, color: "#bfbfbf" }
+        - { value: 16, label: Waterbodies max, color: "#5ed1f2" }
+        - { value: 17, label: Waterbodies min, color: "#009ede" }
+        - { value: 18, label: Snow Cover, color: "#ffbfc4" }
+    meaning: >-
+      Land cover shares (agriculture, built-up, vegetation, water) help locate demand pressure and recharge potential.
+    uncertainty: >-
+      Class maps are coarse and seasonal; they do not prove water-use rates, irrigation source, or local land tenure.
+    field_check: >-
+      Verify crops, built-up pressure, vegetation condition, and waterbody seasonality.
+    analysis:
+      - { id: class_area, type: zonal_class_area, unit: hectares }
+      - { id: dominant_class, type: zonal_majority }
+
+  - id: dem
+    s3_key: rasters/dem_india.tif
+    name: DEM
+    source: cog
+    analysis_type: dem
+    render:
+      type: continuous
+      # gist_earth: dark-green (low) → brown → grey → white (high); no blue sea-level band
+      colormap: gist_earth
+      nodata: -9999
+    meaning: >-
+      Elevation difference and ridge-to-valley structure help locate fast-runoff slopes, erosion-prone breaks, and lower accumulation zones.
+    uncertainty: >-
+      DEM shows physical signals, not guaranteed seasonal flow or structure condition.
+    field_check: >-
+      Verify flow paths, nala condition, erosion marks, slope breaks, and seasonal retention.
+
+  - id: aquifers
+    s3_key: vector/aquifers.fgb
+    name: Aquifers
+    source: vector_fgb
+    analysis_type: aquifers
+    render:
+      type: categorical
+      column: aquifer
+      # Set3-equivalent fixed palette from Aquifers.gpkg unique values
+      classes:
+        - { value: Alluvium, label: Alluvium, color: "#8dd3c7" }
+        - { value: Sandstone, label: Sandstone, color: "#ffffb3" }
+        - { value: Shale, label: Shale, color: "#bebada" }
+        - { value: Schist, label: Schist, color: "#fb8072" }
+        - { value: Gneiss, label: Gneiss, color: "#80b1d3" }
+        - { value: Limestone, label: Limestone, color: "#fdb462" }
+        - { value: Quartzite, label: Quartzite, color: "#b3de69" }
+        - { value: Intrusive, label: Intrusive, color: "#fccde5" }
+        - { value: Basement Gneissic Complex, label: Basement Gneissic Complex, color: "#d9d9d9" }
+        - { value: Granite, label: Granite, color: "#bc80bd" }
+        - { value: Basalt, label: Basalt, color: "#ccebc5" }
+        - { value: Laterite, label: Laterite, color: "#ffed6f" }
+        - { value: Charnockite, label: Charnockite, color: "#a6cee3" }
+        - { value: Khondalites, label: Khondalites, color: "#1f78b4" }
+        - { value: Unclassified, label: Unclassified, color: light_grey }
+        - { value: Other, label: Other, color: "#ffed6f" }
+    meaning: >-
+      Aquifer setting points to likely reliability or recharge differences where those signals are present.
+    uncertainty: >-
+      Regional classes may be outdated or too coarse for local wells.
+    field_check: >-
+      Verify local depth, yield, and well behaviour before deciding recharge or extraction actions.
+
+  - id: gw_stress_wiser
+    s3_key: vector/gw_stress.fgb
+    name: WISER Groundwater Stress
+    source: vector_fgb
+    analysis_type: wiser_gw_stress
+    render:
+      type: categorical
+      column: __wiser_gw_stress_class
+      classes:
+        - { value: Safe, label: Safe, color: green }
+        - { value: Semi-critical, label: Semi-critical, color: golden_ochre }
+        - { value: Critical, label: Critical, color: brown }
+        - { value: Over-exploited, label: Over-exploited, color: rust }
+        - { value: Saline, label: Saline, color: deep_blue }
+        - { value: Groundwater class unavailable, label: Unavailable, color: light_grey }
+    meaning: >-
+      WISER groundwater stress compares annual extraction with recharge to flag Safe, Semi-critical, Critical, Over-exploited, or Saline units. Use it as a screening layer for demand pressure.
+    uncertainty: >-
+      Regional classes may be outdated or too coarse for local wells.
+    field_check: >-
+      Check well depth, seasonal failure, new borewells, yields, pumping intensity, and recharge response.
+
+  - id: irrigation_access_wiser
+    s3_key: vector/village_resilience.fgb
+    name: Irrigation Access from Cropping Intensity (WISER)
+    source: vector_fgb
+    analysis_type: wiser_rank
+    render:
+      type: categorical
+      column: __wiser_irrigation_access_class
+      classes:
+        - { value: Very low, label: Very low, color: "#d7191c" }
+        - { value: Low, label: Low, color: "#fdae61" }
+        - { value: Moderate, label: Moderate, color: "#ffff91" }
+        - { value: High, label: High, color: "#abd9e9" }
+        - { value: Very high, label: Very high, color: "#2c7bb6" }
+        - { value: NA, label: NA, color: light_grey }
+    meaning: >-
+      Long-term cropping intensity is used as a proxy for irrigation access. Higher access is a question, not a conclusion: it may reflect reliable supply or unsustainable groundwater dependence and unequal access.
+    uncertainty: >-
+      Cropping intensity and resilience classes are proxies; they do not prove reliable supply, equal access, or sustainable extraction.
+    field_check: >-
+      Verify the source of irrigation, reliability across seasons, equity between farms or hamlets, and whether access depends on unsustainable groundwater pumping.
+
+  - id: kharif_resilience_wiser
+    s3_key: vector/village_resilience.fgb
+    name: Kharif Crop Resilience in Deficient Rainfall Years (WISER)
+    source: vector_fgb
+    analysis_type: wiser_rank
+    render:
+      type: categorical
+      column: __wiser_kharif_resilience_class
+      classes:
+        - { value: Very low, label: Very low, color: "#d7191c" }
+        - { value: Low, label: Low, color: "#fdae61" }
+        - { value: Moderate, label: Moderate, color: "#ffff91" }
+        - { value: High, label: High, color: "#abd9e9" }
+        - { value: Very high, label: Very high, color: "#2c7bb6" }
+        - { value: NA, label: NA, color: light_grey }
+    meaning: >-
+      This layer shows how much kharif cropped area holds up during deficient rainfall years compared with the village's best cropping years. Low resilience villages are priority locations for dry-year vulnerability checks.
+    uncertainty: >-
+      Cropping intensity and resilience classes are proxies; they do not prove reliable supply, equal access, or sustainable extraction.
+    field_check: >-
+      Check rainfall buffering, soil moisture, protective irrigation, crop choice, and livelihood coping.
+
+  - id: rabi_resilience_wiser
+    s3_key: vector/village_resilience.fgb
+    name: Rabi Crop Resilience in Deficient Rainfall Years (WISER)
+    source: vector_fgb
+    analysis_type: wiser_rank
+    render:
+      type: categorical
+      column: __wiser_rabi_resilience_class
+      classes:
+        - { value: Very low, label: Very low, color: "#d7191c" }
+        - { value: Low, label: Low, color: "#fdae61" }
+        - { value: Moderate, label: Moderate, color: "#ffff91" }
+        - { value: High, label: High, color: "#abd9e9" }
+        - { value: Very high, label: Very high, color: "#2c7bb6" }
+        - { value: NA, label: NA, color: light_grey }
+    meaning: >-
+      This layer shows how much rabi cropped area holds up during deficient rainfall years. Use low resilience areas to ask whether winter cropping depends on weak groundwater, canal timing, stored soil moisture, or unequal access.
+    uncertainty: >-
+      Cropping intensity and resilience classes are proxies; they do not prove reliable supply, equal access, or sustainable extraction.
+    field_check: >-
+      Test winter irrigation dependence, groundwater reliability, and tail-end access.
+
+  - id: baseline_population
+    s3_key: vector/villages.fgb
+    name: Baseline Population
+    source: vector_fgb
+    analysis_type: demographics
+    # Clipped to watershed server-side before map load
+    map_render: true
+    render:
+      type: choropleth
+      column: Total_Popu
+      # YlOrBr 5-class (approx village-population quantiles; refine after data prep)
+      stops:
+        - { min: 0, max: 500, label: "< 500", color: "#ffffd4" }
+        - { min: 500, max: 1500, label: "500 – 1,500", color: "#fed98e" }
+        - { min: 1500, max: 3000, label: "1,500 – 3,000", color: "#fe9929" }
+        - { min: 3000, max: 6000, label: "3,000 – 6,000", color: "#d95f0e" }
+        - { min: 6000, max: 999999999, label: "> 6,000", color: "#993404" }
+    meaning: >-
+      Settlement and population signals help choose hamlets, farmer groups, tail-end users, and excluded groups for validation.
+    uncertainty: >-
+      These are population-in-AOI figures, not impact estimates.
+    field_check: >-
+      Confirm hamlets/groups with weaker access, time burden, costs, plot locations, and exclusion from decisions.
+
+  - id: marginalized_scst
+    s3_key: vector/villages.fgb
+    name: Marginalized Population (% SC/ST)
+    source: vector_fgb
+    analysis_type: demographics_marginalized
+    map_render: true
+    render:
+      type: choropleth
+      column: pct_scst
+      # OrRd 5-class
+      stops:
+        - { min: 0, max: 10, label: "< 10%", color: "#fef0d9" }
+        - { min: 10, max: 25, label: "10 – 25%", color: "#fdcc8a" }
+        - { min: 25, max: 40, label: "25 – 40%", color: "#fc8d59" }
+        - { min: 40, max: 60, label: "40 – 60%", color: "#e34a33" }
+        - { min: 60, max: 100, label: "> 60%", color: "#b30000" }
+    meaning: >-
+      This proxy suggests social vulnerability patterns and supports inclusion planning; verify access differences with local groups.
+    uncertainty: >-
+      These are population-in-AOI figures, not impact estimates.
+    field_check: >-
+      Confirm hamlets/groups with weaker access, time burden, costs, plot locations, and exclusion from decisions.
+
+  - id: jrc_occurrence
+    s3_key: rasters/jrc_occurrence_india_2024.tif
+    name: JRC Surface Water Occurrence (1984-2024)
+    source: cog
+    analysis_type: jrc_occurrence
+    render:
+      type: categorical
+      nodata: 255
+      classes:
+        - { value: 0, label: Not water, color: "#ffffff" }
+        - { value: 1, label: Rare occurrence (1-20%), color: "#FFD6E0" }
+        - { value: 21, label: Low occurrence (21-40%), color: "#F49AC2" }
+        - { value: 41, label: Intermittent water (41-60%), color: "#B56CC2" }
+        - { value: 61, label: Frequent water (61-80%), color: "#6757B8" }
+        - { value: 81, label: Very frequent water (81-99%), color: "#2F5FD0" }
+        - { value: 100, label: Permanent water (100%), color: "#0000AA" }
+        - { value: 255, label: No data, color: "#CCCCCC" }
+    meaning: >-
+      Occurrence is the percentage of valid monthly observations classified as water from 1984 to 2024. Pink/purple areas are intermittent; blue areas are frequent or permanent water.
+    uncertainty: >-
+      Treat it as observed surface-water persistence, not a direct measure of depth, storage volume, water quality, or present-day usability.
+    field_check: >-
+      Verify current water presence, depth, quality, seasonality, and usability for irrigation or livestock.
+
+  - id: jrc_transitions
+    s3_key: rasters/jrc_transition_india_2024.tif
+    name: JRC Surface Water Transitions (1984-2024)
+    source: cog
+    analysis_type: jrc_transitions
+    render:
+      type: categorical
+      nodata: 255
+      classes:
+        - { value: 0, label: Not water, color: "#ffffff" }
+        - { value: 1, label: Permanent, color: "#0000FF" }
+        - { value: 2, label: New permanent, color: "#22B14C" }
+        - { value: 3, label: Lost permanent, color: "#D1102D" }
+        - { value: 4, label: Seasonal, color: "#99D9EA" }
+        - { value: 5, label: New seasonal, color: "#B5E61D" }
+        - { value: 6, label: Lost seasonal, color: "#E6A1AA" }
+        - { value: 7, label: Seasonal to permanent, color: "#FF7F27" }
+        - { value: 8, label: Permanent to seasonal, color: "#FFC90E" }
+        - { value: 9, label: Ephemeral permanent, color: "#7F7F7F" }
+        - { value: 10, label: Ephemeral seasonal, color: "#C3C3C3" }
+        - { value: 255, label: No data, color: "#CCCCCC" }
+    meaning: >-
+      Transitions compare the first representative water state with the 2024 state. They show new, lost, persistent, seasonal-to-permanent, permanent-to-seasonal, and ephemeral water.
+    uncertainty: >-
+      They do not describe every intervening year, so use occurrence, seasonality, and local history together before concluding that a waterbody was continuously stable.
+    field_check: >-
+      Check whether water loss or gain reflects climate variability, new/failed infrastructure, river movement, extraction, or land conversion.
