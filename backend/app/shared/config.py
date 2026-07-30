@@ -1,3 +1,4 @@
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings
 
 
@@ -22,6 +23,16 @@ class Settings(BaseSettings):
     odk_base_url: str = ""
     odk_username: str = ""
     odk_password: str = ""
+
+    # Metabase signed embedding
+    metabase_embed_secret_key: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "METABASE_EMBED_SECRET_KEY",
+            "METABASE_EMBEDD_SECRET_KEY",
+        ),
+    )
+    metabase_dashboard_id: int = 35
 
     frontend_origin: str = "http://localhost:5173"
     session_cookie_name: str = "dda_session"

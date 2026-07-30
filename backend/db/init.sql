@@ -66,6 +66,25 @@ CREATE TABLE diagnosis (
 CREATE INDEX diagnosis_watershed_geom_idx ON diagnosis USING GIST (watershed_geom);
 CREATE INDEX diagnosis_owner_id_idx ON diagnosis (owner_id);
 
+-- Assess projects: named work areas owned by the Assess module
+CREATE TABLE assess_projects (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name          TEXT NOT NULL,
+    owner_id      UUID NOT NULL REFERENCES users(id),
+    description   TEXT NOT NULL DEFAULT '',
+    status        TEXT NOT NULL DEFAULT 'draft'
+                  CHECK (status IN ('draft', 'active', 'archived')),
+    odk_project_id TEXT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX assess_projects_owner_id_idx ON assess_projects (owner_id);
+
+ALTER TABLE assess_projects
+    ADD CONSTRAINT assess_projects_owner_odk_project_id_key
+    UNIQUE (owner_id, odk_project_id);
+
 -- Diagnosis sharing: direct user grants and org grants (owner manages both)
 CREATE TABLE diagnosis_users (
     diagnosis_id  UUID NOT NULL REFERENCES diagnosis(id) ON DELETE CASCADE,
@@ -169,6 +188,10 @@ CREATE TRIGGER organizations_updated_at
 
 CREATE TRIGGER diagnosis_updated_at
     BEFORE UPDATE ON diagnosis
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TRIGGER assess_projects_updated_at
+    BEFORE UPDATE ON assess_projects
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 CREATE TRIGGER observation_zones_updated_at

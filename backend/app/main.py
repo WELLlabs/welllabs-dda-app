@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.modules.accounts.routers import auth, orgs, qfield_account, users
-from app.modules.assess.routers import assess
+from app.modules.assess.routers import assess, metabase
 from app.modules.design.routers import design
 from app.modules.diagnose.routers import (
     field_notes,
@@ -58,6 +58,11 @@ app.include_router(qfield.router, prefix="/api/diagnose/qfield", tags=["diagnose
 # Design and Assess modules — boilerplate, filled in as those flows are built.
 app.include_router(design.router, prefix="/api/design", tags=["design"])
 app.include_router(assess.router, prefix="/api/assess", tags=["assess"])
+app.include_router(
+    metabase.router,
+    prefix="/api/assess/metabase",
+    tags=["assess:metabase"],
+)
 
 
 @app.get("/health")
