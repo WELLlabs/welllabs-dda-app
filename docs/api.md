@@ -168,8 +168,14 @@ ODK Central-backed monitoring. See [assess.md](assess.md).
 | GET | `/projects/{project_id}/forms` | Yes | List ODK forms for a project. |
 | GET | `/projects/{project_id}/forms/{xml_form_id}/submissions` | Yes | List submissions (OData). |
 | GET | `/projects/{project_id}/forms/{xml_form_id}/submissions/{instance_id}` | Yes | Fetch one submission. |
-
-`main.py` also registers `/api/assess/metabase` for a future signed-embed router; that module is not present yet.
+| GET | `/projects/{project_id}/access/users` | Yes | List direct user grants for an Assess project. |
+| POST | `/projects/{project_id}/access/users` | Yes | Grant a user access. Body: `{email, role?}`. |
+| PATCH | `/projects/{project_id}/access/users/{user_id}/role` | Yes | Update a user grant role. Body: `{role}`. |
+| DELETE | `/projects/{project_id}/access/users/{user_id}` | Yes | Revoke a user grant. |
+| GET | `/projects/{project_id}/access/orgs` | Yes | List org grants for an Assess project. |
+| POST | `/projects/{project_id}/access/orgs` | Yes | Grant org access. Body: `{org_id}`. |
+| DELETE | `/projects/{project_id}/access/orgs/{org_id}` | Yes | Revoke org access. |
+| GET | `/metabase/projects/{project_id}/token` | Yes | Generate a short-lived Metabase embed token for the project dashboard. |
 
 ---
 

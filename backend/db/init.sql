@@ -75,6 +75,9 @@ CREATE TABLE assess_projects (
     status        TEXT NOT NULL DEFAULT 'draft'
                   CHECK (status IN ('draft', 'active', 'archived')),
     odk_project_id TEXT,
+    -- Metabase dashboard to embed for this project. Each project's dashboard is
+    -- built on that project's form data; NULL falls back to the app default.
+    metabase_dashboard_id INTEGER,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -84,6 +87,29 @@ CREATE INDEX assess_projects_owner_id_idx ON assess_projects (owner_id);
 ALTER TABLE assess_projects
     ADD CONSTRAINT assess_projects_owner_odk_project_id_key
     UNIQUE (owner_id, odk_project_id);
+
+-- Assess sharing: direct user grants and org grants (mirrors the diagnosis
+-- sharing model). A user can view an assess project if they own it, were
+-- granted direct access, or belong to an org that was granted access.
+CREATE TABLE assess_project_users (
+    project_id    UUID NOT NULL REFERENCES assess_projects(id) ON DELETE CASCADE,
+    user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role          TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('admin', 'member')),
+    added_by      UUID REFERENCES users(id),
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (project_id, user_id)
+);
+
+CREATE TABLE assess_project_orgs (
+    project_id    UUID NOT NULL REFERENCES assess_projects(id) ON DELETE CASCADE,
+    org_id        UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    added_by      UUID REFERENCES users(id),
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (project_id, org_id)
+);
+
+CREATE INDEX assess_project_users_user_id_idx ON assess_project_users (user_id);
+CREATE INDEX assess_project_orgs_org_id_idx ON assess_project_orgs (org_id);
 
 -- Diagnosis sharing: direct user grants and org grants (owner manages both)
 CREATE TABLE diagnosis_users (

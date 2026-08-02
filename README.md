@@ -197,6 +197,7 @@ Full reference: [docs/api.md](docs/api.md).
 | [docs/setup.md](docs/setup.md) | Environment, Docker, S3 layout, tests |
 | [docs/diagnosis.md](docs/diagnosis.md) | Diagnose capabilities, layers, 3D, QField, access |
 | [docs/assess.md](docs/assess.md) | Assess / ODK status |
+| [docs/settings.md](docs/settings.md) | Settings, organizations, connector workflows |
 | [docs/design.md](docs/design.md) | Design placeholder |
 | [docs/database.md](docs/database.md) | Schema |
 | [docs/api.md](docs/api.md) | Endpoint reference |

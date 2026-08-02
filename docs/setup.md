@@ -99,6 +99,16 @@ npm run dev
 
 Dev server: `http://localhost:5173`. `/api/*` is proxied to FastAPI; `/titiler` via Vite proxy.
 
+## Settings and collaboration UI
+
+The protected Settings area is available at `/settings` and includes:
+
+- an Account profile view
+- an Organizations tab for shared-team collaboration
+- a Connectors tab for personal QField Cloud credentials
+
+For more detail, see [settings.md](settings.md).
+
 ## S3 Bucket Layout
 
 ```
