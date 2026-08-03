@@ -33,7 +33,9 @@ class Settings(BaseSettings):
             "METABASE_EMBEDD_SECRET_KEY",
         ),
     )
-    metabase_dashboard_id: int = 35
+    # Browser-reachable Metabase URL — returned to the frontend so it can load
+    # embed.js and point the web component at the instance.
+    metabase_public_url: str = "http://localhost:3000"
 
     frontend_origin: str = "http://localhost:5173"
     session_cookie_name: str = "dda_session"

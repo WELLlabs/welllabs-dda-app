@@ -5,16 +5,17 @@ import { createApiClient } from '$lib/shared/api-client.js';
 const API = '/api/assess';
 const request = createApiClient(API);
 
+/** Fetch a project's Metabase report (access-checked; `{ configured: false }` if unmapped). */
+export async function fetchProjectReport(projectId) {
+	return request(`/projects/${encodeURIComponent(projectId)}/reports`);
+}
+
 /** List assess projects synced into the platform DB. */
 export async function fetchProjects() {
 	return request('/projects');
 }
 
-/**
- * Import / refresh projects from ODK Central. This is the only way assess
- * projects come into being — it syncs ODK Central projects into the DB and
- * returns the freshly-synced rows.
- */
+/** Import/refresh projects from ODK Central — the only way assess projects are created. */
 export async function importProjects() {
 	return request('/odk/projects');
 }

@@ -1,5 +1,6 @@
 <script>
 	import { fade, scale } from 'svelte/transition';
+	import { goto } from '$app/navigation';
 	import ModuleHeader from '$lib/shared/components/ModuleHeader.svelte';
 	import { fetchForms } from '$lib/modules/assess/api';
 
@@ -40,13 +41,25 @@
 	<ModuleHeader title="Assess" project={project?.name} subtitle="Select a form to browse its submissions." />
 
 	<main class="relative z-10 flex-1 overflow-auto p-6">
-		<button
-			class="mb-4 inline-flex items-center gap-1 rounded-full border border-brand-navy/15 bg-white px-3 py-1.5 font-body text-sm text-brand-navy transition hover:border-brand-blue hover:text-brand-blue"
-			onclick={onBack}
-		>
-			<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path d="M19 12H5M11 6l-6 6 6 6" stroke-linecap="round" stroke-linejoin="round" /></svg>
-			Projects
-		</button>
+		<div class="mb-4 flex items-center justify-between gap-3">
+			<button
+				class="inline-flex items-center gap-1 rounded-full border border-brand-navy/15 bg-white px-3 py-1.5 font-body text-sm text-brand-navy transition hover:border-brand-blue hover:text-brand-blue"
+				onclick={onBack}
+			>
+				<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path d="M19 12H5M11 6l-6 6 6 6" stroke-linecap="round" stroke-linejoin="round" /></svg>
+				Projects
+			</button>
+
+			{#if project?.id}
+				<button
+					class="inline-flex items-center gap-1.5 rounded-full border border-brand-blue/30 bg-brand-blue/5 px-3 py-1.5 font-body text-sm font-medium text-brand-blue transition hover:border-brand-blue hover:bg-brand-blue/10"
+					onclick={() => goto(`/assess/${project.id}/reports`)}
+				>
+					<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="h-4 w-4"><path d="M4 4v16h16M8 16l3-4 3 3 4-6" stroke-linecap="round" stroke-linejoin="round" /></svg>
+					Reports
+				</button>
+			{/if}
+		</div>
 
 		{#if error}
 			<p class="mb-4 text-sm text-red-600">{error}</p>

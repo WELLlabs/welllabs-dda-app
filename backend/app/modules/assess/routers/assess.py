@@ -8,6 +8,7 @@ flow is built out.
 import anyio
 from uuid import UUID
 
+from app.modules.assess.access import assess_access_where
 from app.shared.auth import get_current_user
 from app.shared.database import db_cursor
 from app.shared.integrations.odk import ODKClient
@@ -33,7 +34,7 @@ _GET_ASSESS_PROJECT_ODK_ID = """
       AND owner_id = %(owner_id)s
 """
 
-_LIST_ASSESS_PROJECTS = """
+_LIST_ASSESS_PROJECTS = f"""
     SELECT
         id,
         name,
@@ -41,10 +42,11 @@ _LIST_ASSESS_PROJECTS = """
         description,
         status,
         odk_project_id,
+        metabase_dashboard_id,
         created_at,
         updated_at
-    FROM assess_projects
-    WHERE owner_id = %(owner_id)s
+    FROM assess_projects p
+    WHERE {assess_access_where("p")}
     ORDER BY created_at DESC
 """
 
@@ -57,6 +59,7 @@ def _assess_project_to_dict(row: dict) -> dict:
         "description": row["description"],
         "status": row["status"],
         "odk_project_id": row["odk_project_id"],
+        "metabase_dashboard_id": row.get("metabase_dashboard_id"),
         "created_at": row["created_at"].isoformat(),
         "updated_at": row["updated_at"].isoformat(),
     }
@@ -117,7 +120,7 @@ async def odk_projects(user: dict = Depends(get_current_user)):
 @router.get("/projects")
 def list_assess_projects(user: dict = Depends(get_current_user)):
     with db_cursor() as cur:
-        cur.execute(_LIST_ASSESS_PROJECTS, {"owner_id": user["id"]})
+        cur.execute(_LIST_ASSESS_PROJECTS, {"current_user_id": user["id"]})
         rows = cur.fetchall()
     return {"projects": [_assess_project_to_dict(r) for r in rows]}
 
