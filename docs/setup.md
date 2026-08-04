@@ -54,10 +54,13 @@ cp .env.example .env
 | `POSTGIS_PUBLIC_HOST` / `POSTGIS_PUBLIC_PORT` | Host QField can reach (not `localhost`) |
 | `QFIELD_CLOUD_URL` / `QFIELD_PROJECT_NAME` | QField Cloud API + project name prefix |
 | `QFIELD_RASTER_MIN_ZOOM` / `QFIELD_RASTER_MAX_ZOOM` | MBTiles zoom range for packages |
-| `FRONTEND_ORIGIN` | CORS origin (default `http://localhost:5173`) |
+| `FRONTEND_ORIGIN` | Primary CORS / email-link origin (default `http://localhost:5173`; `:5174` also allowed) |
 | `SESSION_COOKIE_SECURE` | `true` in production (HTTPS) |
+| `AUTH_JWT_SECRET` | FastAPI Users JWT secret (≥32 chars recommended) |
+| `BREVO_API_KEY` / `BREVO_SENDER_EMAIL` / `BREVO_SENDER_NAME` | Optional verification / reset email |
+| `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` | Optional Sign in with Google |
 | `ODK_BASE_URL` / `ODK_USERNAME` / `ODK_PASSWORD` | Optional; Assess ODK sync |
-| `metabase_embed_secret_key` / `metabase_dashboard_id` | Optional settings fields for a future Metabase embed (not in `.env.example` yet) |
+| `METABASE_EMBEDD_SECRET_KEY` / `METABASE_PUBLIC_URL` | Optional Metabase guest embeds |
 
 3. Start all services:
 
@@ -97,7 +100,10 @@ npm install
 npm run dev
 ```
 
-Dev server: `http://localhost:5173`. `/api/*` is proxied to FastAPI; `/titiler` via Vite proxy.
+Dev server: `http://localhost:5173` (or `:5174` if 5173 is taken). Open the Vite URL only —
+do not use `:8080` in the browser. `/api/*` is proxied to FastAPI; `/titiler` via Vite proxy.
+
+Auth setup (Brevo, Google redirect URIs, cookie JWT): see [auth.md](auth.md).
 
 ## Settings and collaboration UI
 

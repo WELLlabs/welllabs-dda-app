@@ -44,12 +44,13 @@ class LayerConfig:
     s3_key: str
     name: str
     source: str  # cog | vector_fgb
-    render_type: str  # categorical | continuous | choropleth
+    render_type: str  # categorical | continuous | choropleth | outline
     nodata: int | float | None
     classes: tuple[LegendEntry, ...]
     analysis: tuple[LayerAnalysis, ...]
     continuous: dict[str, Any] = field(default_factory=dict)
     style_column: str | None = None
+    label_column: str | None = None  # outline / label layers (e.g. village name)
     choropleth_stops: tuple[ChoroplethStop, ...] = ()
     interpretation: str = ""
     meaning: str = ""
@@ -57,6 +58,7 @@ class LayerConfig:
     field_check: str = ""
     analysis_type: str | None = None
     map_render: bool = True  # False → analysis-only, FGB not streamed to browser
+    category: str | None = None  # Sidebar group (Clinton report categories)
 
     def titiler_colormap(self) -> dict[str, str]:
         """String-keyed colormap for Titiler / rio-tiler (nodata → transparent)."""
@@ -219,6 +221,9 @@ def _parse_layer(raw: dict[str, Any], palette: dict[str, str]) -> LayerConfig:
     style_column = render.get("column")
     if style_column is not None:
         style_column = str(style_column)
+    label_column = render.get("label_column")
+    if label_column is not None:
+        label_column = str(label_column)
 
     map_render_raw = raw.get("map_render")
     # strip any inline YAML comment before evaluating
@@ -241,6 +246,7 @@ def _parse_layer(raw: dict[str, Any], palette: dict[str, str]) -> LayerConfig:
         analysis=tuple(analysis),
         continuous=continuous,
         style_column=style_column,
+        label_column=label_column,
         choropleth_stops=choropleth_stops,
         interpretation=str(raw.get("interpretation") or raw.get("meaning") or "").strip(),
         meaning=str(raw.get("meaning") or raw.get("interpretation") or "").strip(),
@@ -248,6 +254,7 @@ def _parse_layer(raw: dict[str, Any], palette: dict[str, str]) -> LayerConfig:
         field_check=str(raw.get("field_check") or "").strip(),
         analysis_type=(str(raw["analysis_type"]) if raw.get("analysis_type") else None),
         map_render=map_render,
+        category=(str(raw["category"]).strip() if raw.get("category") else None),
     )
 
 

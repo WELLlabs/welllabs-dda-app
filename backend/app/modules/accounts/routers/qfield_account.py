@@ -1,4 +1,4 @@
-"""Connect / disconnect a user's QField Cloud account (tokens stored on users)."""
+"""Connect / disconnect a user's QField Cloud account (tokens in user_qfield_credentials)."""
 
 import logging
 
@@ -22,7 +22,7 @@ class QFieldConnectRequest(BaseModel):
 
 @router.post("/connect")
 def connect_qfield(body: QFieldConnectRequest, user: dict = Depends(get_current_user)):
-    """Authenticate against QField Cloud and store the token on the user row."""
+    """Authenticate against QField Cloud and upsert credentials."""
     login_url = settings.qfield_cloud_url.rstrip("/") + "/auth/login/"
     try:
         resp = httpx.post(
@@ -51,11 +51,14 @@ def connect_qfield(body: QFieldConnectRequest, user: dict = Depends(get_current_
     with db_cursor() as cur:
         cur.execute(
             """
-            UPDATE users
-            SET qfield_username = %(qfu)s,
-                qfield_token = %(tok)s,
-                qfield_token_expires_at = %(exp)s
-            WHERE id = %(uid)s
+            INSERT INTO user_qfield_credentials (
+                user_id, qfield_username, qfield_token, qfield_token_expires_at
+            ) VALUES (%(uid)s, %(qfu)s, %(tok)s, %(exp)s)
+            ON CONFLICT (user_id) DO UPDATE SET
+                qfield_username = EXCLUDED.qfield_username,
+                qfield_token = EXCLUDED.qfield_token,
+                qfield_token_expires_at = EXCLUDED.qfield_token_expires_at,
+                updated_at = now()
             """,
             {"uid": user["id"], "qfu": body.username, "tok": token, "exp": expires_at},
         )
@@ -70,7 +73,7 @@ def qfield_status(user: dict = Depends(get_current_user)):
         cur.execute(
             """
             SELECT qfield_username, qfield_token, qfield_token_expires_at AS expires_at
-            FROM users WHERE id = %(uid)s
+            FROM user_qfield_credentials WHERE user_id = %(uid)s
             """,
             {"uid": user["id"]},
         )
@@ -91,13 +94,7 @@ def disconnect_qfield(user: dict = Depends(get_current_user)):
     """Remove the stored QField Cloud token for this user."""
     with db_cursor() as cur:
         cur.execute(
-            """
-            UPDATE users
-            SET qfield_username = NULL,
-                qfield_token = NULL,
-                qfield_token_expires_at = NULL
-            WHERE id = %(uid)s
-            """,
+            "DELETE FROM user_qfield_credentials WHERE user_id = %(uid)s",
             {"uid": user["id"]},
         )
     return {"connected": False}

@@ -120,8 +120,8 @@ add/remove grants and change roles. Non-owner members can leave.
 
 ### Per-User Connector Tokens
 
-QField Cloud and ODK Central credentials live on the `users` row so quota and project ownership
-stay with each user.
+QField Cloud tokens live in `user_qfield_credentials` (1:1 with `users`). ODK Central for Assess
+uses server env (`ODK_*`); see [settings.md](settings.md) and [assess.md](assess.md).
 
 ### Watershed as Spatial Scope
 
@@ -147,7 +147,7 @@ Packaging and sync can take minutes; SSE avoids polling and WebSocket complexity
 
 ### Session Auth
 
-HttpOnly cookie sessions (`dda_session`) for server-side revocation and no client JWT refresh.
+HttpOnly cookie JWT (`dda_session`) via FastAPI Users. See [auth.md](auth.md).
 
 ### Hypothesis Workflow
 

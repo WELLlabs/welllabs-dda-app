@@ -31,13 +31,13 @@ describe('assess api', () => {
 	it('fetchProjects lists assess projects', async () => {
 		mockJson([{ id: 'p1' }]);
 		await expect(fetchProjects()).resolves.toEqual([{ id: 'p1' }]);
-		expect(fetch).toHaveBeenCalledWith('/api/assess/projects', undefined);
+		expect(fetch).toHaveBeenCalledWith('/api/assess/projects', { credentials: 'include' });
 	});
 
 	it('importProjects hits the ODK projects endpoint', async () => {
 		mockJson({ imported: 2 });
 		await expect(importProjects()).resolves.toEqual({ imported: 2 });
-		expect(fetch).toHaveBeenCalledWith('/api/assess/odk/projects', undefined);
+		expect(fetch).toHaveBeenCalledWith('/api/assess/odk/projects', { credentials: 'include' });
 	});
 
 	it('fetchProjectReport encodes the project id', async () => {
@@ -45,14 +45,14 @@ describe('assess api', () => {
 		await fetchProjectReport('proj/with spaces');
 		expect(fetch).toHaveBeenCalledWith(
 			'/api/assess/projects/proj%2Fwith%20spaces/reports',
-			undefined
+			{ credentials: 'include' }
 		);
 	});
 
 	it('fetchForms lists forms for a project', async () => {
 		mockJson([{ xmlFormId: 'form-a' }]);
 		await expect(fetchForms('p1')).resolves.toEqual([{ xmlFormId: 'form-a' }]);
-		expect(fetch).toHaveBeenCalledWith('/api/assess/projects/p1/forms', undefined);
+		expect(fetch).toHaveBeenCalledWith('/api/assess/projects/p1/forms', { credentials: 'include' });
 	});
 
 	it('fetchSubmissions encodes project and form ids', async () => {
@@ -60,7 +60,7 @@ describe('assess api', () => {
 		await fetchSubmissions('p1', 'form/a');
 		expect(fetch).toHaveBeenCalledWith(
 			'/api/assess/projects/p1/forms/form%2Fa/submissions',
-			undefined
+			{ credentials: 'include' }
 		);
 	});
 
@@ -69,7 +69,7 @@ describe('assess api', () => {
 		await fetchSubmission('p1', 'form-a', 'uuid:abc');
 		expect(fetch).toHaveBeenCalledWith(
 			'/api/assess/projects/p1/forms/form-a/submissions/uuid%3Aabc',
-			undefined
+			{ credentials: 'include' }
 		);
 	});
 });

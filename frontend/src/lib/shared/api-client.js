@@ -18,8 +18,17 @@ async function parseErrorMessage(res) {
  * @param {string} basePath
  */
 export function createApiClient(basePath) {
-	return async function request(path, init) {
-		const res = await fetch(`${basePath}${path}`, init);
+	return async function request(path, init = {}) {
+		const { headers, ...rest } = init;
+		/** @type {RequestInit} */
+		const opts = {
+			credentials: 'include',
+			...rest
+		};
+		if (headers !== undefined) {
+			opts.headers = headers;
+		}
+		const res = await fetch(`${basePath}${path}`, opts);
 		if (!res.ok) {
 			throw new Error(await parseErrorMessage(res));
 		}

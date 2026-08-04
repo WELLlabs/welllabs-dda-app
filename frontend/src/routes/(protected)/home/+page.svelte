@@ -88,7 +88,7 @@
 				</span>
 
 				<h1 class="mt-4 font-display text-4xl leading-[1.05] md:text-5xl">
-					Welcome back,
+					Welcome,
 					<span class="name-grad">{session.user?.name ?? 'there'}</span>.
 				</h1>
 

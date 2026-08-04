@@ -42,9 +42,9 @@ geo-field-pipeline/
 ├── backend/
 │   ├── app/
 │   │   ├── main.py                 # Router registration, CORS
-│   │   ├── shared/                 # Config, DB, S3, auth, access, ODK client
+│   │   ├── shared/                 # Config, DB, S3, auth (FastAPI Users), access, ODK client
 │   │   └── modules/
-│   │       ├── accounts/           # Auth, users, orgs, QField / ODK connectors
+│   │       ├── accounts/           # Auth, users, orgs, QField connector
 │   │       ├── diagnose/           # Projects, layers, analysis, 3D drape, QField
 │   │       │   └── config/         # layers.yaml — styling + analysis catalog
 │   │       ├── design/             # Boilerplate (/api/design)
@@ -77,10 +77,11 @@ geo-field-pipeline/
 cd backend
 cp .env.example .env
 # Edit .env with AWS credentials, S3 bucket, COG_LAYERS, VECTOR_LAYERS, watersheds key,
-# QField Cloud settings, and optional ODK Central credentials
+# QField Cloud settings, AUTH_JWT_SECRET, optional Brevo / Google OAuth, and optional ODK_*
 ```
 
 Get a QField Cloud token at [app.qfield.cloud/user/settings](https://app.qfield.cloud/user/settings/).
+Auth (email verification, Google, cookies): see [docs/auth.md](docs/auth.md).
 
 ### 2. Start backend services
 
@@ -100,17 +101,21 @@ This starts:
 cd frontend && npm run dev
 ```
 
-Open [http://localhost:5173](http://localhost:5173).
+Open [http://localhost:5173](http://localhost:5173) (or `:5174` if 5173 is busy). Use the Vite
+URL only — do not browse the API on `:8080`.
 
 **API proxying:** In development, browser requests to `/api/*` are forwarded to FastAPI
-(`localhost:8080`) by the SvelteKit catch-all at `frontend/src/routes/api/[...path]/+server.js`.
-Vite's `server.proxy` is only used for `/titiler`.
+(`localhost:8080`) by the SvelteKit catch-all at `frontend/src/routes/api/[...path]/+server.js`
+(preserves `Set-Cookie` for login / Google OAuth). Vite's `server.proxy` is only used for `/titiler`.
 
-### 4. Run backend tests (optional)
+### 4. Run tests (optional)
 
 ```bash
-cd backend
-bash scripts/run_tests.sh
+# Backend (inside API image)
+cd backend && bash scripts/run_tests.sh
+
+# Frontend
+cd frontend && npm run test:run
 ```
 
 ## Usage (Diagnose)
@@ -147,10 +152,14 @@ bash scripts/run_tests.sh
 
 ## PostGIS schema (high level)
 
-**diagnosis** — name, watershed, seed coordinates, QField Cloud ids  
-**observation_zones** / **hypotheses** / **field_notes** — Diagnose field data  
-**assess_projects** — ODK-synced Assess work areas (`odk_project_id`, status)  
-**users** / **organizations** / **sessions** — accounts and sharing
+**users** — FastAPI Users identity (`is_verified`, etc.) + `name`  
+**oauth_account** — Google OAuth linkage  
+**user_qfield_credentials** — QField Cloud tokens  
+**organizations** / membership — sharing  
+**diagnosis** / zones / hypotheses / field_notes — Diagnose  
+**assess_projects** — ODK-synced Assess work areas  
+
+Auth uses cookie JWT (`dda_session`); there is no `sessions` table.
 
 See [docs/database.md](docs/database.md) for the full schema.
 
@@ -195,6 +204,7 @@ Full reference: [docs/api.md](docs/api.md).
 | Doc | Contents |
 |-----|----------|
 | [docs/setup.md](docs/setup.md) | Environment, Docker, S3 layout, tests |
+| [docs/auth.md](docs/auth.md) | FastAPI Users, Brevo, Google OAuth, Vite ports |
 | [docs/diagnosis.md](docs/diagnosis.md) | Diagnose capabilities, layers, 3D, QField, access |
 | [docs/assess.md](docs/assess.md) | Assess / ODK status |
 | [docs/settings.md](docs/settings.md) | Settings, organizations, connector workflows |

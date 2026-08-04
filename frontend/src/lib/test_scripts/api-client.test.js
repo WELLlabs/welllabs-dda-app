@@ -21,7 +21,7 @@ describe('createApiClient', () => {
 		const request = createApiClient('/api/diagnose');
 		const data = await request('/projects');
 
-		expect(fetch).toHaveBeenCalledWith('/api/diagnose/projects', undefined);
+		expect(fetch).toHaveBeenCalledWith('/api/diagnose/projects', { credentials: 'include' });
 		expect(data).toEqual({ id: 'p1' });
 	});
 
@@ -40,6 +40,7 @@ describe('createApiClient', () => {
 		});
 
 		expect(fetch).toHaveBeenCalledWith('/api/accounts/auth/login', {
+			credentials: 'include',
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({ email: 'a@b.com', password: 'x' })
@@ -56,7 +57,7 @@ describe('createApiClient', () => {
 		});
 
 		const request = createApiClient('/api/diagnose');
-		await expect(request('/projects/1', { method: 'DELETE' })).resolves.toBeUndefined();
+		await expect(request('/projects/1', { credentials: 'include', method: 'DELETE' })).resolves.toBeUndefined();
 	});
 
 	it('throws with detail string from JSON error body', async () => {

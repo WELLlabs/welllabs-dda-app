@@ -63,13 +63,20 @@ def build_qfield_project_with_qgis(
     project_name: str,
     project_id: str,
     *,
-    raster_filename: str | None,
+    rasters: list[dict] | None = None,
+    secondary_vectors: list[dict] | None = None,
     zone_colors: list[str],
     extent: list[float] | None,
+    # Back-compat for older callers
+    raster_filename: str | None = None,
 ) -> Path:
     package_dir = package_dir.resolve()
     host_package_dir = _host_package_dir(package_dir)
     build_script_host, build_script_container = _build_script_mount()
+
+    raster_list = list(rasters or [])
+    if not raster_list and raster_filename:
+        raster_list = [{"filename": raster_filename, "name": Path(raster_filename).stem}]
 
     cmd = [
         "docker",
@@ -91,9 +98,11 @@ def build_qfield_project_with_qgis(
         project_id,
         "--zone-colors",
         json.dumps(zone_colors),
+        "--rasters",
+        json.dumps(raster_list),
+        "--secondary-vectors",
+        json.dumps(secondary_vectors or []),
     ]
-    if raster_filename:
-        cmd.extend(["--raster", raster_filename])
     if extent:
         cmd.extend(["--extent", json.dumps(extent)])
 

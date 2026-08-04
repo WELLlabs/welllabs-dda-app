@@ -82,6 +82,7 @@ class CogLayer(BaseModel):
     uncertainty: str = ""
     field_check: str = ""
     analysis_type: str | None = None
+    category: str | None = None
 
 
 class LayersResponse(BaseModel):
@@ -96,6 +97,7 @@ class VectorLayer(BaseModel):
     url: str
     render_type: str
     style_column: str | None = None
+    label_column: str | None = None
     legend: list[LegendItem] = []
     choropleth_stops: list[ChoroplethStopItem] = []
     interpretation: str = ""
@@ -104,6 +106,7 @@ class VectorLayer(BaseModel):
     field_check: str = ""
     analysis_type: str | None = None
     map_render: bool = True
+    category: str | None = None
     status: str = "ok"
     error: str | None = None
 
@@ -471,6 +474,7 @@ def _build_layer(
     uncertainty = layer_cfg.uncertainty if layer_cfg else ""
     field_check = layer_cfg.field_check if layer_cfg else ""
     analysis_type = layer_cfg.analysis_type if layer_cfg else None
+    category = layer_cfg.category if layer_cfg else None
 
     try:
         _presigned_url_cached(key)
@@ -492,6 +496,7 @@ def _build_layer(
             uncertainty=uncertainty,
             field_check=field_check,
             analysis_type=analysis_type,
+            category=category,
         )
 
     tiles_url = f"/api/layers/cog/{layer_id}/tiles/WebMercatorQuad/{{z}}/{{x}}/{{y}}{_tile_query(bbox, project_id)}"
@@ -509,6 +514,7 @@ def _build_layer(
         uncertainty=uncertainty,
         field_check=field_check,
         analysis_type=analysis_type,
+        category=category,
     )
 
 
@@ -905,6 +911,7 @@ def _build_vector_layer(cfg: LayerConfig) -> VectorLayer:
             url=url,
             render_type=cfg.render_type,
             style_column=cfg.style_column,
+            label_column=cfg.label_column,
             legend=legend,
             choropleth_stops=stops,
             interpretation=meaning,
@@ -913,6 +920,7 @@ def _build_vector_layer(cfg: LayerConfig) -> VectorLayer:
             field_check=cfg.field_check,
             analysis_type=cfg.analysis_type,
             map_render=cfg.map_render,
+            category=cfg.category,
         )
     except ClientError as exc:
         err = exc.response.get("Error", {})
@@ -923,6 +931,7 @@ def _build_vector_layer(cfg: LayerConfig) -> VectorLayer:
             url="",
             render_type=cfg.render_type,
             style_column=cfg.style_column,
+            label_column=cfg.label_column,
             legend=legend,
             choropleth_stops=stops,
             interpretation=meaning,
@@ -931,6 +940,7 @@ def _build_vector_layer(cfg: LayerConfig) -> VectorLayer:
             field_check=cfg.field_check,
             analysis_type=cfg.analysis_type,
             map_render=cfg.map_render,
+            category=cfg.category,
             status="error",
             error=f"{err.get('Code', 'S3Error')}: {err.get('Message', str(exc))}",
         )
@@ -1009,14 +1019,20 @@ def _run_layer_analysis_sync(cfg: LayerConfig, geom: dict):
     """Run analyze_layer with vsis3/presign; used by single + batch endpoints."""
     from app.modules.diagnose.services.layer_analysis import AnalysisResult
 
-    if cfg.source == "cog" and cfg.analysis_type != "dem":
-        # LULC etc. — return catalog text with empty stats until zonal analysis exists
+    # Outline / reference overlays have no watershed stats.
+    if cfg.render_type == "outline" or not cfg.analysis_type:
+        return AnalysisResult(stats={}, status="ok")
+
+    # COG layers with implemented raster analysis
+    raster_analysis = {"dem", "jrc_occurrence", "jrc_transitions"}
+    if cfg.source == "cog" and cfg.analysis_type not in raster_analysis:
+        # LULC etc. — catalog text until zonal class-area exists
         return AnalysisResult(stats={"Status": "See map classes in the watershed"}, status="ok")
 
     vector_url = None
     cog_url = None
     try:
-        if cfg.source == "cog" or cfg.analysis_type == "dem":
+        if cfg.source == "cog":
             cog_url = _presigned_url_cached(cfg.s3_key)
         else:
             vector_url = _presigned_url_cached(cfg.s3_key)
@@ -1042,6 +1058,9 @@ async def batch_layer_analysis(
     enabled_vec = set(_vector_keys())
     configs: list[LayerConfig] = []
     for cfg in get_catalog().layers:
+        # Skip outline overlays (e.g. village boundaries) — no thematic evidence
+        if cfg.render_type == "outline" or not cfg.analysis_type:
+            continue
         if cfg.source == "cog" and cfg.s3_key in enabled_cog:
             configs.append(cfg)
         elif cfg.source == "vector_fgb" and cfg.s3_key in enabled_vec:

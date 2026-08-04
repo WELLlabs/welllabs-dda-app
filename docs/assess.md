@@ -19,7 +19,7 @@ projects, forms, and submissions in the web UI.
 
 - `GET /api/assess/odk/projects` pulls projects from ODK Central and upserts rows into `assess_projects`
 - Server uses `ODK_BASE_URL` / `ODK_USERNAME` / `ODK_PASSWORD` (see `.env.example`)
-- Users can also store personal ODK credentials on `users` via Accounts connectors
+- Per-user ODK columns on `users` were removed; sync uses the server env credentials
 
 ### Browse forms and submissions
 

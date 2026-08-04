@@ -350,8 +350,8 @@ def _resolve_qfield_token(user_id: str, project_id: str) -> str:
     with db_cursor() as cur:
         cur.execute(
             """
-            SELECT qfield_token AS token FROM users
-            WHERE id = %(uid)s AND qfield_token IS NOT NULL AND qfield_token <> ''
+            SELECT qfield_token AS token FROM user_qfield_credentials
+            WHERE user_id = %(uid)s AND qfield_token IS NOT NULL AND qfield_token <> ''
             """,
             {"uid": user_id},
         )
@@ -361,11 +361,11 @@ def _resolve_qfield_token(user_id: str, project_id: str) -> str:
 
         cur.execute(
             """
-            SELECT u.qfield_token AS token FROM diagnosis d
-            JOIN users u ON u.id = d.qfield_project_owner
+            SELECT qc.qfield_token AS token FROM diagnosis d
+            JOIN user_qfield_credentials qc ON qc.user_id = d.qfield_project_owner
             WHERE d.id = %(pid)s
-              AND u.qfield_token IS NOT NULL
-              AND u.qfield_token <> ''
+              AND qc.qfield_token IS NOT NULL
+              AND qc.qfield_token <> ''
             """,
             {"pid": project_id},
         )

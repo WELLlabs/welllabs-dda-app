@@ -53,6 +53,7 @@ def test_catalog_includes_wiser_and_dem_layers():
     assert "aquifers" in ids
     assert "baseline_population" in ids
     assert "marginalized_scst" in ids
+    assert "village_boundaries" in ids
 
     gw = catalog.by_id("gw_stress_wiser")
     assert gw is not None
@@ -74,6 +75,18 @@ def test_catalog_includes_wiser_and_dem_layers():
     assert pop.render_type == "choropleth"
     assert len(pop.choropleth_stops) == 5
     assert pop.legend_entries()[0].label == "< 500"
+
+    boundaries = catalog.by_id("village_boundaries")
+    assert boundaries is not None
+    assert boundaries.render_type == "outline"
+    assert boundaries.label_column == "Village Na"
+    assert boundaries.s3_key == "vector/villages.fgb"
+    assert boundaries.category == "Reference"
+
+    assert catalog.by_id("lulc250k").category == "Hydrology & Landscape Controls"
+    assert catalog.by_id("jrc_occurrence").category == "Surface Water Dynamics"
+    assert catalog.by_id("gw_stress_wiser").category == "WISER Outcome Layers"
+    assert catalog.by_id("baseline_population").category == "Social & Demographic Profile"
 
 
 def test_gdaldem_file_covers_0_to_18(tmp_path: Path):

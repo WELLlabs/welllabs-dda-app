@@ -18,6 +18,10 @@ def init_pool(*, min_size: int = 2, max_size: int = 10) -> ConnectionPool:
         conninfo=settings.database_url,
         min_size=min_size,
         max_size=max_size,
+        # Drop dead connections after PostGIS/Docker idle resets (login 500s).
+        check=ConnectionPool.check_connection,
+        max_idle=300,
+        max_lifetime=3600,
         kwargs={"row_factory": dict_row},
         open=True,
     )

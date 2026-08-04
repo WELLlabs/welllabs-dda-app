@@ -2,6 +2,7 @@
 
 import json
 import logging
+import math
 import shutil
 import sqlite3
 import subprocess
@@ -16,7 +17,11 @@ from qfieldcloud_sdk import sdk
 from app.shared.config import settings
 from app.shared.database import db_cursor
 from app.shared import s3_storage
-from app.modules.diagnose.services.layer_catalog import get_layer_for_key
+from app.modules.diagnose.services.layer_catalog import (
+    get_catalog,
+    get_layer_for_key,
+    display_name_for_key,
+)
 from app.modules.diagnose.services.package_progress import PackageProgress
 from app.modules.diagnose.services.qgis_package import build_qfield_project_with_qgis
 from app.modules.diagnose.services.s3_cleanup import cleanup_project_s3
@@ -269,46 +274,280 @@ def _validate_geotiff(path: Path) -> None:
         )
 
 
+def _rio_colormap_palette(
+    colormap_name: str = "gist_earth",
+    *,
+    steps: int = 32,
+) -> list[tuple[float, int, int, int, int]]:
+    """Sample rio-tiler colormap (same as Diagnose web tiles) into gdaldem stops."""
+    try:
+        from rio_tiler.colormap import cmap as rio_cmaps
+
+        table = rio_cmaps.get(colormap_name)
+    except Exception:
+        try:
+            from rio_tiler.colormap import cmap as rio_cmaps
+
+            table = rio_cmaps.get("gist_earth")
+        except Exception:
+            # Offline fallback approximating gist_earth (blue → green → yellow → white)
+            return [
+                (0.00, 0, 0, 0, 255),
+                (0.12, 21, 56, 120, 255),
+                (0.25, 42, 115, 126, 255),
+                (0.37, 59, 141, 98, 255),
+                (0.50, 93, 160, 75, 255),
+                (0.62, 153, 174, 88, 255),
+                (0.75, 188, 170, 98, 255),
+                (0.87, 218, 182, 159, 255),
+                (1.00, 253, 250, 250, 255),
+            ]
+
+    palette: list[tuple[float, int, int, int, int]] = []
+    last = max(steps - 1, 1)
+    for i in range(steps):
+        frac = i / last
+        idx = int(round(frac * 255))
+        rgba = table[idx]
+        r, g, b = int(rgba[0]), int(rgba[1]), int(rgba[2])
+        a = int(rgba[3]) if len(rgba) > 3 else 255
+        palette.append((frac, r, g, b, a))
+    return palette
+
+
+def _write_continuous_color_file(
+    path: Path,
+    nodata: float | int | None = -9999,
+    *,
+    vmin: float | None = None,
+    vmax: float | None = None,
+    colormap_name: str = "gist_earth",
+) -> None:
+    """Write a DEM color ramp matching Diagnose web tiles (rio-tiler colormap).
+
+    Stops are stretched across the watershed clip min/max so local relief uses the
+    full ramp (same approach as tile rescale in layers.py).
+    """
+    palette = _rio_colormap_palette(colormap_name)
+    lines: list[str] = []
+    if nodata is not None:
+        lines.append(f"{nodata} 0 0 0 0")
+
+    if vmin is not None and vmax is not None and math.isfinite(vmin) and math.isfinite(vmax):
+        lo, hi = float(vmin), float(vmax)
+        if hi <= lo:
+            hi = lo + 1.0
+        span = hi - lo
+        for frac, r, g, b, a in palette:
+            elev = lo + frac * span
+            lines.append(f"{elev:.6f} {r} {g} {b} {a}")
+    else:
+        for frac, r, g, b, a in palette:
+            lines.append(f"{int(round(frac * 100))}% {r} {g} {b} {a}")
+
+    lines.append("nv 0 0 0 0")
+    path.write_text("\n".join(lines) + "\n")
+
+
+def _dem_valid_mask(arr, nodata: float | int | None):
+    """Mask valid elevation pixels — drop nodata and common cutline fill (0)."""
+    import numpy as np
+
+    valid = np.isfinite(arr)
+    if nodata is not None:
+        valid &= arr != float(nodata)
+    # gdalwarp often leaves 0 outside the cutline even with -dstnodata; those zeros
+    # previously pulled the color stretch to 0→max so real elevations looked beige.
+    if nodata is not None and float(nodata) != 0.0 and arr.size:
+        zero_frac = float((arr == 0).mean())
+        if zero_frac > 0.01:
+            valid &= arr != 0.0
+    return valid
+
+
+def _dem_minmax(path: Path, nodata: float | int | None) -> tuple[float, float] | None:
+    """Return robust (p2, p98) elevation range for a DEM clip."""
+    try:
+        import numpy as np
+        import rasterio
+    except ImportError:
+        return None
+    with rasterio.open(path) as ds:
+        arr = ds.read(1, masked=False).astype("float64")
+    valid = _dem_valid_mask(arr, nodata)
+    if not valid.any():
+        return None
+    vals = arr[valid]
+    lo = float(np.percentile(vals, 2))
+    hi = float(np.percentile(vals, 98))
+    if not math.isfinite(lo) or not math.isfinite(hi):
+        return None
+    if hi <= lo:
+        lo = float(vals.min())
+        hi = float(vals.max())
+        if hi <= lo:
+            hi = lo + 1.0
+    return lo, hi
+
+
+def _colorize_continuous_geotiff(
+    gray_tif: Path,
+    rgba_tif: Path,
+    *,
+    nodata: float | int | None,
+    colormap_name: str = "gist_earth",
+) -> tuple[float, float]:
+    """Colorize a single-band DEM clip like Diagnose web tiles (rio-tiler LUT + p2–p98)."""
+    import numpy as np
+    import rasterio
+    from rasterio.enums import ColorInterp
+    from rio_tiler.colormap import cmap as rio_cmaps
+
+    with rasterio.open(gray_tif) as ds:
+        arr = ds.read(1).astype(np.float32)
+        profile = ds.profile.copy()
+
+    valid = _dem_valid_mask(arr, nodata)
+    if not valid.any():
+        raise RuntimeError(f"DEM clip has no valid pixels: {gray_tif}")
+
+    vals = arr[valid]
+    lo = float(np.percentile(vals, 2))
+    hi = float(np.percentile(vals, 98))
+    if hi <= lo:
+        lo = float(vals.min())
+        hi = float(vals.max())
+        if hi <= lo:
+            hi = lo + 1.0
+
+    scaled = np.zeros(arr.shape, dtype=np.uint8)
+    scaled[valid] = np.clip((vals - lo) / (hi - lo) * 255.0, 0, 255).astype(np.uint8)
+
+    try:
+        table = rio_cmaps.get(colormap_name)
+    except Exception:
+        table = rio_cmaps.get("gist_earth")
+    lut = np.zeros((256, 4), dtype=np.uint8)
+    for i in range(256):
+        rgba = table.get(i, (0, 0, 0, 255))
+        lut[i, 0] = int(rgba[0])
+        lut[i, 1] = int(rgba[1])
+        lut[i, 2] = int(rgba[2])
+        lut[i, 3] = int(rgba[3]) if len(rgba) > 3 else 255
+
+    out = lut[scaled]
+    out[~valid, 3] = 0
+
+    profile.update(
+        driver="GTiff",
+        count=4,
+        dtype="uint8",
+        nodata=None,
+        compress="deflate",
+        tiled=True,
+        blockxsize=256,
+        blockysize=256,
+        photometric="RGB",
+    )
+    for key in ("nbits", "pixeltype"):
+        profile.pop(key, None)
+
+    with rasterio.open(rgba_tif, "w", **profile) as dst:
+        dst.write(out[:, :, 0], 1)
+        dst.write(out[:, :, 1], 2)
+        dst.write(out[:, :, 2], 3)
+        dst.write(out[:, :, 3], 4)
+        dst.colorinterp = (
+            ColorInterp.red,
+            ColorInterp.green,
+            ColorInterp.blue,
+            ColorInterp.alpha,
+        )
+    return lo, hi
+
+
 def _clip_to_geotiff(
     src_vsis3: str,
     dest: Path,
     cutline: Path,
-    colormap_file: Path,
+    colormap_file: Path | None,
     extent: list[float] | None,
     progress: PackageProgress | None = None,
+    *,
+    continuous: bool = False,
+    nodata: float | int | None = None,
+    colormap_name: str = "gist_earth",
 ) -> None:
-    """Clip remote COG, apply LULC palette, and write a tiled RGBA GeoTIFF."""
+    """Clip remote COG to watershed GeoTIFF (palette for categorical, ramp for continuous)."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     work_dir = dest.parent / "_raster_work"
     work_dir.mkdir(parents=True, exist_ok=True)
     gray_tif = work_dir / "clip_gray.tif"
     rgb_tif = work_dir / "clip_rgba.tif"
     ts_x, ts_y = _target_dimensions(extent, settings.qfield_raster_max_pixels)
+    resample = "bilinear" if continuous else "near"
 
-    _run_gdal(
-        [
-            "gdalwarp",
-            "-cutline",
-            str(cutline),
-            "-cutline_srs",
-            "EPSG:4326",
-            "-crop_to_cutline",
-            "-ts",
-            str(ts_x),
-            str(ts_y),
-            "-r",
-            "near",
-            "-of",
-            "GTiff",
-            src_vsis3,
-            str(gray_tif),
-        ],
-        progress,
-    )
-    _run_gdal(
-        ["gdaldem", "color-relief", str(gray_tif), str(colormap_file), str(rgb_tif), "-alpha"],
-        progress,
-    )
+    warp_cmd = [
+        "gdalwarp",
+        "-cutline",
+        str(cutline),
+        "-cutline_srs",
+        "EPSG:4326",
+        "-crop_to_cutline",
+        "-ts",
+        str(ts_x),
+        str(ts_y),
+        "-r",
+        resample,
+        "-of",
+        "GTiff",
+    ]
+    # Preserve nodata so DEM color stretch uses real elevations only
+    if continuous and nodata is not None:
+        warp_cmd.extend(["-dstnodata", str(nodata)])
+    warp_cmd.extend([src_vsis3, str(gray_tif)])
+    _run_gdal(warp_cmd, progress)
+
+    # Continuous DEM: colorize like Diagnose web tiles (rio LUT + p2–p98).
+    # Avoid gdaldem here — fill zeros were stretching the ramp so blues/greens vanished.
+    if continuous:
+        lo, hi = _colorize_continuous_geotiff(
+            gray_tif,
+            rgb_tif,
+            nodata=nodata,
+            colormap_name=colormap_name,
+        )
+        logger.info("DEM colorized with %s over %.1f–%.1f m", colormap_name, lo, hi)
+        if progress:
+            progress.log(f"DEM colored ({colormap_name}) for {lo:.0f}–{hi:.0f} m")
+        if colormap_file is not None:
+            _write_continuous_color_file(
+                colormap_file,
+                nodata=nodata,
+                vmin=lo,
+                vmax=hi,
+                colormap_name=colormap_name,
+            )
+        translate_src = rgb_tif
+        photometric = ["-co", "PHOTOMETRIC=RGB"]
+    elif colormap_file is not None and colormap_file.is_file():
+        _run_gdal(
+            [
+                "gdaldem",
+                "color-relief",
+                str(gray_tif),
+                str(colormap_file),
+                str(rgb_tif),
+                "-alpha",
+            ],
+            progress,
+        )
+        translate_src = rgb_tif
+        photometric = ["-co", "PHOTOMETRIC=RGB"]
+    else:
+        translate_src = gray_tif
+        photometric = []
+
     _run_gdal(
         [
             "gdal_translate",
@@ -318,9 +557,8 @@ def _clip_to_geotiff(
             "COMPRESS=DEFLATE",
             "-co",
             "TILED=YES",
-            "-co",
-            "PHOTOMETRIC=RGB",
-            str(rgb_tif),
+            *photometric,
+            str(translate_src),
             str(dest),
         ],
         progress,
@@ -341,6 +579,9 @@ def _prune_package_dir(package_dir: Path, project_name: str) -> None:
     for path in package_dir.glob("*.tif"):
         keep_names.add(path.name)
     for path in package_dir.glob("*.tif.aux.xml"):
+        keep_names.add(path.name)
+    # Secondary / reference vectors clipped for the watershed
+    for path in package_dir.glob("secondary_*.gpkg"):
         keep_names.add(path.name)
 
     for path in list(package_dir.iterdir()):
@@ -372,6 +613,8 @@ def _cleanup_stale_rasters(package_dir: Path) -> None:
         path.unlink()
     for path in package_dir.glob("*_colors.txt"):
         path.unlink()
+    for path in package_dir.glob("secondary_*.gpkg"):
+        path.unlink(missing_ok=True)
     raster_dir = package_dir / "rasters"
     if raster_dir.exists():
         shutil.rmtree(raster_dir)
@@ -382,46 +625,185 @@ def _build_watershed_rasters(
     cutline: Path,
     extent: list[float] | None,
     progress: PackageProgress | None = None,
-) -> list[str]:
+) -> list[dict]:
+    """Clip all enabled COG layers. Returns [{filename, name}, ...]."""
     if not s3_storage.is_s3_enabled():
         return []
 
-    raster_filenames: list[str] = []
+    raster_layers: list[dict] = []
     for key in settings.cog_layers.split(","):
         key = key.strip()
         if not key:
             continue
-        name = _layer_name_from_key(key)
-        tif_name = f"{name}.tif"
+        stem = _layer_name_from_key(key)
+        tif_name = f"{stem}.tif"
         dest = package_dir / tif_name
         src = f"/vsis3/{settings.aws_s3_bucket}/{key}"
         layer_cfg = get_layer_for_key(key)
-        if not layer_cfg or layer_cfg.render_type != "categorical":
-            raise ValueError(
-                f"No categorical render config for COG '{key}'. "
-                "Add a layers.yaml entry with render.type=categorical."
-            )
-        colormap_file = package_dir / f"{name}_colors.txt"
-        layer_cfg.write_gdaldem_color_file(colormap_file)
-        logger.info("Clipping s3://%s/%s to watershed GeoTIFF", settings.aws_s3_bucket, key)
-        if progress:
-            progress.log(f"Clipping {name} to watershed GeoTIFF")
-        _clip_to_geotiff(src, dest, cutline, colormap_file, extent, progress)
-        raster_filenames.append(tif_name)
+        display = (layer_cfg.name if layer_cfg else None) or display_name_for_key(key)
 
-    # Remove any old .tif/.tif.aux.xml files that are no longer part of COG_LAYERS.
-    # This prevents stale rasters from being uploaded to QField Cloud.
-    current_tifs = set(raster_filenames)
+        try:
+            if layer_cfg and layer_cfg.render_type == "categorical":
+                colormap_file = package_dir / f"{stem}_colors.txt"
+                layer_cfg.write_gdaldem_color_file(colormap_file)
+                continuous = False
+            elif layer_cfg and layer_cfg.render_type == "continuous":
+                colormap_file = package_dir / f"{stem}_colors.txt"
+                continuous = True
+            else:
+                logger.warning("Skipping COG '%s' — no layers.yaml render config", key)
+                if progress:
+                    progress.log(f"Skipping {display}: no render config")
+                continue
+
+            logger.info("Clipping s3://%s/%s to watershed GeoTIFF", settings.aws_s3_bucket, key)
+            if progress:
+                progress.log(f"Clipping {display} to watershed GeoTIFF")
+            cmap_name = "gist_earth"
+            if layer_cfg and layer_cfg.render_type == "continuous":
+                cmap_name = str(layer_cfg.continuous.get("colormap") or "gist_earth")
+            _clip_to_geotiff(
+                src,
+                dest,
+                cutline,
+                colormap_file,
+                extent,
+                progress,
+                continuous=continuous,
+                nodata=layer_cfg.nodata if layer_cfg else None,
+                colormap_name=cmap_name,
+            )
+            raster_layers.append({"filename": tif_name, "name": display})
+        except Exception as exc:
+            logger.exception("Failed to package raster %s: %s", key, exc)
+            if progress:
+                progress.log(f"Skipped {display}: {exc}")
+
+    current_tifs = {item["filename"] for item in raster_layers}
     for orphan in package_dir.glob("*.tif"):
         if orphan.name not in current_tifs:
             logger.info("Removing orphaned raster: %s", orphan.name)
             orphan.unlink(missing_ok=True)
     for orphan in package_dir.glob("*.tif.aux.xml"):
-        stem = orphan.name.replace(".tif.aux.xml", ".tif")
-        if stem not in current_tifs:
+        stem_tif = orphan.name.replace(".tif.aux.xml", ".tif")
+        if stem_tif not in current_tifs:
             orphan.unlink(missing_ok=True)
 
-    return raster_filenames
+    return raster_layers
+
+
+def _enabled_vector_keys() -> set[str]:
+    return {k.strip() for k in (settings.vector_layers or "").split(",") if k.strip()}
+
+
+def _vector_style_payload(cfg) -> dict:
+    """JSON-serializable style for the QGIS builder (colors + legend labels)."""
+    return {
+        "render_type": cfg.render_type,
+        "style_column": cfg.style_column,
+        "label_column": cfg.label_column,
+        "classes": [
+            {"value": entry.value, "label": entry.label, "color": entry.color}
+            for entry in cfg.legend_entries()
+        ],
+        "choropleth_stops": [
+            {
+                "min": stop.min,
+                "max": stop.max,
+                "label": stop.label,
+                "color": stop.color,
+            }
+            for stop in cfg.choropleth_stops
+        ],
+    }
+
+
+def _export_secondary_vectors(
+    package_dir: Path,
+    watershed_geom: dict,
+    progress: PackageProgress | None = None,
+) -> list[dict]:
+    """Clip enabled VECTOR_LAYERS to the watershed and write one GPKG per catalog layer.
+
+    Shared s3_keys (villages / resilience) are clipped once, then exported once per
+    thematic catalog entry so each keeps its own colors and legend in QField.
+    Returns [{filename, name, layername, render_type, ...}, ...].
+    """
+    from app.modules.diagnose.services.layer_analysis import clip_vector_geojson
+    from app.modules.diagnose.services.terrain_drape import _prepare_style_column
+
+    enabled = _enabled_vector_keys()
+    if not enabled or not s3_storage.is_s3_enabled():
+        return []
+
+    # Clip each unique s3_key once
+    clipped_by_key: dict[str, dict] = {}
+    exports: list[dict] = []
+    for cfg in get_catalog().vector_layers():
+        if cfg.s3_key not in enabled:
+            continue
+        if not cfg.map_render:
+            continue
+
+        display = cfg.name
+        gpkg_name = f"secondary_{cfg.id}.gpkg"
+        layername = cfg.id
+        dest = package_dir / gpkg_name
+        if progress:
+            progress.log(f"Clipping {display} to watershed GeoPackage")
+        try:
+            if cfg.s3_key not in clipped_by_key:
+                clipped_by_key[cfg.s3_key] = clip_vector_geojson(
+                    cfg.s3_key, "", watershed_geom
+                )
+            geojson = clipped_by_key[cfg.s3_key]
+            features = geojson.get("features") or []
+            if not features:
+                logger.info("No features in watershed for %s — writing empty GPKG", cfg.id)
+
+            import geopandas as gpd
+            from shapely.geometry import shape
+
+            rows = []
+            for feat in features:
+                props = dict(feat.get("properties") or {})
+                geom = feat.get("geometry")
+                if not geom:
+                    continue
+                props["geometry"] = shape(geom)
+                rows.append(props)
+            if rows:
+                gdf = gpd.GeoDataFrame(rows, crs="EPSG:4326")
+            else:
+                gdf = gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
+
+            # Materialize style_column (WISER ranks, pct_scst, aquifer labels, …)
+            gdf, _ = _prepare_style_column(gdf, cfg)
+
+            if dest.exists():
+                dest.unlink()
+            gdf.to_file(dest, layer=layername, driver="GPKG")
+            payload = {
+                "filename": gpkg_name,
+                "name": display,
+                "layername": layername,
+                **_vector_style_payload(cfg),
+            }
+            exports.append(payload)
+            logger.info(
+                "Secondary vector %s (%s) → %s (%d features, style=%s)",
+                cfg.id,
+                cfg.s3_key,
+                gpkg_name,
+                len(features),
+                cfg.render_type,
+            )
+        except Exception as exc:
+            logger.exception("Failed to package vector %s: %s", cfg.id, exc)
+            if progress:
+                progress.log(f"Skipped {display}: {exc}")
+
+    return exports
 
 
 def _get_or_create_project(client: sdk.Client, name: str) -> dict:
@@ -493,8 +875,8 @@ def _get_user_qfield_token(user_id: str) -> tuple[str, str]:
         cur.execute(
             """
             SELECT qfield_username, qfield_token AS token
-            FROM users
-            WHERE id = %(uid)s AND qfield_token IS NOT NULL AND qfield_token <> ''
+            FROM user_qfield_credentials
+            WHERE user_id = %(uid)s AND qfield_token IS NOT NULL AND qfield_token <> ''
             """,
             {"uid": user_id},
         )
@@ -513,7 +895,7 @@ def _sync_qfield_collaborators(
     with db_cursor() as cur:
         cur.execute(
             """
-            SELECT DISTINCT u.qfield_username
+            SELECT DISTINCT qc.qfield_username
             FROM (
                 SELECT user_id FROM diagnosis_users WHERE diagnosis_id = %(pid)s
                 UNION
@@ -521,12 +903,12 @@ def _sync_qfield_collaborators(
                     JOIN org_members om ON om.org_id = do.org_id
                 WHERE do.diagnosis_id = %(pid)s
             ) shared
-            JOIN users u ON u.id = shared.user_id
-            WHERE u.qfield_username IS NOT NULL
-              AND u.qfield_username <> ''
-              AND u.qfield_token IS NOT NULL
-              AND u.qfield_token <> ''
-              AND u.qfield_username != %(owner)s
+            JOIN user_qfield_credentials qc ON qc.user_id = shared.user_id
+            WHERE qc.qfield_username IS NOT NULL
+              AND qc.qfield_username <> ''
+              AND qc.qfield_token IS NOT NULL
+              AND qc.qfield_token <> ''
+              AND qc.qfield_username != %(owner)s
             """,
             {"pid": project_id, "owner": owner_username},
         )
@@ -585,16 +967,25 @@ def package_and_upload(
         f"{hypotheses_gpkg.stat().st_size // 1024} KB)",
     )
 
-    step(40, "Building watershed GeoTIFF from COG…")
-    raster_filenames = _build_watershed_rasters(package_dir, cutline, extent, progress)
-    if raster_filenames:
-        step(60, f"GeoTIFF ready ({len(raster_filenames)} layer(s))")
+    step(40, "Building watershed GeoTIFFs from COGs…")
+    raster_layers = _build_watershed_rasters(package_dir, cutline, extent, progress)
+    if raster_layers:
+        step(55, f"GeoTIFF ready ({len(raster_layers)} layer(s))")
     else:
-        step(60, "No COG layers configured — skipping raster")
+        step(55, "No COG layers configured — skipping rasters")
+
+    step(56, "Clipping secondary vector layers…")
+    watershed_geom = row["watershed_geojson"]
+    if isinstance(watershed_geom, str):
+        watershed_geom = json.loads(watershed_geom)
+    secondary_vectors = _export_secondary_vectors(package_dir, watershed_geom, progress)
+    if secondary_vectors:
+        step(62, f"Secondary vectors ready ({len(secondary_vectors)} layer(s))")
+    else:
+        step(62, "No secondary vectors configured — skipping")
 
     zone_colors = _fetch_zone_colors(project_id)
     step(65, "Generating QGIS project with PyQGIS…")
-    raster_filename = raster_filenames[0] if raster_filenames else None
 
     # Read layer IDs from any existing .qgs before deleting it, so we can
     # restore them after the rebuild and keep QField Cloud layer references stable.
@@ -622,7 +1013,8 @@ def package_and_upload(
         package_dir,
         project_name,
         project_id,
-        raster_filename=raster_filename,
+        rasters=raster_layers,
+        secondary_vectors=secondary_vectors,
         zone_colors=zone_colors,
         extent=extent,
     )

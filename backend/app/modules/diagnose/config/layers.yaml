@@ -17,6 +17,7 @@ colors:
 layers:
   # ── Raster COGs ──────────────────────────────────────────────────────────
   - id: lulc250k
+    category: Hydrology & Landscape Controls
     s3_key: rasters/lulc250k_2023_24_classed_cog.tif
     name: LULC 250k 2023-24
     source: cog
@@ -55,6 +56,7 @@ layers:
       - { id: dominant_class, type: zonal_majority }
 
   - id: dem
+    category: Hydrology & Landscape Controls
     s3_key: rasters/dem_india.tif
     name: DEM
     source: cog
@@ -72,6 +74,7 @@ layers:
       Verify flow paths, nala condition, erosion marks, slope breaks, and seasonal retention.
 
   - id: aquifers
+    category: Hydrology & Landscape Controls
     s3_key: vector/aquifers.fgb
     name: Aquifers
     source: vector_fgb
@@ -105,6 +108,7 @@ layers:
       Verify local depth, yield, and well behaviour before deciding recharge or extraction actions.
 
   - id: gw_stress_wiser
+    category: WISER Outcome Layers
     s3_key: vector/gw_stress.fgb
     name: WISER Groundwater Stress
     source: vector_fgb
@@ -127,6 +131,7 @@ layers:
       Check well depth, seasonal failure, new borewells, yields, pumping intensity, and recharge response.
 
   - id: irrigation_access_wiser
+    category: WISER Outcome Layers
     s3_key: vector/village_resilience.fgb
     name: Irrigation Access from Cropping Intensity (WISER)
     source: vector_fgb
@@ -149,6 +154,7 @@ layers:
       Verify the source of irrigation, reliability across seasons, equity between farms or hamlets, and whether access depends on unsustainable groundwater pumping.
 
   - id: kharif_resilience_wiser
+    category: WISER Outcome Layers
     s3_key: vector/village_resilience.fgb
     name: Kharif Crop Resilience in Deficient Rainfall Years (WISER)
     source: vector_fgb
@@ -171,6 +177,7 @@ layers:
       Check rainfall buffering, soil moisture, protective irrigation, crop choice, and livelihood coping.
 
   - id: rabi_resilience_wiser
+    category: WISER Outcome Layers
     s3_key: vector/village_resilience.fgb
     name: Rabi Crop Resilience in Deficient Rainfall Years (WISER)
     source: vector_fgb
@@ -192,7 +199,26 @@ layers:
     field_check: >-
       Test winter irrigation dependence, groundwater reliability, and tail-end access.
 
+  - id: village_boundaries
+    category: Reference
+    s3_key: vector/villages.fgb
+    name: Village Boundaries
+    source: vector_fgb
+    # Outline overlay — toggle independently of thematic choropleths
+    map_render: true
+    render:
+      type: outline
+      # Truncated column name in villages.fgb ("Village Name")
+      label_column: "Village Na"
+    meaning: >-
+      Village polygons for orientation: outlines and names only, no thematic fill.
+    uncertainty: >-
+      Boundary geometry and names follow the census village layer; local hamlets may differ.
+    field_check: >-
+      Confirm village names and extents with local facilitators when planning visits.
+
   - id: baseline_population
+    category: Social & Demographic Profile
     s3_key: vector/villages.fgb
     name: Baseline Population
     source: vector_fgb
@@ -217,6 +243,7 @@ layers:
       Confirm hamlets/groups with weaker access, time burden, costs, plot locations, and exclusion from decisions.
 
   - id: marginalized_scst
+    category: Social & Demographic Profile
     s3_key: vector/villages.fgb
     name: Marginalized Population (% SC/ST)
     source: vector_fgb
@@ -240,6 +267,7 @@ layers:
       Confirm hamlets/groups with weaker access, time burden, costs, plot locations, and exclusion from decisions.
 
   - id: jrc_occurrence
+    category: Surface Water Dynamics
     s3_key: rasters/jrc_occurrence_india_2024.tif
     name: JRC Surface Water Occurrence (1984-2024)
     source: cog
@@ -264,6 +292,7 @@ layers:
       Verify current water presence, depth, quality, seasonality, and usability for irrigation or livestock.
 
   - id: jrc_transitions
+    category: Surface Water Dynamics
     s3_key: rasters/jrc_transition_india_2024.tif
     name: JRC Surface Water Transitions (1984-2024)
     source: cog

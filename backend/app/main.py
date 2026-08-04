@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from app.modules.accounts.routers import auth, orgs, qfield_account, users
 from app.modules.assess.routers import access as assess_access
@@ -18,6 +19,14 @@ from app.modules.diagnose.routers import (
 )
 from app.shared.config import settings
 from app.shared.database import close_pool, init_pool
+from app.shared.forwarded_host import ForwardedHostMiddleware
+from app.shared.users.db import engine as users_async_engine
+
+# Metabase router is optional until Assess ships the module.
+try:
+    from app.modules.assess.routers import metabase as metabase_router
+except ImportError:  # pragma: no cover
+    metabase_router = None
 
 
 @asynccontextmanager
@@ -27,13 +36,18 @@ async def lifespan(_app: FastAPI):
         yield
     finally:
         close_pool()
+        await users_async_engine.dispose()
 
 
 app = FastAPI(title="DDA Product API", version="0.3.0", lifespan=lifespan)
 
+# Honor X-Forwarded-* from the Vite/SvelteKit /api proxy (localhost:5173/5174)
+app.add_middleware(ForwardedHostMiddleware)
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.frontend_origin],
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -56,7 +70,7 @@ app.include_router(field_notes.router, prefix="/api/diagnose/field-notes", tags=
 app.include_router(hypotheses.router, prefix="/api/diagnose/hypotheses", tags=["diagnose:hypotheses"])
 app.include_router(qfield.router, prefix="/api/diagnose/qfield", tags=["diagnose:qfield"])
 
-# Design and Assess modules — boilerplate, filled in as those flows are built.
+# Design and Assess modules
 app.include_router(design.router, prefix="/api/design", tags=["design"])
 app.include_router(assess.router, prefix="/api/assess", tags=["assess"])
 app.include_router(
@@ -69,6 +83,12 @@ app.include_router(
     prefix="/api/assess/projects",
     tags=["assess:reports"],
 )
+if metabase_router is not None:
+    app.include_router(
+        metabase_router.router,
+        prefix="/api/assess/metabase",
+        tags=["assess:metabase"],
+    )
 
 
 @app.get("/health")

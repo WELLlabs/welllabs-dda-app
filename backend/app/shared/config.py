@@ -42,7 +42,36 @@ class Settings(BaseSettings):
     session_ttl_days: int = 30
     session_cookie_secure: bool = False
 
+    # FastAPI Users / JWT
+    auth_jwt_secret: str = "change-me-in-production"
+    # Internal API URL for server-side tooling — browsers should use the Vite
+    # origin (5173/5174) and the /api proxy, not this URL directly.
+    api_public_url: str = "http://localhost:8080"
+
+    # Brevo transactional email (optional in local — sends are skipped if unset)
+    brevo_api_key: str = ""
+    brevo_sender_email: str = ""
+    brevo_sender_name: str = "Water Security Tool"
+
+    # Google OAuth (optional — Google button disabled if unset)
+    google_oauth_client_id: str = ""
+    google_oauth_client_secret: str = ""
+
     model_config = {"env_file": ".env", "extra": "ignore"}
+
+    @property
+    def cors_origins(self) -> list[str]:
+        """Browser origins allowed to call the API with credentials.
+
+        Local Vite may bind 5173 or fall back to 5174 — allow both (and 127.0.0.1).
+        """
+        origins = [self.frontend_origin.rstrip("/")]
+        for host in ("localhost", "127.0.0.1"):
+            for port in (5173, 5174):
+                origin = f"http://{host}:{port}"
+                if origin not in origins:
+                    origins.append(origin)
+        return origins
 
 
 settings = Settings()

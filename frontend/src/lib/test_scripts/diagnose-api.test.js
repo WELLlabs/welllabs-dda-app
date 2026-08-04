@@ -36,17 +36,18 @@ describe('diagnose api', () => {
 	it('fetchProjects and fetchProject hit project endpoints', async () => {
 		mockJson([{ id: 'p1' }]);
 		await expect(fetchProjects()).resolves.toEqual([{ id: 'p1' }]);
-		expect(fetch).toHaveBeenCalledWith('/api/diagnose/projects', undefined);
+		expect(fetch).toHaveBeenCalledWith('/api/diagnose/projects', { credentials: 'include' });
 
 		mockJson({ id: 'p1', name: 'North' });
 		await expect(fetchProject('p1')).resolves.toEqual({ id: 'p1', name: 'North' });
-		expect(fetch).toHaveBeenCalledWith('/api/diagnose/projects/p1', undefined);
+		expect(fetch).toHaveBeenCalledWith('/api/diagnose/projects/p1', { credentials: 'include' });
 	});
 
 	it('createProject posts name and coordinates', async () => {
 		mockJson({ id: 'p1' });
 		await createProject('North', 77.5, 12.9);
 		expect(fetch).toHaveBeenCalledWith('/api/diagnose/projects', {
+			credentials: 'include',
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({ name: 'North', lng: 77.5, lat: 12.9 })
@@ -56,7 +57,7 @@ describe('diagnose api', () => {
 	it('deleteProject issues DELETE', async () => {
 		fetch.mockResolvedValue({ ok: true, status: 204 });
 		await deleteProject('p1');
-		expect(fetch).toHaveBeenCalledWith('/api/diagnose/projects/p1', { method: 'DELETE' });
+		expect(fetch).toHaveBeenCalledWith('/api/diagnose/projects/p1', { credentials: 'include', method: 'DELETE' });
 	});
 
 	it('user access helpers read and mutate members', async () => {
@@ -66,6 +67,7 @@ describe('diagnose api', () => {
 		mockJson({ id: 'u2' });
 		await addUserAccess('p1', 'a@b.com');
 		expect(fetch).toHaveBeenCalledWith('/api/diagnose/projects/p1/access/users', {
+			credentials: 'include',
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({ email: 'a@b.com' })
@@ -74,6 +76,7 @@ describe('diagnose api', () => {
 		fetch.mockResolvedValue({ ok: true, status: 204 });
 		await removeUserAccess('p1', 'u1');
 		expect(fetch).toHaveBeenCalledWith('/api/diagnose/projects/p1/access/users/u1', {
+			credentials: 'include',
 			method: 'DELETE'
 		});
 	});
@@ -85,6 +88,7 @@ describe('diagnose api', () => {
 		mockJson({ id: 'grant1' });
 		await addOrgAccess('p1', 'o1');
 		expect(fetch).toHaveBeenCalledWith('/api/diagnose/projects/p1/access/orgs', {
+			credentials: 'include',
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({ org_id: 'o1' })
@@ -93,6 +97,7 @@ describe('diagnose api', () => {
 		fetch.mockResolvedValue({ ok: true, status: 204 });
 		await removeOrgAccess('p1', 'o1');
 		expect(fetch).toHaveBeenCalledWith('/api/diagnose/projects/p1/access/orgs/o1', {
+			credentials: 'include',
 			method: 'DELETE'
 		});
 	});
@@ -101,6 +106,7 @@ describe('diagnose api', () => {
 		mockJson({ name: 'WS-1' });
 		await lookupWatershed(77.1, 12.2);
 		expect(fetch).toHaveBeenCalledWith('/api/diagnose/watersheds/lookup', {
+			credentials: 'include',
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({ lng: 77.1, lat: 12.2 })

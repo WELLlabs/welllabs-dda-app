@@ -13,6 +13,10 @@ export default defineConfig({
 		globals: true
 	},
 	server: {
+		host: 'localhost',
+		port: 5173,
+		// If 5173 is taken, Vite moves to 5174 (and so on). Prefer staying on 517x.
+		strictPort: false,
 		proxy: {
 			// /api is handled by src/routes/api/[...path]/+server.js (SvelteKit),
 			// not Vite — keeping both causes inconsistent behaviour.

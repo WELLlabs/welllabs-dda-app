@@ -1,8 +1,11 @@
 # API Reference
 
-Base URL: `http://localhost:8080`
+Base URL (direct): `http://localhost:8080`  
+Browser (dev): `http://localhost:5173` or `:5174` — `/api/*` proxied to FastAPI.
 
-All endpoints under `/api/` require authentication via an HttpOnly session cookie unless noted otherwise. The session is set automatically on login/register.
+Authenticated endpoints require the HttpOnly JWT cookie `dda_session` (set on login /
+Google OAuth callback). Register does **not** set a session until the user verifies and logs in.
+Protected APIs require an **active and verified** user.
 
 ## Health
 
@@ -18,10 +21,17 @@ All endpoints under `/api/` require authentication via an HttpOnly session cooki
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| POST | `/register` | No | Create account. Body: `{email, name, password}`. Sets session cookie. Returns user object. |
-| POST | `/login` | No | Authenticate. Body: `{email, password}`. Sets session cookie. Returns user object. |
+| POST | `/register` | No | Create account. JSON `{email, name, password}` (password ≥ 8). Sends verification email via Brevo when configured. Does **not** set a session cookie. |
+| POST | `/login` | No | Form body `username` (email) + `password` (`application/x-www-form-urlencoded`). Sets `dda_session` only if verified. Returns 204. |
 | POST | `/logout` | No | Clears session cookie. |
-| GET | `/me` | Yes | Returns the current user from the session. |
+| GET | `/me` | Yes | Current user `{id, email, name, created_at}`. |
+| POST | `/request-verify-token` | No | JSON `{email}` — resend verification (202). |
+| POST | `/verify` | No | JSON `{token}` — mark email verified. |
+| POST | `/forgot-password` | No | JSON `{email}` — send reset email (202). |
+| POST | `/reset-password` | No | JSON `{token, password}`. |
+| PATCH | `/users/me` | Yes | Update profile (e.g. `{name}`). Used by `/complete-profile`. |
+| GET | `/google/authorize` | No | Returns `{authorization_url}` when Google OAuth is configured. |
+| GET | `/google/callback` | No | OAuth callback; sets cookie and redirects (`/complete-profile` for new Google users, else `/home`). |
 
 ### Users — `/api/accounts/users`
 
@@ -46,17 +56,9 @@ All endpoints under `/api/` require authentication via an HttpOnly session cooki
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| POST | `/connect` | Yes | Link QField Cloud account. Body: `{username, password}`. Proxies login to QField Cloud API and stores the token on `users`. |
+| POST | `/connect` | Yes | Link QField Cloud account. Body: `{username, password}`. Stores token in `user_qfield_credentials`. |
 | GET | `/status` | Yes | Check connection status. Returns `{connected, qfield_username, expires_at}`. |
 | DELETE | `/disconnect` | Yes | Remove stored QField Cloud token. |
-
-### ODK Central — `/api/accounts/odk`
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| POST | `/connect` | Yes | Store ODK credentials on `users`. Body: `{username, token, expires_at?}`. |
-| GET | `/status` | Yes | Check connection status. Returns `{connected, odk_username, expires_at}`. |
-| DELETE | `/disconnect` | Yes | Remove stored ODK token. |
 
 ---
 
@@ -197,7 +199,9 @@ Management permissions:
 
 ## Authentication
 
-- Session-based with HttpOnly cookies
+- FastAPI Users cookie JWT (`CookieTransport` + `JWTStrategy`)
 - Cookie name: `dda_session` (configurable)
-- Default TTL: 30 days
+- Default TTL: 30 days (`SESSION_TTL_DAYS`)
+- Email login requires verification; Google users are verified by default
 - Set `SESSION_COOKIE_SECURE=true` in production (requires HTTPS)
+- Details: [auth.md](auth.md)

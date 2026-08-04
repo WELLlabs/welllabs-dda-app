@@ -1,30 +1,41 @@
 CREATE EXTENSION IF NOT EXISTS postgis;
 
--- Users: email/password accounts, shared across all modules
+-- Users: FastAPI Users identity (email/password + OAuth). QField tokens live elsewhere.
 CREATE TABLE users (
-    id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    email                    TEXT NOT NULL UNIQUE,
-    name                     TEXT NOT NULL,
-    password_hash            TEXT NOT NULL,
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email            TEXT NOT NULL UNIQUE,
+    hashed_password  TEXT,  -- NULL for Google/OAuth-only users
+    is_active        BOOLEAN NOT NULL DEFAULT true,
+    is_superuser     BOOLEAN NOT NULL DEFAULT false,
+    is_verified      BOOLEAN NOT NULL DEFAULT false,
+    name             TEXT NOT NULL DEFAULT '',
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- OAuth account linkage (Google, etc.) — FastAPI Users
+CREATE TABLE oauth_account (
+    id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id            UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    oauth_name         TEXT NOT NULL,
+    access_token       TEXT NOT NULL,
+    expires_at         INTEGER,
+    refresh_token      TEXT,
+    account_id         TEXT NOT NULL,
+    account_email      TEXT NOT NULL,
+    CONSTRAINT oauth_account_oauth_name_account_id_key UNIQUE (oauth_name, account_id)
+);
+
+CREATE INDEX oauth_account_user_id_idx ON oauth_account (user_id);
+
+-- Per-user QField Cloud credentials (connector secrets, not auth identity)
+CREATE TABLE user_qfield_credentials (
+    user_id                  UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     qfield_username          TEXT,
     qfield_token             TEXT,
     qfield_token_expires_at  TIMESTAMPTZ,
-    odk_username             TEXT,
-    odk_token                TEXT,
-    odk_token_expires_at     TIMESTAMPTZ,
-    created_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at               TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-
--- Sessions: opaque token issued on login/register, read from an HttpOnly cookie
-CREATE TABLE sessions (
-    token       TEXT PRIMARY KEY,
-    user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    expires_at  TIMESTAMPTZ NOT NULL
-);
-
-CREATE INDEX sessions_user_id_idx ON sessions (user_id);
 
 -- Organizations: a user can create/belong to many
 CREATE TABLE organizations (
@@ -206,6 +217,10 @@ $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER users_updated_at
     BEFORE UPDATE ON users
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TRIGGER user_qfield_credentials_updated_at
+    BEFORE UPDATE ON user_qfield_credentials
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 CREATE TRIGGER organizations_updated_at

@@ -12,7 +12,10 @@ Open the Settings screen at `/settings` from the protected app shell. It contain
 
 ## Account
 
-The Account page shows the current user’s name and email from the session. It is a lightweight profile view used to confirm which account is active before working in Diagnose or Assess.
+The Account page shows the current user’s name and email from the session. After the first
+Google sign-up, `/complete-profile` asks you to confirm a display name before entering the app.
+
+QField Cloud credentials are stored in `user_qfield_credentials`, not on the `users` row.
 
 ## Organizations
 
@@ -42,20 +45,20 @@ Users can connect their own QField Cloud account to:
 - sync field updates back into the platform
 - reuse the connected account’s token for package uploads and sync operations
 
-The app stores the username, token, and expiration timestamp on the `users` row. If the token expires, the UI shows a reconnect state.
+The app stores the username, token, and expiration timestamp in `user_qfield_credentials`. If the token expires, the UI shows a reconnect state.
 
 ### ODK Central
 
-ODK credentials are also stored on the `users` row for Assess workflows. The server-side connector endpoints exist, but the current UI does not expose a full ODK connector form yet. In practice, server-side sync still relies on environment variables such as `ODK_BASE_URL`, `ODK_USERNAME`, and `ODK_PASSWORD`.
+Assess uses **server-side** ODK Central credentials from environment variables
+(`ODK_BASE_URL`, `ODK_USERNAME`, `ODK_PASSWORD`). Per-user ODK columns on `users` were removed.
 
 ## Related backend endpoints
 
 The Settings UI uses the Accounts API endpoints under `/api/accounts`:
 
-- Auth: register, login, logout, current user
+- Auth: register, login, logout, verify, reset, Google OAuth, current user, profile update
 - Users: email lookup for invites and sharing
 - Organizations: create/list/delete orgs and manage members
-- QField: connect, status, disconnect
-- ODK: connector status and credential storage endpoints
+- QField: connect, status, disconnect (`user_qfield_credentials`)
 
-See [api.md](api.md) for the full endpoint reference.
+See [api.md](api.md) and [auth.md](auth.md).

@@ -1,56 +1,74 @@
 # Database Schema
 
-The backend uses PostgreSQL 16 with the PostGIS extension. The schema is defined in `backend/db/init.sql` and applied automatically when the PostGIS container starts for the first time.
+The backend uses PostgreSQL 16 with the PostGIS extension. The schema is defined in
+`backend/db/init.sql` and applied automatically when the PostGIS container starts for the
+first time. Auth cutovers may use `backend/db/migrations/` (prefer `docker compose down -v`
+for local clean slate).
 
 ## Entity Relationship
 
 ```
-users ──────────┬──── sessions
-                │
-                ├──── organizations ──── org_members (role: admin|member)
-                │
-                ├──── assess_projects (odk_project_id)
-                │
-                └──── diagnosis ──┬──── diagnosis_users (role: admin|member)
-                                  ├──── diagnosis_orgs
-                                  ├──── observation_zones ──┬──── hypothesis_observation_zones
-                                  ├──── hypotheses ─────────┘
-                                  └──── field_notes (optional FK → hypotheses)
+users ──┬──── oauth_account
+        ├──── user_qfield_credentials
+        ├──── organizations ──── org_members (role: admin|member)
+        ├──── assess_projects (odk_project_id)
+        └──── diagnosis ──┬──── diagnosis_users (role: admin|member)
+                          ├──── diagnosis_orgs
+                          ├──── observation_zones ──┬──── hypothesis_observation_zones
+                          ├──── hypotheses ─────────┘
+                          └──── field_notes (optional FK → hypotheses)
 ```
 
-QField and ODK connector credentials are stored as columns on `users` (not separate token tables).
+Session auth is a JWT in the HttpOnly `dda_session` cookie (no `sessions` table).
+QField tokens live in `user_qfield_credentials`. ODK Central uses env-level service credentials.
 
 ## Tables
 
 ### users
 
-Core account table. Passwords stored as bcrypt hashes. Connector tokens live on this row.
+FastAPI Users identity. Email/password users have `hashed_password`; Google-only users may
+have a generated hash or null depending on cutover. Display name is `name`.
 
 | Column | Type | Notes |
 |--------|------|-------|
 | id | UUID | PK, auto-generated |
 | email | TEXT | Unique |
-| name | TEXT | Display name |
-| password_hash | TEXT | bcrypt |
-| qfield_username | TEXT | Nullable QField Cloud username |
-| qfield_token | TEXT | Nullable QField Cloud API token |
-| qfield_token_expires_at | TIMESTAMPTZ | Nullable |
-| odk_username | TEXT | Nullable ODK Central username |
-| odk_token | TEXT | Nullable ODK Central API token |
-| odk_token_expires_at | TIMESTAMPTZ | Nullable |
+| hashed_password | TEXT | Nullable for OAuth-oriented installs |
+| is_active | BOOLEAN | Default true |
+| is_superuser | BOOLEAN | Default false |
+| is_verified | BOOLEAN | Email verified / Google default true |
+| name | TEXT | Display name (default `''`) |
 | created_at | TIMESTAMPTZ | |
 | updated_at | TIMESTAMPTZ | Auto-trigger |
 
-### sessions
+### oauth_account
 
-Opaque token-based sessions. Stored in an HttpOnly cookie on the client.
+OAuth provider linkage (e.g. Google) for FastAPI Users.
 
 | Column | Type | Notes |
 |--------|------|-------|
-| token | TEXT | PK |
+| id | UUID | PK |
 | user_id | UUID | FK → users, CASCADE |
-| created_at | TIMESTAMPTZ | |
-| expires_at | TIMESTAMPTZ | Default: 30 days from creation |
+| oauth_name | TEXT | e.g. `google` |
+| access_token | TEXT | |
+| expires_at | INTEGER | Nullable |
+| refresh_token | TEXT | Nullable |
+| account_id | TEXT | Provider subject |
+| account_email | TEXT | |
+
+Unique on `(oauth_name, account_id)`.
+
+### user_qfield_credentials
+
+Per-user QField Cloud connector secrets.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| user_id | UUID | PK, FK → users, CASCADE |
+| qfield_username | TEXT | Nullable |
+| qfield_token | TEXT | Nullable |
+| qfield_token_expires_at | TIMESTAMPTZ | Nullable |
+| updated_at | TIMESTAMPTZ | |
 
 ### organizations
 
@@ -77,7 +95,6 @@ Many-to-many between organizations and users, with a role.
 | created_at | TIMESTAMPTZ | |
 
 **Rules:** Only admins can add/remove other members. Any member can leave (self-remove). The last admin cannot leave without promoting someone else first.
-
 ### assess_projects
 
 ODK Central projects synced into the Assess module.
@@ -203,7 +220,8 @@ Geotagged point features with optional photo and audio attachments.
 
 ## Indexes
 
-- `sessions_user_id_idx` on `sessions(user_id)`
+- `oauth_account_user_id_idx` on `oauth_account(user_id)`
+- Unique `(oauth_name, account_id)` on `oauth_account`
 - `org_members_user_id_idx` on `org_members(user_id)`
 - `diagnosis_watershed_geom_idx` GIST on `diagnosis(watershed_geom)`
 - `diagnosis_owner_id_idx` on `diagnosis(owner_id)`
