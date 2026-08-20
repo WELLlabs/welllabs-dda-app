@@ -33,7 +33,7 @@
 </script>
 
 <svelte:head>
-	<title>DDA</title>
+	<title>WST fork</title>
 	<meta name="description" content="One workspace. Every watershed. Every decision." />
 </svelte:head>
 

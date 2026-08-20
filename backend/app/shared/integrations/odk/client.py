@@ -43,7 +43,7 @@ class ODKClient:
         headers["Authorization"] = f"Bearer {token}"
 
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=90.0) as client:
                 resp = await client.request(method, url, headers=headers, **kwargs)
         except httpx.HTTPError as exc:
             logger.error("ODK request error: %s", exc)
@@ -58,7 +58,7 @@ class ODKClient:
                 raise
             headers["Authorization"] = f"Bearer {token}"
             try:
-                async with httpx.AsyncClient(timeout=30.0) as client:
+                async with httpx.AsyncClient(timeout=90.0) as client:
                     resp = await client.request(method, url, headers=headers, **kwargs)
             except httpx.HTTPError as exc:
                 raise ODKConnectionError("Network error communicating with ODK Central") from exc
@@ -83,6 +83,36 @@ class ODKClient:
 
     async def post(self, path: str, json: Any | None = None, data: Any | None = None, **kwargs: Any) -> Any:
         resp = await self._request("POST", path, json=json, data=data, **kwargs)
+        if resp.headers.get("content-type", "").startswith("application/json"):
+            return resp.json()
+        return resp.content
+
+    async def delete(self, path: str, **kwargs: Any) -> Any:
+        resp = await self._request("DELETE", path, **kwargs)
+        if resp.status_code == 204 or not resp.content:
+            return None
+        if resp.headers.get("content-type", "").startswith("application/json"):
+            return resp.json()
+        return resp.content
+
+    async def post_xml(self, path: str, xml_body: str, *, params: dict | None = None) -> Any:
+        headers = {"Content-Type": "application/xml"}
+        resp = await self._request(
+            "POST",
+            path,
+            content=xml_body.encode("utf-8"),
+            headers=headers,
+            params=params or {},
+        )
+        if resp.headers.get("content-type", "").startswith("application/json"):
+            return resp.json()
+        return resp.content
+
+    async def post_empty(self, path: str, *, params: dict | None = None) -> Any:
+        """POST with an empty body (used for draft publish)."""
+        resp = await self._request("POST", path, content=b"", params=params or {})
+        if resp.status_code == 200 and not resp.content:
+            return None
         if resp.headers.get("content-type", "").startswith("application/json"):
             return resp.json()
         return resp.content

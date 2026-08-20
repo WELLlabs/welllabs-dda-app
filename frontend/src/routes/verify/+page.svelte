@@ -25,7 +25,7 @@
 </script>
 
 <svelte:head>
-	<title>Verify email · DDA</title>
+	<title>Verify email · WST fork</title>
 </svelte:head>
 
 <div class="relative flex min-h-screen items-center justify-center overflow-hidden bg-void px-4 font-body">

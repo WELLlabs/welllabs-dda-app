@@ -15,7 +15,7 @@
 				</svg>
 			</span>
 			<span class="brand-text">
-				<span class="brand-name font-display">Water security Tool</span>
+				<span class="brand-name font-display">WST fork</span>
 			</span>
 		</a>
 
@@ -55,7 +55,7 @@
 	.brand-name {
 		font-size: 1.15rem;
 		letter-spacing: 0.04em;
-		background: linear-gradient(100deg, #0fb3a3, #7c5ce6);
+		background: linear-gradient(100deg, #0fb3a3, #16a34a);
 		-webkit-background-clip: text;
 		background-clip: text;
 		color: transparent;

@@ -1,12 +1,10 @@
 # Assess module (frontend)
 
-ODK Central-backed monitoring UI.
+MEL plan (Monitoring, Evaluation, Learning) designer.
 
-| Piece | Role |
-|-------|------|
-| `api.js` | Client for `/api/assess` (import projects, forms, submissions) |
-| `components/AssessProjects.svelte` | List + import/refresh ODK projects |
-| `components/AssessForms.svelte` | Forms for the active project |
-| `components/AssessSubmissions.svelte` | Submission list and detail |
+The Assess route is intentionally limited to MEL plan design and publishing to **ODK Central** (creates + publishes an ODK form from selected indicators).
 
-Wired from `routes/(protected)/assess/+page.svelte` as a simple projects → forms → submissions flow.
+Key pieces:
+
+- `components/MelPlanDesigner.svelte` — the MEL plan wizard (intervention → outcomes → indicators → publish form)
+- `mel-api.js` — client for MEL plan endpoints under `/api/assess/mel/*`

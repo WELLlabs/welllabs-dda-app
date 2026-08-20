@@ -42,7 +42,7 @@
 </script>
 
 <svelte:head>
-	<title>Your name · DDA</title>
+	<title>Your name · WST fork</title>
 </svelte:head>
 
 <div class="relative flex min-h-screen items-center justify-center overflow-hidden bg-void px-4 font-body">

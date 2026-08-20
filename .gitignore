@@ -1,6 +1,7 @@
 # Env
 .env
 backend/.env
+backend/.env.dda-fork
 frontend/.env
 
 # Node / frontend
@@ -25,6 +26,18 @@ packages/
 clinton_code.py
 clinton_code_updated.ipynb
 conversions/
+notes.md
+reference.svelte
+analyses.csv
+cm_indicators.csv
+outcomes.csv
+groundwater.csv
+soilmoisture.csv
+waterlevel.csv
+indicators_mel_usable.csv
+indicators MEL.csv
+frontend/static/indicators_mel.csv
+frontend/static/outcomes_indicators.csv
 
 # OS
 .DS_Store

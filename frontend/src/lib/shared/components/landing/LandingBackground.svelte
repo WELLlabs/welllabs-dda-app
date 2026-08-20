@@ -36,14 +36,14 @@
 		<defs>
 			<linearGradient id="lbg-accent" x1="0" y1="0" x2="1" y2="1">
 				<stop offset="0%" stop-color="#0d983b" stop-opacity="0.55" />
-				<stop offset="100%" stop-color="#7dc3ff" stop-opacity="0.55" />
+				<stop offset="100%" stop-color="#86efac" stop-opacity="0.55" />
 			</linearGradient>
 		</defs>
 		{#each rings as ring, i}
 			<path
 				d={ringPath(ring.r, ring.wobble, i * 1.4)}
 				fill="none"
-				stroke={ring.accent ? 'url(#lbg-accent)' : '#d3deec'}
+				stroke={ring.accent ? 'url(#lbg-accent)' : '#bbf7d0'}
 				stroke-width={ring.accent ? 1.1 : 0.7}
 				opacity={ring.opacity}
 			/>
@@ -66,7 +66,7 @@
 		position: absolute;
 		inset: 0;
 		background:
-			radial-gradient(120% 80% at 50% -10%, #ffffff 0%, #f4f8fc 45%, #eef4fb 100%);
+			radial-gradient(120% 80% at 50% -10%, #f0fdf4 0%, #dcfce7 45%, #d1fae5 100%);
 	}
 
 	.glow {
@@ -82,14 +82,14 @@
 		left: -8%;
 		width: 46vw;
 		height: 46vw;
-		background: radial-gradient(circle, rgba(13, 152, 59, 0.24), transparent 70%);
+		background: radial-gradient(circle, rgba(13, 152, 59, 0.28), transparent 70%);
 	}
 	.g2 {
 		top: 8%;
 		right: -12%;
 		width: 44vw;
 		height: 44vw;
-		background: radial-gradient(circle, rgba(125, 195, 255, 0.3), transparent 70%);
+		background: radial-gradient(circle, rgba(134, 239, 172, 0.45), transparent 70%);
 		animation-delay: -7s;
 	}
 	.g3 {
@@ -97,7 +97,7 @@
 		left: 10%;
 		width: 42vw;
 		height: 42vw;
-		background: radial-gradient(circle, rgba(213, 180, 67, 0.22), transparent 70%);
+		background: radial-gradient(circle, rgba(74, 222, 128, 0.28), transparent 70%);
 		animation-delay: -13s;
 	}
 	.g4 {
@@ -105,7 +105,7 @@
 		right: 6%;
 		width: 38vw;
 		height: 38vw;
-		background: radial-gradient(circle, rgba(57, 105, 167, 0.2), transparent 70%);
+		background: radial-gradient(circle, rgba(21, 128, 61, 0.26), transparent 70%);
 		animation-delay: -19s;
 	}
 	@keyframes drift {
@@ -130,7 +130,7 @@
 	.vignette {
 		position: absolute;
 		inset: 0;
-		background: radial-gradient(120% 90% at 50% 40%, transparent 55%, rgba(0, 41, 107, 0.05) 100%);
+		background: radial-gradient(120% 90% at 50% 40%, transparent 55%, rgba(10, 61, 42, 0.08) 100%);
 	}
 
 	@media (prefers-reduced-motion: reduce) {
