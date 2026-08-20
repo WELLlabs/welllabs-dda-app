@@ -27,6 +27,9 @@ def test_openapi_includes_assess_routes(client):
     assert "/api/assess/projects" in paths
     assert "/api/assess/projects/{project_id}/reports" in paths
     assert "/api/assess/projects/{project_id}/access/users" in paths
+    assert "/api/assess/mel/projects" in paths
+    assert "/api/assess/mel/projects/{project_id}" in paths
+    assert "/api/assess/mel/projects/{project_id}/forms" in paths
 
 
 def test_cors_allows_configured_frontend_origin(client):

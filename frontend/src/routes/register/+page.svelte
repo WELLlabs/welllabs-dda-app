@@ -38,7 +38,7 @@
 </script>
 
 <svelte:head>
-	<title>Create account · DDA</title>
+	<title>Create account · WST fork</title>
 </svelte:head>
 
 <div class="relative flex min-h-screen items-center justify-center overflow-hidden bg-void px-4 font-body">

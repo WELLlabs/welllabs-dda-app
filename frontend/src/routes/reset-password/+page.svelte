@@ -27,7 +27,7 @@
 </script>
 
 <svelte:head>
-	<title>Reset password · DDA</title>
+	<title>Reset password · WST fork</title>
 </svelte:head>
 
 <div class="relative flex min-h-screen items-center justify-center overflow-hidden bg-void px-4 font-body">

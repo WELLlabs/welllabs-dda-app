@@ -6,7 +6,7 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from app.modules.accounts.routers import auth, orgs, qfield_account, users
 from app.modules.assess.routers import access as assess_access
-from app.modules.assess.routers import assess, reports as assess_reports
+from app.modules.assess.routers import assess, mel, mel_projects, reports as assess_reports
 from app.modules.design.routers import design
 from app.modules.diagnose.routers import (
     field_notes,
@@ -73,6 +73,8 @@ app.include_router(qfield.router, prefix="/api/diagnose/qfield", tags=["diagnose
 # Design and Assess modules
 app.include_router(design.router, prefix="/api/design", tags=["design"])
 app.include_router(assess.router, prefix="/api/assess", tags=["assess"])
+app.include_router(mel_projects.router, prefix="/api/assess", tags=["assess:mel-projects"])
+app.include_router(mel.router, prefix="/api/assess", tags=["assess:mel"])
 app.include_router(
     assess_access.router,
     prefix="/api/assess/projects",

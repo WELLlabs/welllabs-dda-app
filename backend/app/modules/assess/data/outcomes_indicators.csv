@@ -1,0 +1,369 @@
+,, Intermediate Outcomes,Indicator,Intermediate Outcomes,Indicator,,,Outcomes,Indicator,Literature
+Intervention,,Biophysical (plot level/structure level),,Socio-economic,,Control plot selection,Spillover plot selection,Watershed-level (interventions collectively),,
+Check dams/Earthen Dams,Must measure,"Rainfall runoff harvested during monsoon 
+(availability)
+
+
+Assumption: It is a normal rainfall year and adequate runoff is generated. ","1. Volume of water in the structure in monsoon (m3)
+2. Number of fillings",,,FALSE,FALSE,Groundwater recharge,"Seasonal well water level 
+
+% of well/borewells that did not go dry in summer
+
+",
+,,,,,,,,,Baseflow discharge in dry season,Impact of watershed programmes_ICRISAT
+,,"Post-monsoon increased water availability
+
+Assumption: It is a normal rainfall year and adequate runoff is generated. ","1. Volume of water retained in the structure during post-monsoon (m3);
+2. Groundwater level change
+3. Changed cropping acreage (rabi, zaid)","
+
+Improved crop water productivity (Rs/m3)
+
+Assumptions: 
+
+1. Water consumption decreases or remains the same 
+
+2. Pre-conditions for when CWP gain is counted:
+a. ↑ market price of crop < ↑ in crop yield
+b. ↑ in crop yield (only)
+c. ↓ in input cost (only)
+d. ↓ in input cost > ↑ market price of crop
+e. Increased market price due to adoption of higher value crop
+
+3. It is a normal year, no input-supply disruptions/geopolitical shocks in the economy (e.g., Covid, fertilizer unavailability), and the market prices are stable
+","
+1. Revenue/Profit per acre
+2. Irrigation water applied from surface water storage (check dam) (m3)
+3. Irrigation water applied from groundwater (m3)
+3. Change in crop mix
+4. Crop Yield 
+",,,,Catchment area saturated with ridge to valley interventions,
+,,Top soil retention (ecosystems health),1. Silt/soil volume deposited in the structure (m3),,,,,,,
+,Optional: To be chosen to suit the landscape/context,,,"Protective irrigation access (resilience) 
+
+Assumption: It may or may not be a normal rainfall year, but the rainfall distribution is erratic. ","1. Crop yield
+2. Irrigation water applied from surface water storage (check dam) (m3)
+3. Irrigation water applied from groundwater (m3)",,,,,
+,,,,"Improved drinking water reliability
+
+Assumption: Drinking water is a challenge at source for the landscape. ","
+1. Number of months the primary drinking water sources remain available during the year; 
+2. Number of months the secondary drinking water sources remain available during the year; 
+
+",,,,,
+,,,,"Improved drinking water access 
+
+Assumption: Drinking water distribution is inequitable. ","1. % of households having access to adequate amounts of water for drinking purpose
+",,,,,
+,,,,"Reduced migration
+
+Assumption: Improved water availability has improved opportunities and economic returns for the beneficiaries","1. No. of household member(s) migrating from the village for work
+2. No. of months household member(s) migrated from the village for work ",,,,,
+,,,,"
+Livelihood diversification through on-farm activities (resilience)
+
+Assumption: No livelihoods were adopted before the interventionAssumption: No livelihoods other than agriculture were practiced before the intervention","1. Livelihoods adopted - livestock/poultry
+2. Income derived from the additional livelihoods  - livestock/poultry
+",,,,,
+,,"Improved soil health with silt returned to farmers
+
+Assumption: The silt that was collected in the structure was taken back to the upstream agriculture plots. ","1. Volume of silt returned back to the agricultural plot
+2. Soil moisture in the plot","Enhanced crop yield due to silt application
+
+Assumption: It is a normal year, no input-supply disruptions/geopolitical shocks in the economy (e.g., Covid, fertilizer unavailability), and the market prices are stable
+","1. Crop yield (season of silt application)
+2. Revenue/Profit (in Rs.) per acre (for that season)
+",,,,,
+Farm Ponds (unlined),Must measure,"Rainfall runoff harvested during monsoon 
+(availability)
+
+
+Assumption: 
+
+1. Farm Pond harvests surface runoff as a primary source, however, there might be seasonality in how the FP is filled for the rest of the year. 
+2. It is a normal rainfall year and adequate runoff is generated. 
+
+","1. Volume of water in the structure in monsoon (m3)
+2. Number of fillings",,,FALSE,FALSE,Groundwater recharge,Groundwater level change in the post-monsoon season,
+,,,,,,,,,Baseflow discharge in dry season,
+,,"Post-monsoon increased water availability
+
+Assumption: It is a normal rainfall year and adequate runoff is generated. ","1. Volume of water retained in the structure during post-monsoon (m3);
+2. Groundwater level change
+3. Changed cropping acreage (rabi, zaid)","
+
+Improved crop water productivity (Rs/m3)
+
+Assumption: 
+
+1. Water consumption decreases or remains the same 
+
+2. Pre-conditions for when CWP gain is counted:
+a. ↑ market price of crop < ↑ in crop yield
+b. ↑ in crop yield (only)
+c. ↓ in input cost (only)
+d. ↓ in input cost > ↑ market price of crop
+e. Increased market price due to adoption of higher value crop
+
+3. It is a normal year, no input-supply disruptions/geopolitical shocks in the economy (e.g., Covid, fertilizer unavailability), and the market prices are stable
+
+
+
+","
+
+
+
+1. Revenue/Profit (in Rs.) per acre (rabi, zaid, horticulture crops)
+2. Change in crop mix
+3. Crop yield (kharif, rabi, zaid, horticulture crops)
+4. Irrigation water applied (m3)
+
+",,,,Catchment area covered by the farm ponds,
+,,,,"Livelihood diversification through on-farm activities (resilience)
+
+Assumption: No livelihoods other than agriculture were practiced before the intervention","1. Livelihoods adopted - livestock/poultry/fisheries/aquatic cultivation
+2. Income derived from the additional livelihoods  -  livestock/poultry/fisheries/aquatic cultivation
+",,,,,
+,Optional: To be chosen to suit the landscape/context,"Volume of groundwater pumped in the structure
+
+Assumption: Farm pond has seasonality in the source of water used to fill it, where groundwater is pumped in dry season. ",Volumetric water pumped (m3),"Additional crop production due to cultivation on farm pond bunds
+
+Assumption: It is a normal year, no input-supply disruptions/geopolitical shocks in the economy (e.g., Covid, fertilizer unavailability), and the market prices are stable
+","
+1. Revenue/Profit (in Rs.) from plantation on farm pond bunds (season of cultivation on bunds)
+",,,,,
+,,,,"Protective irrigation access (resilience) 
+
+Assumption: It may or may not be a normal rainfall year, but the rainfall distribution is erratic. ","1. Crop yield
+2. Irrigation water applied from surface water (farm pond)
+3. Irrigation water applied from groundwater
+4. Number of months the irrigation water sources availability during the monsoon.",,,,,
+,,,,"Reduced migration
+
+Assumption: Improved water availability has improved opportunities and economic returns for the beneficiaries","1. No. of household member(s) migrating from the village for work
+2. No. of months household member(s) migrated from the village for work ",,,,,
+Farm Ponds (lined),Must measure,"Rainfall runoff harvested 
+(availability)
+
+
+Assumption: 
+
+1. Farm Pond harvests surface runoff as a primary source, however, there might be seasonality in how the FP is filled for the rest of the year. 
+2. It is a normal rainfall year and adequate runoff is generated. ","1. Volume of water in the structure in monsoon (m3)
+2. Number of fillings",,,FALSE,FALSE,,,
+,,,,"
+
+Improved crop water productivity (Rs/m3)
+
+Assumption: 
+
+1. Water consumption decreases or remains the same 
+
+2. Pre-conditions for when CWP gain is counted:
+a. ↑ market price of crop < ↑ in crop yield
+b. ↑ in crop yield (only)
+c. ↓ in input cost (only)
+d. ↓ in input cost > ↑ market price of crop
+e. Increased market price due to adoption of higher value crop
+
+3. It is a normal year, no input-supply disruptions/geopolitical shocks in the economy (e.g., Covid, fertilizer unavailability), and the market prices are stable
+
+
+","
+
+
+
+1. Revenue/Profit (in Rs.) per acre (rabi, zaid, horticulture crops)
+2. Change in crop mix
+3. Crop yield (kharif, rabi, zaid, horticulture crops)
+4. Irrigation water applied (m3)
+5. Revenue/Profit (in Rs.) from livestock
+6. Revenue/Profit (in Rs.) from fisheries (across seasons)
+7. Revenue/Profit (in Rs.) from aquatic cultivation (across seasons)
+8. Reduced extraction of GW for aquaculture, fisheries
+9. Revenue/Profit (in Rs.) from poultry
+",,,,,
+,,"Post-monsoon increased water availability
+
+Assumption: It is a normal rainfall year and adequate runoff is generated. ","1. Volume of water retained in the structure during post-monsoon (m3); 
+2. Changed cropping acreage (rabi, zaid)
+","Livelihood diversification through on-farm activities (resilience)
+
+Assumption: No livelihoods other than agriculture were practiced before the intervention","1. Livelihoods adopted - livestock/poultry/fisheries/aquatic cultivation
+2. Income derived from the additional livelihoods  -  livestock/poultry/fisheries/aquatic cultivation
+",,,,,
+,Optional: To be chosen to suit the landscape/context,,,"Protective irrigation access (resilience)
+
+
+Assumption: It may or may not be a normal rainfall year, but the rainfall distribution is erratic. ","1. Crop yield
+2. Irrigation water applied from surface water (farm pond)
+3. Number of months the irrigation water sources availability during the monsoon.",,,,,
+,,"Volume of groundwater pumped in the structure
+
+Assumption: Farm pond has seasonality in the source of water used to fill it, where groundwater is pumped in dry season. ",Volumetric water pumped (m3),"Additional crop production due to cultivation on farm pond bunds 
+
+Assumption: It is a normal year, no input-supply disruptions/geopolitical shocks in the economy (e.g., Covid, fertilizer unavailability), and the market prices are stable
+","
+1. Revenue/Profit (in Rs.) from plantation on farm pond bunds (season of cultivation on bunds)
+",,,,,
+,,,,"Increased farmer income from additional season's cultivation (rabi)
+
+Assumption: The farmer only cultivates one season (rainfed kharif) crop.",1. Revenue/Profit (in Rs.) from additional season's (zaid/rabi) cultivation.,,,,,
+,,,,"Reduced migration
+
+Assumption: Improved water availability has improved opportunities and economic returns for the beneficiaries","1. No. of household member(s) migrating from the village for work
+2. No. of months household member(s) migrated from the village for work ",,,,,
+Micro-irrigation,Must measure,"Reduced irrigation water applied (rabi/zaid) (availability)
+
+Assumption: Agriculture acreage and crop mix remains the same","1. Irrigation water volumetric savings (m3)
+2. Improved soil moisture","
+
+Improved crop water productivity (Rs/m3)
+
+Assumption: 
+
+1. Water consumption decreases or remains the same 
+
+2. Pre-conditions for when CWP gain is counted:
+a. ↑ market price of crop < ↑ in crop yield
+b. ↑ in crop yield (only)
+c. ↓ in input cost (only)
+d. ↓ in input cost > ↑ market price of crop
+e. Increased market price due to adoption of higher value crop
+
+3. It is a normal year, no input-supply disruptions/geopolitical shocks in the economy (e.g., Covid, fertilizer unavailability), and the market prices are stable
+
+
+","
+
+1. Revenue/Profit per acre
+2. Irrigation water applied (m3)
+3. Change in crop mix
+4. Crop Yield
+5. Input cost savings (electricity,diesel,labour)",TRUE,FALSE,Groundwater preserved,Groundwater level change in the post-monsoon season,
+,,,,,,,,,Baseflow discharge in dry season,
+,,,,,,,,,Percentage area of watershed adopted MI,
+Bio-mulching,Must measure,"Reduced irrigation water applied (rabi/zaid) (availability)
+
+Assumption: Agriculture acreage and crop mix remains the same","1. Irrigation water volumetric savings (m3)
+2. Improved soil moisture","
+
+Improved crop water productivity (Rs/m3)
+
+Assumption: 
+
+1. Water consumption decreases or remains the same 
+
+2. Pre-conditions for when CWP gain is counted:
+a. ↑ market price of crop < ↑ in crop yield
+b. ↑ in crop yield (only)
+c. ↓ in input cost (only)
+d. ↓ in input cost > ↑ market price of crop
+e. Increased market price due to adoption of higher value crop
+
+3. It is a normal year, no input-supply disruptions/geopolitical shocks in the economy (e.g., Covid, fertilizer unavailability), and the market prices are stable
+
+
+","
+1. Revenue/Profit per acre
+2. Irrigation water applied (m3)
+3. Change in crop mix
+4. Crop Yield
+5. Input costs savings (electricity/diesel,weeding, herbicides, labor for weed removal)(Rs.)
+
+",TRUE,TRUE,,,Weed_Cost_Reduction_Biomulch
+,,"Improved soil health (ecosystems health)
+
+Assumption: Bio-mulching adds to the organic matter in the soil improving the soil structure and soil carbon. The timelines to reflect the change can be longer. ","1. Reduced soil compaction;
+2. Biological life in the soil;",,,,,,,
+Solar Group Irrigation,,Reduced irrigation water applied (rabi/zaid),Volumetric water savings (m3),Adoption of higher value crops,"Horticulture crops cultivated;
+Area under horticulture crops (acres);
+Crops cultivated in zaid;
+Crops cultivated in rabi;
+Change in crop mix",,,Groundwater preserved,Groundwater level change in the post-monsoon season,
+,,Improved Crop water productivity,Rs/m3,Increased farmer income,"Zaid crop yield (quintal); 
+Rabi crop yield (quintal); 
+Electricity/diesel pumping cost savings (Rs.);
+Input costs savings (labour)(Rs.)
+Revenue/Profit (in Rs.) per acre in Zaid;
+Revenue/Profit (in Rs.) per acre in Rabi;",,,,Baseflow discharge in dry season,
+,,"Increased acreage in zaid season;
+
+Increased acreage in rabi season","Area under cultivation in Zaid (acres);
+Area under cultivation in Rabi (acres);
+",Improved resilience during dry-spell irrigation stress,"Kharif crop yield (quintal);
+Zaid crop yield (quintal); ",,,,Percentage area of watershed adopted solar group irrigation,
+Gully plugs/Gabions,,Soil retention,Silt/soil volume deposited in the structure (m3),Increased farmer income,"Kharif crop yield (quintal);
+Zaid crop yield (quintal); 
+Rabi crop yield (quintal); 
+Revenue/Profit (in Rs.) per acre in Zaid;
+Revenue/Profit (in Rs.) per acre in Rabi;",,,Groundwater recharge,Groundwater level change in the post-monsoon season,
+,,,Less soil deposited in the downstream structures like check dams,Silt returned to the farmer,"Depth of silt accumulated (meters);
+Kharif crop yield (quintal);
+Zaid crop yield (quintal); 
+Rabi crop yield (quintal); 
+",,,,Baseflow discharge in dry season,
+,,"Increased acreage in zaid season;
+
+Increased acreage in rabi season;
+","Area under cultivation in Zaid (acres);
+Area under cultivation in Rabi (acres);",Reduced farmer-perceived soil erosion,Self-reported soil erosion observed post-monsoon,,,,Catchment saturated with ridge to valley interventions,
+,,Increased cropping intensity,No. of seasons irrigated (Kharif/Zaid/Rabi/Horticulture Crops),,,,,,,
+,,Increased water retention in soil ,Soil moisture in the zone of influence,,,,,,,
+Contour trenches,,Soil retention,Silt/soil volume captured in the trenches (m3),Increased farmer income,"Kharif crop yield (quintal);
+Zaid crop yield (quintal); 
+Rabi crop yield (quintal); 
+Revenue/Profit (in Rs.) per acre in Zaid;
+Revenue/Profit (in Rs.) per acre in Rabi;
+Revenue/Profit (in Rs.) per acre in Kharif;",,,Groundwater recharge,Groundwater level change in the post-monsoon season,
+,,,Less soil deposited in the downstream structures like check dams,Accumulated silt applied back to the farm plot,"Qty. of silt applied (kg);
+Kharif crop yield (quintal);
+Zaid crop yield (quintal); 
+Rabi crop yield (quintal); ",,,,Baseflow discharge in dry season,
+,,"Increased acreage in zaid season;
+
+Increased acreage in rabi season;
+","Area under cultivation in Zaid (acres);
+Area under cultivation in Rabi (acres);",Reduced farmer-perceived soil erosion,Self-reported soil erosion observed post-monsoon,,,,,
+,,Increased water retention in soil ,Soil moisture in the zone of influence,,,,,,Catchment saturated with ridge to valley interventions,
+Bio-inputs,,Improved soil health,"Soil compaction;
+Biological life in the soil;",Increased farmer income,"
+Zaid crop yield (quintal);
+Rabi crop yield (quintal); 
+Input costs savings (chemical fertilisers)(Rs.);
+Qty. of chemical fertilisers avoided (NPK in kg);
+Revenue/Profit (in Rs.) per acre in Zaid;
+Revenue/Profit (in Rs.) per acre in Rabi;",,,,,
+Restoration of tanks,,,,,,,,,,
+Pre-monsoon Dry Sowing,,,,,,,,,,
+Borewell recharge structures,,,,,,,,,,
+Raised-bed farming,,Increased water retention in soil,Soil moisture,,,,,Groundwater preserved,Groundwater level change in the post-monsoon season,
+,,Reduced irrigation water applied (rabi/zaid),Volumetric water savings (m3),Adoption of water-intensive/higher value crops,"Horticulture crops cultivated;
+Area under horticulture crops (acres);
+Crops cultivated in zaid;
+Crops cultivated in rabi;
+Change in crop mix",,,,Baseflow discharge in dry season,
+,,Improved Crop water productivity,Rs/m3,Increased farmer income,"Kharif crop yield (quintal); 
+Rabi crop yield (quintal); 
+Zaid crop yield (quintal); 
+Reduced crop loss from waterlogging/lodging (Self-reported incidence of waterlogging-related disease or lodging);
+Electricity/diesel pumping cost savings (Rs.);
+Input costs savings (weeding, seeds)(Rs.)
+",,,,Percentage area of watershed covered with RBF,RBF_EffectonYield_WeedingCost
+,,"Increased acreage in zaid season;
+
+Increased acreage in rabi season","Area under cultivation in Zaid (acres);
+Area under cultivation in Rabi (acres);
+",,,,,,,
+,,Reduced water logging,,,,,,,
+Alternate Wetting and Drying,,Reduced irrigation water applied (rabi/zaid),Volumetric water savings (m3),Increased farmer income,"Paddy yield (quintals); 
+Reduced crop loss (self-reported incidents of waterlogging-related diseases); 
+Electricity/diesel pumping cost savings (Rs.);
+Input costs savings (Pesticide)(Rs.)
+Revenue/Profit (in Rs.) per acre in Zaid;
+Revenue/Profit (in Rs.) per acre in Rabi;",,,Groundwater preserved,Groundwater level change in the post-monsoon season,
+,,Improved Crop water productivity,Rs/m3,,"Farm plot's position (head-end/tail-end/downstream/upstream); 
+Irrigation access (hours)",,,,"Baseflow discharge in dry season;
+",
+,,,,Improved resilience during dry-spell irrigation stress,Paddy Yield (quintal) - did not change,,,,Increased water availability for downstream/tail-end farmers,
+,,,,,,,,,Percentage area of watershed adopted AWD,

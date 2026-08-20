@@ -21,7 +21,7 @@ export default defineConfig({
 			// /api is handled by src/routes/api/[...path]/+server.js (SvelteKit),
 			// not Vite — keeping both causes inconsistent behaviour.
 			'/titiler': {
-				target: 'http://localhost:8000',
+				target: process.env.TITILER_URL || 'http://localhost:8000',
 				rewrite: (path) => path.replace(/^\/titiler/, '')
 			}
 		}

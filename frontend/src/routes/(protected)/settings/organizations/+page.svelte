@@ -232,8 +232,8 @@
 							class="rounded-full px-2.5 py-0.5 text-[10px] font-semibold tracking-wide uppercase"
 							style:background-color={org.role === 'admin'
 								? 'color-mix(in srgb, #0d983b 14%, transparent)'
-								: 'color-mix(in srgb, #1b75e0 14%, transparent)'}
-							style:color={org.role === 'admin' ? '#0d983b' : '#1b75e0'}
+								: 'color-mix(in srgb, #0d983b 14%, transparent)'}
+							style:color={org.role === 'admin' ? '#0d983b' : '#0d983b'}
 						>
 							{org.role}
 						</span>
@@ -294,8 +294,8 @@
 													class="rounded-full px-2 py-0.5 text-[10px] font-semibold tracking-wide uppercase"
 													style:background-color={member.role === 'admin'
 														? 'color-mix(in srgb, #0d983b 14%, transparent)'
-														: 'color-mix(in srgb, #1b75e0 14%, transparent)'}
-													style:color={member.role === 'admin' ? '#0d983b' : '#1b75e0'}
+														: 'color-mix(in srgb, #0d983b 14%, transparent)'}
+													style:color={member.role === 'admin' ? '#0d983b' : '#0d983b'}
 												>
 													{member.role}
 												</span>

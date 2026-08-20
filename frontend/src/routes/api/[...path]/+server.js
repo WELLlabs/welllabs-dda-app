@@ -6,9 +6,12 @@
  * `/api/*` directly to FastAPI so uploads never pass through Node.
  */
 
+import { env } from '$env/dynamic/private';
 import { redirect } from '@sveltejs/kit';
 
-const API_BASE = process.env.API_URL || 'http://localhost:8080';
+function apiBase() {
+	return env.API_URL || 'http://localhost:8080';
+}
 
 /**
  * Apply upstream Set-Cookie values onto the SvelteKit cookie jar so the browser
@@ -57,7 +60,7 @@ function applyUpstreamCookies(cookies, rawCookies) {
 /** @param {import('@sveltejs/kit').RequestEvent} event */
 async function proxy(event) {
 	const { params, request, url, cookies } = event;
-	const target = `${API_BASE}/api/${params.path}${url.search}`;
+	const target = `${apiBase()}/api/${params.path}${url.search}`;
 
 	const headers = new Headers(request.headers);
 	headers.delete('host');
@@ -90,7 +93,18 @@ async function proxy(event) {
 		}
 	}
 
-	const res = await fetch(target, init);
+	let res;
+	try {
+		res = await fetch(target, init);
+	} catch (err) {
+		const message =
+			`Backend unreachable at ${apiBase()}. ` +
+			`Is the dda-fork API running on the port in API_URL? (${String(err?.message || err)})`;
+		return new Response(JSON.stringify({ detail: message }), {
+			status: 503,
+			headers: { 'content-type': 'application/json' }
+		});
+	}
 
 	const setCookies =
 		typeof res.headers.getSetCookie === 'function' ? res.headers.getSetCookie() : [];

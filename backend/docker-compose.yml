@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: geofield
       POSTGRES_DB: dda_product
     ports:
-      - "5432:5432"
+      - "${POSTGIS_HOST_PORT:-5432}:5432"
     volumes:
       - postgis_data:/var/lib/postgresql/data
       - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
@@ -20,7 +20,7 @@ services:
     image: ghcr.io/developmentseed/titiler:latest
     env_file: .env
     ports:
-      - "8000:8000"
+      - "${TITILER_HOST_PORT:-8000}:8000"
     environment:
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
@@ -35,11 +35,11 @@ services:
     build: .
     env_file: .env
     ports:
-      - "8080:8080"
+      - "${API_HOST_PORT:-8080}:8080"
     environment:
       DATABASE_URL: postgresql://geofield:geofield@postgis:5432/dda_product
       TITILER_URL: http://titiler:8000
-      TITILER_PUBLIC_URL: http://localhost:8000
+      TITILER_PUBLIC_URL: ${TITILER_PUBLIC_URL:-http://localhost:8000}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
       AWS_S3_BUCKET: ${AWS_S3_BUCKET:-}
@@ -61,6 +61,10 @@ services:
       HOST_PACKAGES_DIR: ${HOST_PACKAGES_DIR:-}
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:5173}
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-}
+      API_PUBLIC_URL: ${API_PUBLIC_URL:-http://localhost:8080}
+      # ODK_* come from env_file: .env — do not re-declare here with ${VAR:-}
+      # or an empty host substitution will override and clear them.
     volumes:
       - ./app:/app/app
       - ./app/modules/diagnose/qgis:/app/qgis:ro

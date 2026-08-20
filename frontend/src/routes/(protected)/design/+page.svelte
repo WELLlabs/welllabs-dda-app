@@ -3,7 +3,7 @@
 </script>
 
 <svelte:head>
-	<title>Design · DDA Product</title>
+	<title>Design · WST fork</title>
 </svelte:head>
 
 <div class="flex h-full min-h-screen flex-col bg-white font-body">

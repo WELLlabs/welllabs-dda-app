@@ -4,7 +4,7 @@
 
 	const VIEW = 64;
 	const FILL = 'rgba(27, 117, 224, 0.2)';
-	const STROKE = '#1b75e0';
+	const STROKE = '#0d983b';
 
 	function buildPaths(geom) {
 		if (!geom) return [];

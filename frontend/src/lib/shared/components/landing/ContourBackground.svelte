@@ -43,7 +43,7 @@
 			</radialGradient>
 			<linearGradient id="contour-stroke" x1="0" y1="0" x2="1" y2="1">
 				<stop offset="0%" stop-color="#0d983b" />
-				<stop offset="100%" stop-color="#7dc3ff" />
+				<stop offset="100%" stop-color="#86efac" />
 			</linearGradient>
 		</defs>
 
@@ -51,7 +51,7 @@
 			<path
 				d={ringPath(ring.r, ring.wobble, i * 1.3)}
 				fill="none"
-				stroke={i % 4 === 0 ? 'url(#contour-stroke)' : '#cdd9e8'}
+				stroke={i % 4 === 0 ? 'url(#contour-stroke)' : '#bbf7d0'}
 				stroke-width={i % 4 === 0 ? 1.1 : 0.7}
 				opacity={ring.opacity}
 			/>

@@ -7,7 +7,7 @@ describe('ModuleHeader', () => {
 		render(ModuleHeader, { props: { title: 'Diagnose' } });
 
 		expect(screen.getByRole('link', { name: /home/i })).toHaveAttribute('href', '/home');
-		expect(screen.getByRole('link', { name: /water security tool/i })).toHaveAttribute('href', '/home');
+		expect(screen.getByRole('link', { name: /wst fork/i })).toHaveAttribute('href', '/home');
 		expect(screen.getByText('Diagnose')).toBeInTheDocument();
 	});
 
@@ -15,10 +15,7 @@ describe('ModuleHeader', () => {
 		render(ModuleHeader, { props: { homeHref: '/dashboard', title: 'Assess' } });
 
 		expect(screen.getByRole('link', { name: /home/i })).toHaveAttribute('href', '/dashboard');
-		expect(screen.getByRole('link', { name: /water security tool/i })).toHaveAttribute(
-			'href',
-			'/dashboard'
-		);
+		expect(screen.getByRole('link', { name: /wst fork/i })).toHaveAttribute('href', '/dashboard');
 	});
 
 	it('links the module title when titleHref is set', () => {
@@ -35,5 +32,21 @@ describe('ModuleHeader', () => {
 
 		expect(screen.queryByRole('link', { name: 'Design' })).not.toBeInTheDocument();
 		expect(screen.getByText('Design')).toBeInTheDocument();
+	});
+
+	it('renders a full crumb trail when crumbs are provided', () => {
+		render(ModuleHeader, {
+			props: {
+				crumbs: [
+					{ label: 'Assess', href: '/assess' },
+					{ label: 'Sample', href: '/assess/sample' },
+					{ label: 'Plan A' }
+				]
+			}
+		});
+
+		expect(screen.getByRole('link', { name: 'Assess' })).toHaveAttribute('href', '/assess');
+		expect(screen.getByRole('link', { name: 'Sample' })).toHaveAttribute('href', '/assess/sample');
+		expect(screen.getByText('Plan A')).toBeInTheDocument();
 	});
 });

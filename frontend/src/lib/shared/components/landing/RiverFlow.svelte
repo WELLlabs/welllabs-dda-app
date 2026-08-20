@@ -10,10 +10,10 @@
 >
 	<defs>
 		<linearGradient id="river-grad" x1="0" y1="0" x2="1" y2="0">
-			<stop offset="0%" stop-color="#1b75e0" stop-opacity="0" />
-			<stop offset="45%" stop-color="#1b75e0" stop-opacity="0.75" />
-			<stop offset="55%" stop-color="#7dc3ff" stop-opacity="0.85" />
-			<stop offset="100%" stop-color="#1b75e0" stop-opacity="0" />
+			<stop offset="0%" stop-color="#0d983b" stop-opacity="0" />
+			<stop offset="45%" stop-color="#0d983b" stop-opacity="0.75" />
+			<stop offset="55%" stop-color="#86efac" stop-opacity="0.85" />
+			<stop offset="100%" stop-color="#0d983b" stop-opacity="0" />
 		</linearGradient>
 	</defs>
 

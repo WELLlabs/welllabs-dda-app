@@ -85,6 +85,11 @@ CREATE TABLE assess_projects (
     description   TEXT NOT NULL DEFAULT '',
     status        TEXT NOT NULL DEFAULT 'draft'
                   CHECK (status IN ('draft', 'active', 'archived')),
+    kind          TEXT NOT NULL DEFAULT 'odk_sync'
+                  CHECK (kind IN ('odk_sync', 'mel')),
+    -- Legacy / unused for kind=mel (intervention lives on mel_plans).
+    intervention_slug TEXT,
+    plan_json     JSONB,
     odk_project_id TEXT,
     -- Metabase dashboard to embed for this project. Each project's dashboard is
     -- built on that project's form data; NULL falls back to the app default.
@@ -94,6 +99,10 @@ CREATE TABLE assess_projects (
 );
 
 CREATE INDEX assess_projects_owner_id_idx ON assess_projects (owner_id);
+CREATE INDEX assess_projects_kind_idx ON assess_projects (kind);
+CREATE INDEX assess_projects_intervention_slug_idx
+    ON assess_projects (intervention_slug)
+    WHERE intervention_slug IS NOT NULL;
 
 ALTER TABLE assess_projects
     ADD CONSTRAINT assess_projects_owner_odk_project_id_key
@@ -121,6 +130,48 @@ CREATE TABLE assess_project_orgs (
 
 CREATE INDEX assess_project_users_user_id_idx ON assess_project_users (user_id);
 CREATE INDEX assess_project_orgs_org_id_idx ON assess_project_orgs (org_id);
+
+-- MEL plans: one intervention each, many per assess project (kind=mel)
+CREATE TABLE mel_plans (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    project_id          UUID NOT NULL REFERENCES assess_projects(id) ON DELETE CASCADE,
+    name                TEXT NOT NULL,
+    intervention_slug   TEXT NOT NULL,
+    plan_json           JSONB,
+    created_by          UUID REFERENCES users(id),
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX mel_plans_project_id_idx ON mel_plans (project_id);
+CREATE INDEX mel_plans_intervention_slug_idx ON mel_plans (intervention_slug);
+
+-- MEL forms published into the shared ODK_PROJECT_ID, owned by a mel plan
+CREATE TABLE mel_forms (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    project_id      UUID NOT NULL REFERENCES assess_projects(id) ON DELETE CASCADE,
+    plan_id         UUID NOT NULL REFERENCES mel_plans(id) ON DELETE CASCADE,
+    xml_form_id     TEXT NOT NULL,
+    name            TEXT NOT NULL,
+    package_id      TEXT,
+    package_title   TEXT,
+    created_by      UUID REFERENCES users(id),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (plan_id, xml_form_id)
+);
+
+CREATE INDEX mel_forms_project_id_idx ON mel_forms (project_id);
+CREATE INDEX mel_forms_plan_id_idx ON mel_forms (plan_id);
+
+-- ODK Central App User tokens for MEL Collect QR codes
+CREATE TABLE mel_odk_app_users (
+    odk_project_id  INTEGER PRIMARY KEY,
+    app_user_id     INTEGER NOT NULL,
+    display_name    TEXT NOT NULL,
+    token           TEXT NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
 -- Diagnosis sharing: direct user grants and org grants (owner manages both)
 CREATE TABLE diagnosis_users (
@@ -233,6 +284,10 @@ CREATE TRIGGER diagnosis_updated_at
 
 CREATE TRIGGER assess_projects_updated_at
     BEFORE UPDATE ON assess_projects
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TRIGGER mel_plans_updated_at
+    BEFORE UPDATE ON mel_plans
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 CREATE TRIGGER observation_zones_updated_at

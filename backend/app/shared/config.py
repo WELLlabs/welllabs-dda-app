@@ -1,4 +1,4 @@
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     odk_base_url: str = ""
     odk_username: str = ""
     odk_password: str = ""
+    # All MEL intervention forms are published into this single ODK project.
+    odk_project_id: int | None = None
 
     # Metabase signed embedding
     metabase_embed_secret_key: str = Field(
@@ -58,6 +60,13 @@ class Settings(BaseSettings):
     google_oauth_client_secret: str = ""
 
     model_config = {"env_file": ".env", "extra": "ignore"}
+
+    @field_validator("odk_project_id", mode="before")
+    @classmethod
+    def empty_odk_project_id(cls, value):
+        if value == "" or value is None:
+            return None
+        return value
 
     @property
     def cors_origins(self) -> list[str]:

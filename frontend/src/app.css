@@ -8,15 +8,15 @@
 	--color-panel: #ffffff;
 	--color-panel-raised: #f9fafc;
 	--color-hairline: #e1e7ef;
-	--color-ink: #00296b;
-	--color-ink-dim: #476185;
-	--color-ink-faint: #6b829e;
+	--color-ink: #0a3d2a;
+	--color-ink-dim: #4d7c5f;
+	--color-ink-faint: #6b9b7d;
 
-	--color-brand-navy: #00296b;
-	--color-brand-deep: #0d2c4c;
-	--color-brand-blue: #1b75e0;
-	--color-brand-steel: #3969a7;
-	--color-brand-sky: #7dc3ff;
+	--color-brand-navy: #0a3d2a;
+	--color-brand-deep: #14532d;
+	--color-brand-blue: #0d983b;
+	--color-brand-steel: #15803d;
+	--color-brand-sky: #86efac;
 	--color-brand-pale: #fff1e5;
 	--color-brand-forest: #186d13;
 	--color-brand-earth: #6a3d31;
@@ -26,7 +26,7 @@
 	--color-field-note: #d5b443;
 	--color-diagnose: #0d983b;
 	--color-design: #d5b443;
-	--color-assess: #3969a7;
+	--color-assess: #15803d;
 }
 
 :root {
@@ -146,11 +146,11 @@ select {
 }
 
 .shadow-glass {
-	box-shadow: 0 18px 75px rgba(16, 40, 73, 0.08);
+	box-shadow: 0 18px 75px rgba(20, 83, 45, 0.08);
 }
 
 .shadow-glass-lg {
-	box-shadow: 0 30px 90px rgba(16, 40, 73, 0.12);
+	box-shadow: 0 30px 90px rgba(20, 83, 45, 0.12);
 }
 
 .text-balance {

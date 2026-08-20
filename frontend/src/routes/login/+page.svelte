@@ -62,7 +62,7 @@
 </script>
 
 <svelte:head>
-	<title>Sign in · DDA</title>
+	<title>Sign in · WST fork</title>
 </svelte:head>
 
 <div class="relative flex min-h-screen items-center justify-center overflow-hidden bg-void px-4 font-body">
