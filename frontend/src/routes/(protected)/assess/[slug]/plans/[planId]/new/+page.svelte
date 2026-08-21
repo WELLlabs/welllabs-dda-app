@@ -1,4 +1,5 @@
 <script>
+	import { appPath } from '$lib/shared/paths.js';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
@@ -54,7 +55,7 @@
 		} else if (project) {
 			goto(itemPath('/assess', project, projects));
 		} else {
-			goto('/assess');
+			goto(appPath('/assess'));
 		}
 	}
 </script>
@@ -73,7 +74,7 @@
 			<p class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 font-body text-sm text-red-700">
 				{error || 'Plan not found'}
 			</p>
-			<button type="button" class="action-btn mt-4" onclick={() => goto('/assess')}>
+			<button type="button" class="action-btn mt-4" onclick={() => goto(appPath('/assess'))}>
 				Back to projects
 			</button>
 		</div>

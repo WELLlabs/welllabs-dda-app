@@ -1,4 +1,5 @@
 <script>
+	import { appPath } from '$lib/shared/paths.js';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { session } from '$lib/shared/session.svelte.js';
@@ -141,7 +142,7 @@
 		if (!confirm('Leave this project? You will lose access.')) return;
 		try {
 			await removeMelUserAccess(project.id, session.user.id);
-			goto('/assess');
+			goto(appPath('/assess'));
 		} catch (err) {
 			error = String(err.message ?? err);
 		}
@@ -175,7 +176,7 @@
 		<p class="m-0 text-brand-navy">{loadError || 'Project not found'}</p>
 		<button
 			class="cursor-pointer rounded bg-[#1b75e0] px-4 py-2 font-body text-white hover:bg-[#1565c0]"
-			onclick={() => goto('/assess')}
+			onclick={() => goto(appPath('/assess'))}
 		>
 			← Back to projects
 		</button>

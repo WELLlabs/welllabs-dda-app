@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { appPath } from '$lib/shared/paths.js';
+
 	let { variant = 'login' }: { variant?: 'login' | 'register' } = $props();
 </script>
 
@@ -8,7 +10,7 @@
 	style:backdrop-filter="saturate(180%) blur(14px)"
 	style:-webkit-backdrop-filter="saturate(180%) blur(14px)"
 >
-	<a href="/" class="flex items-center gap-3">
+	<a href={appPath('/')} class="flex items-center gap-3">
 		<svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
 			<circle cx="12" cy="12" r="10.5" stroke="#4FD1C5" stroke-width="1" opacity="0.5" />
 			<circle cx="12" cy="12" r="6.5" stroke="#4FD1C5" stroke-width="1" opacity="0.8" />
@@ -21,7 +23,7 @@
 		{#if variant === 'login'}
 			<span class="hidden sm:inline">New here?</span>
 			<a
-				href="/register"
+				href={appPath('/register')}
 				class="rounded-full border border-hairline bg-panel-raised px-4 py-1.5 font-body text-[13px] text-ink transition-colors duration-200 hover:border-diagnose/50 hover:text-diagnose"
 			>
 				Create account
@@ -29,7 +31,7 @@
 		{:else}
 			<span class="hidden sm:inline">Already registered?</span>
 			<a
-				href="/login"
+				href={appPath('/login')}
 				class="rounded-full border border-hairline bg-panel-raised px-4 py-1.5 font-body text-[13px] text-ink transition-colors duration-200 hover:border-diagnose/50 hover:text-diagnose"
 			>
 				Sign in

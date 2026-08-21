@@ -2,22 +2,23 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { session } from '$lib/shared/session.svelte.js';
+	import { appPath } from '$lib/shared/paths.js';
 
 	let { children } = $props();
 
-	const onCompleteProfile = $derived(page.url.pathname === '/complete-profile');
+	const onCompleteProfile = $derived(page.url.pathname === appPath('/complete-profile'));
 
 	$effect(() => {
 		if (!session.loaded || !session.user) {
 			if (session.loaded && !session.user) {
 				const next = encodeURIComponent(page.url.pathname + page.url.search);
-				goto(`/login?next=${next}`);
+				goto(appPath(`/login?next=${next}`));
 			}
 			return;
 		}
 		// New Google users land here until they confirm a display name
 		if (!onCompleteProfile && !(session.user.name || '').trim()) {
-			goto('/complete-profile');
+			goto(appPath('/complete-profile'));
 		}
 	});
 </script>

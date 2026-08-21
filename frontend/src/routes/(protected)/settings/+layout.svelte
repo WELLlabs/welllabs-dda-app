@@ -1,17 +1,18 @@
 <script>
 	import { page } from '$app/state';
 	import ModuleHeader from '$lib/shared/components/ModuleHeader.svelte';
+	import { appPath } from '$lib/shared/paths.js';
 
 	let { children } = $props();
 
 	const navItems = [
-		{ href: '/settings', label: 'Account' },
-		{ href: '/settings/organizations', label: 'Organizations' },
-		{ href: '/settings/connectors', label: 'Connectors' }
+		{ href: appPath('/settings'), label: 'Account' },
+		{ href: appPath('/settings/organizations'), label: 'Organizations' },
+		{ href: appPath('/settings/connectors'), label: 'Connectors' }
 	];
 
 	function isActive(href) {
-		if (href === '/settings') return page.url.pathname === '/settings';
+		if (href === appPath('/settings')) return page.url.pathname === appPath('/settings');
 		return page.url.pathname.startsWith(href);
 	}
 </script>

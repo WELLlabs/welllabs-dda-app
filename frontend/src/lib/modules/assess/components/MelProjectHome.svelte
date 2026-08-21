@@ -1,4 +1,5 @@
 <script>
+	import { appPath } from '$lib/shared/paths.js';
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 	import ModuleHeader from '$lib/shared/components/ModuleHeader.svelte';
@@ -135,7 +136,7 @@
 		fullProjectTitle
 		{crumbs}
 	>
-		<button type="button" onclick={() => goto('/assess')}>All projects</button>
+		<button type="button" onclick={() => goto(appPath('/assess'))}>All projects</button>
 		<button type="button" onclick={() => goto(`${slugBase}/members`)}>Members</button>
 	</ModuleHeader>
 

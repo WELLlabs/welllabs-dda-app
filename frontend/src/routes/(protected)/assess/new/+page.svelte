@@ -1,9 +1,10 @@
 <script>
+	import { appPath } from '$lib/shared/paths.js';
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 
 	onMount(() => {
-		goto('/assess', { replaceState: true });
+		goto(appPath('/assess'), { replaceState: true });
 	});
 </script>
 

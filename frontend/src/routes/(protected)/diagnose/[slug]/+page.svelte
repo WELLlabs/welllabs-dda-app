@@ -1,4 +1,5 @@
 <script>
+	import { appPath } from '$lib/shared/paths.js';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import MapView from '$lib/modules/diagnose/components/MapView.svelte';
@@ -58,7 +59,7 @@
 	});
 
 	function backToProjects() {
-		goto('/diagnose');
+		goto(appPath('/diagnose'));
 	}
 
 	function dismissPanel() {
@@ -200,7 +201,7 @@
 			subtitle={currentProject.watershed_name}
 			wide
 		>
-			<button type="button" onclick={() => goto(`/diagnose/${slug}/members`)}>Members</button>
+			<button type="button" onclick={() => goto(appPath(`/diagnose/${slug}/members`))}>Members</button>
 			<button type="button" disabled={packaging || syncing} onclick={handlePackage}>
 				{packaging ? 'Packaging…' : 'Package to QField'}
 			</button>

@@ -4,6 +4,7 @@
 	import { login, requestVerifyEmail, startGoogleAuth } from '$lib/modules/accounts/api.js';
 	import { session } from '$lib/shared/session.svelte.js';
 	import ContourBackground from '$lib/shared/components/landing/ContourBackground.svelte';
+	import { appPath } from '$lib/shared/paths.js';
 
 	let email = $state('');
 	let password = $state('');
@@ -29,7 +30,7 @@
 			const user = await login(email.trim(), password);
 			session.setUser(user);
 			const next = page.url.searchParams.get('next') || '/home';
-			goto(next);
+			goto(appPath(next));
 		} catch (err) {
 			const msg = String(err.message ?? err);
 			error = msg;
@@ -100,7 +101,7 @@
 					autocomplete="current-password"
 				/>
 				<p class="m-0 mt-1.5 text-right">
-					<a href="/forgot-password" class="font-mono text-[11px] text-diagnose hover:underline">Forgot password?</a>
+					<a href={appPath('/forgot-password')} class="font-mono text-[11px] text-diagnose hover:underline">Forgot password?</a>
 				</p>
 			</div>
 
@@ -146,7 +147,7 @@
 
 		<p class="mt-6 text-center font-body text-[13px] text-ink-dim">
 			Don't have an account?
-			<a href="/register" class="font-medium text-diagnose hover:underline">Register</a>
+			<a href={appPath('/register')} class="font-medium text-diagnose hover:underline">Register</a>
 		</p>
 	</div>
 </div>

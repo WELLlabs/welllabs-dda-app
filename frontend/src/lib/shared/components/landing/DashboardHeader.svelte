@@ -1,5 +1,6 @@
 <script>
 	import UserMenu from '$lib/shared/components/UserMenu.svelte';
+	import { appPath } from '$lib/shared/paths.js';
 
 	// name kept for backward-compat; UserMenu reads the user from session.
 	let { name = '' } = $props();
@@ -8,7 +9,7 @@
 <header class="hdr">
 	<div class="mx-auto flex max-w-6xl items-center justify-between px-6 md:px-10">
 		<!-- brand -->
-		<a href="/home" class="brand group">
+		<a href={appPath('/home')} class="brand group">
 			<span class="brand-mark">
 				<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" class="h-5 w-5">
 					<path d="M12 3c3.5 4 6 7 6 10a6 6 0 1 1-12 0c0-3 2.5-6 6-10z" stroke-linejoin="round" />

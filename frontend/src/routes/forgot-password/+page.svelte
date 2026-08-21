@@ -1,6 +1,7 @@
 <script>
 	import { forgotPassword } from '$lib/modules/accounts/api.js';
 	import ContourBackground from '$lib/shared/components/landing/ContourBackground.svelte';
+	import { appPath } from '$lib/shared/paths.js';
 
 	let email = $state('');
 	let submitting = $state(false);
@@ -64,7 +65,7 @@
 			</button>
 		</form>
 		<p class="mt-6 text-center font-body text-[13px] text-ink-dim">
-			<a href="/login" class="font-medium text-diagnose hover:underline">Back to sign in</a>
+			<a href={appPath('/login')} class="font-medium text-diagnose hover:underline">Back to sign in</a>
 		</p>
 	</div>
 </div>

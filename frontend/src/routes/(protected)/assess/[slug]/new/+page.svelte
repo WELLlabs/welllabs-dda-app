@@ -1,4 +1,5 @@
 <script>
+	import { appPath } from '$lib/shared/paths.js';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
@@ -19,7 +20,7 @@
 		} catch {
 			// fall through
 		}
-		goto('/assess', { replaceState: true });
+		goto(appPath('/assess'), { replaceState: true });
 	});
 </script>
 

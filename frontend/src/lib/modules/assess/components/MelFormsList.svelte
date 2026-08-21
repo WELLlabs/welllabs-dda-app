@@ -1,4 +1,5 @@
 <script>
+	import { appPath } from '$lib/shared/paths.js';
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import ModuleHeader from '$lib/shared/components/ModuleHeader.svelte';
@@ -54,7 +55,7 @@
 		<button
 			type="button"
 			class="rounded bg-[#1b75e0] px-3 py-1.5 font-body text-sm font-medium text-white hover:bg-[#1565c0]"
-			onclick={() => goto('/assess/new')}
+			onclick={() => goto(appPath('/assess/new'))}
 		>
 			Create new MEL plan
 		</button>
@@ -96,7 +97,7 @@
 				<button
 					type="button"
 					class="mt-5 rounded bg-[#1b75e0] px-4 py-2 font-body text-sm font-medium text-white hover:bg-[#1565c0]"
-					onclick={() => goto('/assess/new')}
+					onclick={() => goto(appPath('/assess/new'))}
 				>
 					Create new MEL plan
 				</button>

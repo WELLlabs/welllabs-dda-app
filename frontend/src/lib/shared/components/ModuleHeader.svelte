@@ -1,5 +1,6 @@
 <script>
 	import UserMenu from '$lib/shared/components/UserMenu.svelte';
+	import { appPath } from '$lib/shared/paths.js';
 
 	/**
 	 * @typedef {{ label: string, href?: string }} Crumb
@@ -28,13 +29,15 @@
 		children
 	} = $props();
 
+	const home = $derived(appPath(homeHref));
 	const trail = $derived(
-		crumbs?.length
+		(crumbs?.length
 			? crumbs
 			: [
 					...(title ? [{ label: title, href: titleHref || undefined }] : []),
 					...(project ? [{ label: project }] : [])
 				]
+		).map((item) => (item.href ? { ...item, href: appPath(item.href) } : item))
 	);
 </script>
 
@@ -45,13 +48,13 @@
 		class:max-w-none={wide}
 	>
 		<div class="brand group">
-			<a href={homeHref} class="brand-mark" aria-label="Home">
+			<a href={home} class="brand-mark" aria-label="Home">
 				<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" class="h-5 w-5">
 					<path d="M12 3c3.5 4 6 7 6 10a6 6 0 1 1-12 0c0-3 2.5-6 6-10z" stroke-linejoin="round" />
 				</svg>
 			</a>
 			<nav class="crumb" class:crumb-wrap={fullProjectTitle || crumbs?.length} aria-label="Breadcrumb">
-				<a href={homeHref} class="brand-name font-display">Water Security Toolbox</a>
+				<a href={home} class="brand-name font-display">Water Security Toolbox</a>
 				{#each trail as item, i (item.label + (item.href || '') + i)}
 					<span class="sep">/</span>
 					{#if item.href}

@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { appPath } from '$lib/shared/paths.js';
+
 	let scrolled = false;
 
 	function onScroll() {
@@ -37,13 +39,13 @@
 
 	<div class="flex items-center gap-3">
 		<a
-			href="/register"
+			href={appPath('/register')}
 			class="rounded-full border border-transparent bg-brand-blue px-4 py-1.5 font-body text-[13px] font-semibold text-white shadow-glass transition-all duration-200 hover:bg-brand-deep"
 		>
 			Get started
 		</a>
 		<a
-			href="/login"
+			href={appPath('/login')}
 			class="rounded-full border border-hairline bg-panel-raised px-4 py-1.5 font-body text-[13px] text-ink transition-colors duration-200 hover:border-diagnose/50 hover:text-diagnose"
 		>
 			Sign in

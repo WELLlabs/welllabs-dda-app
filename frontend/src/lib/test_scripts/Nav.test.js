@@ -7,7 +7,7 @@ describe('Nav', () => {
 		render(Nav);
 
 		expect(screen.getByText(/water security tool/i)).toBeInTheDocument();
-		expect(screen.getByRole('link', { name: /get started/i })).toHaveAttribute('href', '/register');
-		expect(screen.getByRole('link', { name: /sign in/i })).toHaveAttribute('href', '/login');
+		expect(screen.getByRole('link', { name: /get started/i })).toHaveAttribute('href', '/wst/register');
+		expect(screen.getByRole('link', { name: /sign in/i })).toHaveAttribute('href', '/wst/login');
 	});
 });

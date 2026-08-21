@@ -1,6 +1,7 @@
 <script>
 	import { register, startGoogleAuth } from '$lib/modules/accounts/api.js';
 	import ContourBackground from '$lib/shared/components/landing/ContourBackground.svelte';
+	import { appPath } from '$lib/shared/paths.js';
 
 	let name = $state('');
 	let email = $state('');
@@ -52,7 +53,7 @@
 				We sent a verification link to <span class="text-ink">{email}</span>. Open it, then sign in.
 			</p>
 			<p class="mt-6 text-center font-body text-[13px] text-ink-dim">
-				<a href="/login" class="font-medium text-diagnose hover:underline">Back to sign in</a>
+				<a href={appPath('/login')} class="font-medium text-diagnose hover:underline">Back to sign in</a>
 			</p>
 		{:else}
 			<span class="font-mono text-[11px] uppercase tracking-[0.2em] text-diagnose">Get started</span>
@@ -132,7 +133,7 @@
 
 			<p class="mt-6 text-center font-body text-[13px] text-ink-dim">
 				Already have an account?
-				<a href="/login" class="font-medium text-diagnose hover:underline">Sign in</a>
+				<a href={appPath('/login')} class="font-medium text-diagnose hover:underline">Sign in</a>
 			</p>
 		{/if}
 	</div>

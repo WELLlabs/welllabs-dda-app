@@ -2,6 +2,7 @@
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 	import { session } from '$lib/shared/session.svelte.js';
+	import { appPath } from '$lib/shared/paths.js';
 
 	/** @type {{ variant?: 'dark' | 'light' }} */
 	let { variant = 'dark' } = $props();
@@ -26,13 +27,13 @@
 
 	function nav(path) {
 		open = false;
-		goto(path);
+		goto(appPath(path));
 	}
 
 	async function handleSignOut() {
 		open = false;
 		await session.logout();
-		goto('/');
+		goto(appPath('/'));
 	}
 
 </script>

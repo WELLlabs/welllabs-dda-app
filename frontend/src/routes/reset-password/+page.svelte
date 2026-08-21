@@ -3,6 +3,7 @@
 	import { page } from '$app/state';
 	import { resetPassword } from '$lib/modules/accounts/api.js';
 	import ContourBackground from '$lib/shared/components/landing/ContourBackground.svelte';
+	import { appPath } from '$lib/shared/paths.js';
 
 	let password = $state('');
 	let submitting = $state(false);
@@ -39,7 +40,7 @@
 			<button
 				type="button"
 				class="mt-6 w-full cursor-pointer rounded-full bg-brand-blue px-4 py-2.5 font-body text-[14px] font-semibold text-white"
-				onclick={() => goto('/login')}
+				onclick={() => goto(appPath('/login'))}
 			>
 				Sign in
 			</button>

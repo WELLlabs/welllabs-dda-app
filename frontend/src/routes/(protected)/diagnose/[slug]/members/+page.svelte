@@ -1,4 +1,5 @@
 <script>
+	import { appPath } from '$lib/shared/paths.js';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
@@ -96,7 +97,7 @@
 	});
 
 	function backToProject() {
-		goto(`/diagnose/${slug}`);
+		goto(appPath(`/diagnose/${slug}`));
 	}
 
 	async function handleLookup() {
@@ -144,7 +145,7 @@
 		if (!confirm('Leave this project? You will lose access.')) return;
 		try {
 			await removeUserAccess(project.id, session.user.id);
-			goto('/diagnose');
+			goto(appPath('/diagnose'));
 		} catch (err) {
 			error = String(err.message ?? err);
 		}
@@ -202,7 +203,7 @@
 		<p class="m-0 text-brand-navy">{loadError || 'Project not found'}</p>
 		<button
 			class="cursor-pointer rounded bg-brand-blue px-4 py-2 font-body text-white hover:bg-brand-deep"
-			onclick={() => goto('/diagnose')}
+			onclick={() => goto(appPath('/diagnose'))}
 		>
 			← Back to projects
 		</button>
@@ -452,7 +453,7 @@
 								{:else}
 									<p class="m-0 text-xs text-brand-steel">
 										You have no other organizations to add. Create one from
-										<a href="/settings/organizations" class="text-brand-blue underline">settings</a>.
+										<a href={appPath('/settings/organizations')} class="text-brand-blue underline">settings</a>.
 									</p>
 								{/if}
 							</div>
