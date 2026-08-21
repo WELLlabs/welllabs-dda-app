@@ -52,13 +52,17 @@ apt_retry apt-get install -y \
   postgresql-client \
   nginx
 
-# Install Node.js 20 (includes npm) only if not already present
-if ! command -v node &>/dev/null; then
-  echo "Node.js not found, installing..."
-  curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+# Install / upgrade Node.js 22+ (SvelteKit / jsdom transitive deps require >=22.13)
+NODE_MAJOR=0
+if command -v node &>/dev/null; then
+  NODE_MAJOR=$(node -v | sed 's/^v\([0-9]*\).*/\1/')
+  echo "Node.js already installed: $(node --version) (major=${NODE_MAJOR})"
+fi
+if [ "${NODE_MAJOR}" -lt 22 ]; then
+  echo "Installing Node.js 22.x (required for frontend build)..."
+  curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
   apt_retry apt-get install -y nodejs
-else
-  echo "Node.js already installed: $(node --version)"
+  echo "Node.js now: $(node --version), npm: $(npm --version)"
 fi
 
 # /opt/welllabs/shared/.env is written by after_install.sh via AWS Secrets Manager.

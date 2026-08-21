@@ -288,7 +288,8 @@ export PUBLIC_ORIGIN="${FRONTEND_ORIGIN_HOST}"
 export API_URL="http://127.0.0.1:8080"
 
 # DevDependencies are required to *build* SvelteKit (vite, adapter-node, etc.)
-npm ci --os=linux --cpu=x64 || npm install --os=linux --cpu=x64
+# --ignore-engines: EC2 may briefly lag package engine pins during Node upgrades
+npm ci --os=linux --cpu=x64 --ignore-engines || npm install --os=linux --cpu=x64 --ignore-engines
 npm run build
 
 # ──────────────────────────────────────────────────────────────────────────────
