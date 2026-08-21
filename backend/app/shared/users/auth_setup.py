@@ -93,8 +93,9 @@ class RedirectCookieTransport(CookieTransport):
         self.post_login_redirect_url = post_login_redirect_url
 
     async def get_login_response(self, token: str) -> Response:
+        base = settings.frontend_base_path  # "" locally, "/wst" in production
         dest = (
-            "/complete-profile"
+            f"{base}/complete-profile"
             if oauth_needs_name_setup.get()
             else self.post_login_redirect_url
         )
@@ -129,6 +130,7 @@ auth_backend = AuthenticationBackend(
 )
 
 # Same JWT audience ("cookie") so /me works; redirect transport for Google only
+_oauth_home = f"{settings.frontend_base_path}/home" if settings.frontend_base_path else "/home"
 oauth_auth_backend = AuthenticationBackend(
     name="cookie",
     transport=RedirectCookieTransport(
@@ -137,7 +139,7 @@ oauth_auth_backend = AuthenticationBackend(
         cookie_secure=settings.session_cookie_secure,
         cookie_httponly=True,
         cookie_samesite="lax",
-        post_login_redirect_url="/home",
+        post_login_redirect_url=_oauth_home,
     ),
     get_strategy=get_jwt_strategy,
 )

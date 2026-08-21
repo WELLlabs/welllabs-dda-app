@@ -49,8 +49,13 @@ Add **Authorized redirect URIs** (exact match):
 
 - `http://localhost:5173/api/accounts/auth/google/callback`
 - `http://localhost:5174/api/accounts/auth/google/callback`
+- `https://ai.welllabs.org/api/accounts/auth/google/callback` (production / CodeDeploy)
 
-(Plus your production HTTPS callback when deployed.)
+Also add **Authorized JavaScript origins**:
+
+- `http://localhost:5173`
+- `http://localhost:5174`
+- `https://ai.welllabs.org`
 
 ## Schema notes
 
