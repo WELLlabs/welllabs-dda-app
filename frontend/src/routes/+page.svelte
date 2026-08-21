@@ -1,137 +1,56 @@
-<script>
-  import { onMount } from 'svelte';
+<script lang="ts">
+	import { onMount } from 'svelte';
+	import { animate, inView } from 'motion';
+	import Nav from '$lib/shared/components/landing/Nav.svelte';
+	import LandingBackground from '$lib/shared/components/landing/LandingBackground.svelte';
+	import Hero from '$lib/shared/components/landing/Hero.svelte';
+	import WorkspacePanels from '$lib/shared/components/landing/WorkspacePanels.svelte';
+	import MetricsOverview from '$lib/shared/components/landing/MetricsOverview.svelte';
+	import Footer from '$lib/shared/components/landing/Footer.svelte';
 
-  let map;
-
-  let selectedLat = $state(null);
-  let selectedLng = $state(null);
-
-  let watershed = $state(null);
-
-  let marker = null;
-  let watershedLayer = null;
-
-  let L;
-
-  onMount(async () => {
-
-    const leaflet = await import('leaflet');
-
-    L = leaflet.default;
-
-    map = L.map('map').setView([12.9, 77.7], 10);
-
-    L.tileLayer(
-      'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-      {
-        attribution: '&copy; OpenStreetMap contributors'
-      }
-    ).addTo(map);
-
-    map.on('click', (e) => {
-
-      selectedLat = e.latlng.lat.toFixed(6);
-      selectedLng = e.latlng.lng.toFixed(6);
-
-      if (marker) {
-        map.removeLayer(marker);
-      }
-
-      marker = L.marker([
-        selectedLat,
-        selectedLng
-      ]).addTo(map);
-
-    });
-
-  });
-
-  async function fetchWatershed() {
-
-    if (!selectedLat || !selectedLng) {
-      alert('Select a point on the map');
-      return;
-    }
-
-    try {
-
-       const apiBase = import.meta.env.VITE_API_URL || '';
-       const response = await fetch(
-        `${apiBase}/api/watershed/?lat=${selectedLat}&lng=${selectedLng}`
-      );
-
-      watershed = await response.json();
-
-      console.log(watershed);
-
-      if (watershedLayer) {
-        map.removeLayer(watershedLayer);
-      }
-
-      if (watershed.geom) {
-
-        watershedLayer = L.geoJSON(
-          watershed.geom
-        ).addTo(map);
-
-        map.fitBounds(
-          watershedLayer.getBounds()
-        );
-
-      }
-
-    } catch (err) {
-
-      console.error(err);
-
-      alert('Failed to fetch watershed');
-
-    }
-
-  }
+	onMount(() => {
+		const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+		const reveals = document.querySelectorAll<HTMLElement>('[data-reveal]');
+		reveals.forEach((el) => {
+			if (prefersReduced) {
+				el.style.opacity = '1';
+				return;
+			}
+			el.style.opacity = '0';
+			inView(
+				el,
+				() => {
+					animate(
+						el,
+						{ opacity: [0, 1], transform: ['translateY(24px)', 'translateY(0)'] },
+						{ duration: 0.8, easing: [0.16, 1, 0.3, 1] }
+					);
+				},
+				{ margin: '-10% 0px -10% 0px' }
+			);
+		});
+	});
 </script>
 
 <svelte:head>
-  <link
-    rel="stylesheet"
-    href="https://unpkg.com/leaflet/dist/leaflet.css"
-  />
+	<title>WST fork</title>
+	<meta name="description" content="One workspace. Every watershed. Every decision." />
 </svelte:head>
 
-<div class="h-screen flex flex-col">
+<LandingBackground />
 
-  <div class="bg-white shadow p-4 z-[1000]">
+<Nav />
 
-    <h1 class="text-2xl font-bold mb-4">
-      WELLlabs DDA 
-    </h1> 
+<main class="relative z-10 bg-transparent">
+	<Hero />
 
-    <div class="flex gap-4 items-center flex-wrap">
+	<div data-reveal>
+		<WorkspacePanels />
+	</div>
 
-      <div>
-        <strong>Latitude:</strong>
-        {selectedLat || '-'}
-      </div>
+	<div data-reveal>
+		<MetricsOverview />
+	</div>
 
-      <div>
-        <strong>Longitude:</strong>
-        {selectedLng || '-'}
-      </div>
-
-      <button
-        class="bg-black text-white px-4 py-2 rounded-lg"
-        onclick={fetchWatershed}
-      >
-        Send
-      </button>
-
-    </div>
-
-  </div>
-
-  <div
-    id="map"
-    class="flex-1"
-  ></div>
-
-</div>
+	<Footer />
+</main>

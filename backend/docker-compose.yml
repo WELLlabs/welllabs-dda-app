@@ -1,0 +1,78 @@
+services:
+  postgis:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_USER: geofield
+      POSTGRES_PASSWORD: geofield
+      POSTGRES_DB: dda_product
+    ports:
+      - "${POSTGIS_HOST_PORT:-5432}:5432"
+    volumes:
+      - postgis_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U geofield -d dda_product"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  titiler:
+    image: ghcr.io/developmentseed/titiler:latest
+    env_file: .env
+    ports:
+      - "${TITILER_HOST_PORT:-8000}:8000"
+    environment:
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      CPL_VSIL_CURL_ALLOWED_EXTENSIONS: .tif,.tiff,.TIF,.TIFF
+      GDAL_DISABLE_READDIR_ON_OPEN: EMPTY_DIR
+      VSI_CACHE: "TRUE"
+      VSI_CACHE_SIZE: "5000000"
+    command: uvicorn titiler.application.main:app --host 0.0.0.0 --port 8000
+
+  api:
+    build: .
+    env_file: .env
+    ports:
+      - "${API_HOST_PORT:-8080}:8080"
+    environment:
+      DATABASE_URL: postgresql://geofield:geofield@postgis:5432/dda_product
+      TITILER_URL: http://titiler:8000
+      TITILER_PUBLIC_URL: ${TITILER_PUBLIC_URL:-http://localhost:8000}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_S3_BUCKET: ${AWS_S3_BUCKET:-}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      COG_LAYERS: ${COG_LAYERS:-lulc.cog.tif}
+      VECTOR_LAYERS: ${VECTOR_LAYERS:-}
+      WATERSHEDS_FGB_KEY: ${WATERSHEDS_FGB_KEY:-watersheds.fbg}
+      CPL_VSIL_CURL_ALLOWED_EXTENSIONS: .tif,.tiff,.TIF,.TIFF,.fgb,.fbg,.FGB,.FBG,.gpkg,.GPKG
+      GDAL_DISABLE_READDIR_ON_OPEN: EMPTY_DIR
+      VSI_CACHE: "TRUE"
+      VSI_CACHE_SIZE: "5000000"
+      QFIELD_CLOUD_URL: ${QFIELD_CLOUD_URL:-https://app.qfield.cloud/api/v1/}
+      QFIELD_PROJECT_NAME: ${QFIELD_PROJECT_NAME:-geo-field-pipeline}
+      POSTGIS_PUBLIC_HOST: ${POSTGIS_PUBLIC_HOST:-localhost}
+      POSTGIS_PUBLIC_PORT: ${POSTGIS_PUBLIC_PORT:-5432}
+      QFIELD_RASTER_MIN_ZOOM: ${QFIELD_RASTER_MIN_ZOOM:-8}
+      QFIELD_RASTER_MAX_ZOOM: ${QFIELD_RASTER_MAX_ZOOM:-16}
+      QFIELD_RASTER_MAX_PIXELS: ${QFIELD_RASTER_MAX_PIXELS:-2048}
+      HOST_PACKAGES_DIR: ${HOST_PACKAGES_DIR:-}
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:5173}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-}
+      API_PUBLIC_URL: ${API_PUBLIC_URL:-http://localhost:8080}
+      # ODK_* come from env_file: .env — do not re-declare here with ${VAR:-}
+      # or an empty host substitution will override and clear them.
+    volumes:
+      - ./app:/app/app
+      - ./app/modules/diagnose/qgis:/app/qgis:ro
+      - ${HOST_PACKAGES_DIR:-/tmp/geo-field-pipeline-packages}:/app/packages
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      postgis:
+        condition: service_healthy
+
+volumes:
+  postgis_data:

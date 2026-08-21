@@ -1,33 +1,43 @@
-# macOS
-.DS_Store
-
-# Python
-backend/venv/
-__pycache__/
-*.pyc
-
-# Django
-backend/db.sqlite3
-backend/staticfiles/
-
-# Environment variables
+# Env
+.env
 backend/.env
+backend/.env.dda-fork
 frontend/.env
 
-# Node
-frontend/node_modules/
+# Node / frontend
+node_modules/
+.svelte-kit/
+build/
+dist/
 
-# Svelte build
-frontend/.svelte-kit/
-frontend/build/
+# Python / backend
+__pycache__/
+*.pyc
+.venv/
 
-# Logs
-*.log
-
-# GIS data
-data/raw/
-data/processed/
+# QField packaging output (local dev)
+backend/packages/
+packages/
 
 # QGIS
-*.qgz~
-*.qgs~
+*.qgz
+
+# Local research / conversion artifacts (do not commit)
+clinton_code.py
+clinton_code_updated.ipynb
+conversions/
+notes.md
+reference.svelte
+analyses.csv
+cm_indicators.csv
+outcomes.csv
+groundwater.csv
+soilmoisture.csv
+waterlevel.csv
+indicators_mel_usable.csv
+indicators MEL.csv
+frontend/static/indicators_mel.csv
+frontend/static/outcomes_indicators.csv
+
+# OS
+.DS_Store

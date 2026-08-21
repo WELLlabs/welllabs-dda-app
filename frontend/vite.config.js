@@ -1,5 +1,29 @@
-import tailwindcss from '@tailwindcss/vite';
 import { sveltekit } from '@sveltejs/kit/vite';
-import { defineConfig } from 'vite';
+import tailwindcss from '@tailwindcss/vite';
+import { defineConfig } from 'vitest/config';
 
-export default defineConfig({ plugins: [tailwindcss(), sveltekit()] });
+export default defineConfig({
+	plugins: [tailwindcss(), sveltekit()],
+	resolve: {
+		conditions: ['browser']
+	},
+	test: {
+		environment: 'jsdom',
+		setupFiles: ['./src/test/setup.js'],
+		globals: true
+	},
+	server: {
+		host: 'localhost',
+		port: 5173,
+		// If 5173 is taken, Vite moves to 5174 (and so on). Prefer staying on 517x.
+		strictPort: false,
+		proxy: {
+			// /api is handled by src/routes/api/[...path]/+server.js (SvelteKit),
+			// not Vite — keeping both causes inconsistent behaviour.
+			'/titiler': {
+				target: process.env.TITILER_URL || 'http://localhost:8000',
+				rewrite: (path) => path.replace(/^\/titiler/, '')
+			}
+		}
+	}
+});

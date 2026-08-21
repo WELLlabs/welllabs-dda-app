@@ -8,23 +8,32 @@
 		"build": "vite build",
 		"preview": "vite preview",
 		"prepare": "svelte-kit sync || echo ''",
-		"lint": "prettier --check .",
-		"format": "prettier --write ."
+		"test": "vitest",
+		"test:run": "vitest run"
 	},
 	"devDependencies": {
-		"@sveltejs/adapter-node": "^5.2.11",
 		"@sveltejs/adapter-auto": "^7.0.1",
-		"@sveltejs/kit": "^2.57.0",
-		"@sveltejs/vite-plugin-svelte": "^7.0.0",
-		"@tailwindcss/vite": "^4.2.2",
-		"prettier": "^3.8.1",
-		"prettier-plugin-svelte": "^3.5.1",
-		"prettier-plugin-tailwindcss": "^0.7.2",
-		"svelte": "^5.55.2",
-		"tailwindcss": "^4.2.2",
-		"vite": "^8.0.7"
+		"@sveltejs/kit": "^2.63.0",
+		"@sveltejs/vite-plugin-svelte": "^7.1.2",
+		"@tailwindcss/vite": "^4.3.1",
+		"@testing-library/jest-dom": "^7.0.0",
+		"@testing-library/svelte": "^5.4.2",
+		"@types/d3": "^7.4.3",
+		"@types/node": "^26.1.1",
+		"@types/qrcode": "^1.5.6",
+		"jsdom": "^30.0.1",
+		"svelte": "^5.56.1",
+		"tailwindcss": "^4.3.1",
+		"vite": "^8.0.16",
+		"vitest": "^4.1.10",
+		"@sveltejs/adapter-node": "^5.2.11"
 	},
 	"dependencies": {
-		"leaflet": "^1.9.4"
+		"@mapbox/mapbox-gl-draw": "^1.5.1",
+		"d3": "^7.9.0",
+		"flatgeobuf": "^4.4.0",
+		"maplibre-gl": "^5.24.0",
+		"motion": "^12.42.2",
+		"qrcode": "^1.5.4"
 	}
 }
