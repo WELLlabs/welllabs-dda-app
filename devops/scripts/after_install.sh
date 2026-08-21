@@ -112,37 +112,61 @@ echo "--- [5/7] Writing ${SHARED_ENV} ---"
 
 mkdir -p "${SHARED_DIR}" "${PACKAGES_DIR}"
 
-# Generate .env from every key in the JSON — no hardcoded key list needed
-jq -r 'to_entries | .[] | "\(.key)=\(.value)"' <<< "${APP_CONFIG_JSON}" > "${SHARED_ENV}"
-
-# Production defaults / derived values for systemd + SvelteKit adapter-node
-append_if_missing() {
-  local key="$1"
-  local value="$2"
-  if ! grep -q "^${key}=" "${SHARED_ENV}"; then
-    echo "${key}=${value}" >> "${SHARED_ENV}"
-  fi
-}
-
-FRONTEND_ORIGIN_VAL=$(grep ^FRONTEND_ORIGIN= "${SHARED_ENV}" | cut -d= -f2- | tr -d '\r')
-# Strip any path from FRONTEND_ORIGIN for CORS / adapter-node ORIGIN
-FRONTEND_ORIGIN_HOST=$(python3 - <<PY
+# Generate .env for systemd EnvironmentFile + pydantic-settings.
+# Always double-quote values (spaces/special chars). Do not bash-`source`
+# this file later — pull DATABASE_URL with jq instead.
+export APP_CONFIG_JSON
+python3 - "${SHARED_ENV}" "${PACKAGES_DIR}" <<'PY'
+import json, os, re, sys
+from pathlib import Path
 from urllib.parse import urlparse
-u = urlparse("${FRONTEND_ORIGIN_VAL}")
-print(f"{u.scheme}://{u.netloc}" if u.scheme and u.netloc else "${FRONTEND_ORIGIN_VAL}".rstrip("/"))
-PY
+
+shared_env = Path(sys.argv[1])
+packages_dir = sys.argv[2]
+cfg = json.loads(os.environ["APP_CONFIG_JSON"])
+
+def escape(value: object) -> str:
+    s = "" if value is None else str(value)
+    return (
+        s.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("$", "\\$")
+        .replace("`", "\\`")
+    )
+
+# Normalize FRONTEND_ORIGIN to host-only for CORS / adapter-node ORIGIN
+raw_origin = str(cfg.get("FRONTEND_ORIGIN") or "").strip()
+u = urlparse(raw_origin)
+frontend_origin_host = (
+    f"{u.scheme}://{u.netloc}" if u.scheme and u.netloc else raw_origin.rstrip("/")
 )
-# Rewrite FRONTEND_ORIGIN to host-only if a path was included
-sed -i "s|^FRONTEND_ORIGIN=.*|FRONTEND_ORIGIN=${FRONTEND_ORIGIN_HOST}|" "${SHARED_ENV}"
+if frontend_origin_host:
+    cfg["FRONTEND_ORIGIN"] = frontend_origin_host
 
-append_if_missing "ORIGIN" "${FRONTEND_ORIGIN_HOST}"
-append_if_missing "FRONTEND_BASE_PATH" "/wst"
-append_if_missing "API_URL" "http://127.0.0.1:8080"
-append_if_missing "API_PUBLIC_URL" "http://127.0.0.1:8080"
-append_if_missing "SESSION_COOKIE_SECURE" "true"
-append_if_missing "HOST_PACKAGES_DIR" "${PACKAGES_DIR}"
-append_if_missing "PACKAGES_DIR" "${PACKAGES_DIR}"
+defaults = {
+    "ORIGIN": frontend_origin_host or "https://ai.welllabs.org",
+    "FRONTEND_BASE_PATH": "/wst",
+    "API_URL": "http://127.0.0.1:8080",
+    "API_PUBLIC_URL": "http://127.0.0.1:8080",
+    "SESSION_COOKIE_SECURE": "true",
+    "HOST_PACKAGES_DIR": packages_dir,
+    "PACKAGES_DIR": packages_dir,
+}
+for key, value in defaults.items():
+    cfg.setdefault(key, value)
 
+lines = [f'{key}="{escape(value)}"' for key, value in cfg.items()]
+shared_env.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+# Expose host for later steps in this shell via a tiny sidecar file
+Path(str(shared_env) + ".frontend_origin_host").write_text(
+    frontend_origin_host + "\n", encoding="utf-8"
+)
+PY
+
+FRONTEND_ORIGIN_HOST=$(tr -d '\r\n' < "${SHARED_ENV}.frontend_origin_host")
+rm -f "${SHARED_ENV}.frontend_origin_host"
 # Secure: only root can read it
 chmod 600 "${SHARED_ENV}"
 chown root:root "${SHARED_ENV}"
@@ -151,7 +175,7 @@ echo ".env written  : ${SHARED_ENV}"
 echo "─────────────────────────────────────────────────────────────"
 # Log keys — mask values that look sensitive
 while IFS='=' read -r key value; do
-  if [[ "$key" =~ (SECRET|PASSWORD|TOKEN|KEY|AWS_SECRET) ]]; then
+  if [[ "$key" =~ (SECRET|PASSWORD|TOKEN|KEY|AWS_SECRET|DATABASE_URL) ]]; then
     echo "  $key=[REDACTED, ${#value} chars]"
   else
     echo "  $key=$value"
@@ -213,15 +237,12 @@ fi
 # Database: ensure PostGIS schema (idempotent init + migrations)
 # ──────────────────────────────────────────────────────────────────────────────
 echo "Applying PostGIS schema / migrations..."
-set -a
-# shellcheck disable=SC1090
-source "${SHARED_ENV}"
-set +a
-
-if [ -z "${DATABASE_URL:-}" ]; then
-  echo "ERROR: DATABASE_URL empty after sourcing shared .env"
+DATABASE_URL=$(jq -r '.DATABASE_URL // empty' <<< "${APP_CONFIG_JSON}")
+if [ -z "${DATABASE_URL}" ]; then
+  echo "ERROR: DATABASE_URL empty in Secrets Manager JSON"
   exit 1
 fi
+export DATABASE_URL
 
 PSQL=(psql "${DATABASE_URL}" -v ON_ERROR_STOP=1)
 
