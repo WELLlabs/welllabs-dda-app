@@ -9,7 +9,13 @@ let loaded = $state(false);
 async function loadSession() {
 	loading = true;
 	try {
-		user = await fetchMe();
+		// Race the /me fetch against an 8-second timeout so a hanging upstream
+		// (e.g. old service on port 8080 absorbing the request) never leaves the
+		// UI stuck on "Loading…" indefinitely.
+		const timeout = new Promise((_, reject) =>
+			setTimeout(() => reject(new Error('session load timed out')), 8000)
+		);
+		user = await Promise.race([fetchMe(), timeout]);
 	} catch {
 		user = null;
 	} finally {

@@ -1,6 +1,7 @@
 <script>
 	import { goto } from '$app/navigation';
 	import { session } from '$lib/shared/session.svelte.js';
+	import { appPath } from '$lib/shared/paths.js';
 	import DashboardHeader from '$lib/shared/components/landing/DashboardHeader.svelte';
 	import ContourBackground from '$lib/shared/components/landing/ContourBackground.svelte';
 
@@ -53,7 +54,7 @@
 	});
 
 	function openModule(mod) {
-		goto(mod.href);
+		goto(appPath(mod.href));
 	}
 
 	function handlePointer(event) {

@@ -3,6 +3,7 @@
 	import { page } from '$app/state';
 	import { updateMe } from '$lib/modules/accounts/api.js';
 	import { session } from '$lib/shared/session.svelte.js';
+	import { appPath } from '$lib/shared/paths.js';
 	import ContourBackground from '$lib/shared/components/landing/ContourBackground.svelte';
 
 	let name = $state('');
@@ -32,7 +33,7 @@
 				name: updated?.name ?? trimmed
 			});
 			const next = page.url.searchParams.get('next') || '/home';
-			goto(next);
+			goto(appPath(next));
 		} catch (err) {
 			error = String(err.message ?? err);
 		} finally {

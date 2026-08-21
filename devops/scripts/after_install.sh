@@ -297,11 +297,15 @@ npm run build
 # ──────────────────────────────────────────────────────────────────────────────
 echo "Installing Nginx & systemd configs..."
 
+# Remove ALL old conf.d / sites-enabled configs before installing ours.
+# A leftover file from a previous deployment could shadow our location blocks
+# (e.g. an old server block with "server_name _;" becomes the nginx default and
+# its /health or /api/ rules take precedence over ours).
 cp /etc/nginx/conf.d/welllabs.conf /etc/nginx/conf.d/welllabs.conf.bak 2>/dev/null || true
+rm -f /etc/nginx/conf.d/*.conf
+rm -f /etc/nginx/sites-enabled/*
 
 cp "$RELEASE_DIR/devops/nginx/welllabs.conf" /etc/nginx/conf.d/welllabs.conf
-rm -f /etc/nginx/conf.d/default.conf
-rm -f /etc/nginx/sites-enabled/default
 
 if ! nginx -t; then
   echo "ERROR: Nginx config invalid — restoring previous config..."

@@ -5,6 +5,17 @@ echo "=== BeforeInstall: Preparing for deployment ==="
 # Create necessary directories if they don't exist
 mkdir -p /opt/welllabs/{releases,shared,logs,shared/packages}
 
+# ── Free ports before deployment ──────────────────────────────────────────────
+# Kill any process occupying port 8080 (FastAPI) or 3000 (SvelteKit).
+# An old service from a previous deployment may be running there; if we don't
+# clear it, uvicorn / node will fail to bind and the deployment silently uses
+# the stale process for new traffic.
+echo "Freeing ports 8080 and 3000..."
+fuser -k 8080/tcp 2>/dev/null || true
+fuser -k 3000/tcp  2>/dev/null || true
+# Brief pause to let the OS release the sockets cleanly before we start new services
+sleep 2
+
 # Stop unattended-upgrades temporarily to avoid dpkg lock conflicts
 echo "Stopping unattended-upgrades if active..."
 systemctl stop unattended-upgrades || true

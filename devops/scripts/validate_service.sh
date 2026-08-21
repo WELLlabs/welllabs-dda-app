@@ -11,13 +11,18 @@ RETRY_INTERVAL=3
 HTTP_CODE=000
 
 for i in $(seq 1 $MAX_RETRIES); do
+    HEALTH_BODY=$(curl -s http://localhost/health || true)
     HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/health || echo "000")
-    echo "  Attempt $i/$MAX_RETRIES → GET /health → HTTP $HTTP_CODE"
+    echo "  Attempt $i/$MAX_RETRIES → GET /health → HTTP $HTTP_CODE body=${HEALTH_BODY}"
 
-    if [ "$HTTP_CODE" -eq 200 ]; then
+    # Verify FastAPI is actually running: it returns JSON {"status":"ok"}.
+    # An old SvelteKit service on port 8080 would return HTML and pass a naive
+    # HTTP-200 check, but our app would be broken. Require the JSON sentinel.
+    if [ "$HTTP_CODE" -eq 200 ] && echo "$HEALTH_BODY" | grep -q '"ok"'; then
         break
     fi
 
+    HTTP_CODE=000  # reset so the success check below fails unless we broke out early
     if [ "$i" -lt "$MAX_RETRIES" ]; then
         sleep $RETRY_INTERVAL
     fi
@@ -38,7 +43,7 @@ print_status() {
 # ──────────────────────────────────────
 # Evaluate result
 # ──────────────────────────────────────
-if [ "$HTTP_CODE" -eq 200 ]; then
+if [ "$HTTP_CODE" -eq 200 ] && echo "$HEALTH_BODY" | grep -q '"ok"'; then
     # Soft-check frontend path (non-fatal — health already proves API + nginx)
     FRONT_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/wst/ || echo "000")
     echo "  Soft check GET /wst/ → HTTP $FRONT_CODE"
