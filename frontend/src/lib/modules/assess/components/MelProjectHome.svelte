@@ -26,7 +26,7 @@
 	let deletingId = $state(null);
 	let openMenuId = $state(null);
 
-	const ASSESS_GREEN = '#16a34a';
+	const ASSESS_BLUE = '#1b75e0';
 	const slugBase = $derived(itemPath('/assess', project, projects));
 	const crumbs = $derived(assessCrumbs({ projects, project }));
 
@@ -163,7 +163,7 @@
 				class="rounded-xl border border-dashed border-brand-navy/20 bg-gray-50 px-6 py-10 text-center font-body text-sm text-[#56646f]"
 			>
 				No MEL plans yet.
-				<button type="button" class="text-[#16a34a] underline" onclick={openCreate}>Add a plan</button>
+				<button type="button" class="text-[#1b75e0] underline" onclick={openCreate}>Add a plan</button>
 				to get started.
 			</div>
 		{:else}
@@ -175,7 +175,7 @@
 					<div
 						class="card group"
 						class:in={mounted}
-						style="--accent: {ASSESS_GREEN}; --delay: {i * 70}ms;"
+						style="--accent: {ASSESS_BLUE}; --delay: {i * 70}ms;"
 						role="button"
 						tabindex="0"
 						onpointermove={handlePointer}
@@ -248,7 +248,7 @@
 			<input
 				id="mel-plan-name"
 				type="text"
-				class="mb-4 w-full rounded border border-brand-navy/20 px-3 py-2 font-body outline-none focus:border-[#16a34a] focus:ring-2 focus:ring-[#16a34a]/20"
+				class="mb-4 w-full rounded border border-brand-navy/20 px-3 py-2 font-body outline-none focus:border-[#1b75e0] focus:ring-2 focus:ring-[#1b75e0]/20"
 				placeholder="e.g. Check dams – Kolar"
 				bind:value={planName}
 			/>
@@ -268,7 +268,7 @@
 				<button type="button" class="action-btn" onclick={() => (showCreate = false)}>Cancel</button>
 				<button
 					type="button"
-					class="rounded bg-[#16a34a] px-4 py-2 font-body text-sm font-medium text-white hover:bg-[#15803d] disabled:opacity-50"
+					class="rounded bg-[#1b75e0] px-4 py-2 font-body text-sm font-medium text-white hover:bg-[#1565c0] disabled:opacity-50"
 					disabled={creating || !planName.trim() || !interventionSlug}
 					onclick={handleCreate}
 				>
@@ -283,8 +283,8 @@
 	.add-btn {
 		cursor: pointer;
 		border-radius: 0.5rem;
-		border: 1px solid color-mix(in srgb, #16a34a 40%, transparent);
-		background: #16a34a;
+		border: 1px solid color-mix(in srgb, #1b75e0 40%, transparent);
+		background: #1b75e0;
 		padding: 0.55rem 1rem;
 		font-family: var(--font-body);
 		font-size: 0.875rem;
@@ -292,7 +292,7 @@
 		color: white;
 	}
 	.add-btn:hover {
-		background: #15803d;
+		background: #1565c0;
 	}
 	.card {
 		position: relative;

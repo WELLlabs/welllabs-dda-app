@@ -2,8 +2,8 @@
 	import { onDestroy } from 'svelte';
 	import * as d3 from 'd3';
 	import {
-		ASSESS_GREEN,
-		GREEN_SCALE,
+		ASSESS_BLUE,
+		BLUE_SCALE,
 		aggregateSeries,
 		autoCalendarRange,
 		boxPlotSeries,
@@ -302,7 +302,7 @@
 			.attr('y', (d) => y(d.value))
 			.attr('width', x.bandwidth())
 			.attr('height', (d) => Math.max(0, y(0) - y(d.value)))
-			.attr('fill', ASSESS_GREEN)
+			.attr('fill', ASSESS_BLUE)
 			.attr('opacity', 0.85)
 			.append('title')
 			.text((d) => `${d.key}: ${d.value.toFixed(2)}`);
@@ -367,7 +367,7 @@
 			.append('path')
 			.datum(lineSeries)
 			.attr('fill', 'none')
-			.attr('stroke', ASSESS_GREEN)
+			.attr('stroke', ASSESS_BLUE)
 			.attr('stroke-width', 2.25)
 			.attr('d', line);
 
@@ -378,7 +378,7 @@
 			.attr('cx', (d) => x(d.key) ?? 0)
 			.attr('cy', (d) => y(d.value))
 			.attr('r', 3.5)
-			.attr('fill', ASSESS_GREEN)
+			.attr('fill', ASSESS_BLUE)
 			.append('title')
 			.text((d) => `${d.key}: ${d.value.toFixed(2)}`);
 	}
@@ -450,7 +450,7 @@
 			.attr('x2', cx)
 			.attr('y1', (d) => y(d.min))
 			.attr('y2', (d) => y(d.max))
-			.attr('stroke', ASSESS_GREEN)
+			.attr('stroke', ASSESS_BLUE)
 			.attr('stroke-width', 1.25);
 
 		g.append('line')
@@ -458,7 +458,7 @@
 			.attr('x2', bw * 0.75)
 			.attr('y1', (d) => y(d.min))
 			.attr('y2', (d) => y(d.min))
-			.attr('stroke', ASSESS_GREEN)
+			.attr('stroke', ASSESS_BLUE)
 			.attr('stroke-width', 1.25);
 
 		g.append('line')
@@ -466,7 +466,7 @@
 			.attr('x2', bw * 0.75)
 			.attr('y1', (d) => y(d.max))
 			.attr('y2', (d) => y(d.max))
-			.attr('stroke', ASSESS_GREEN)
+			.attr('stroke', ASSESS_BLUE)
 			.attr('stroke-width', 1.25);
 
 		g.append('rect')
@@ -474,9 +474,9 @@
 			.attr('width', bw * 0.64)
 			.attr('y', (d) => y(d.q3))
 			.attr('height', (d) => Math.max(1, y(d.q1) - y(d.q3)))
-			.attr('fill', ASSESS_GREEN)
+			.attr('fill', ASSESS_BLUE)
 			.attr('fill-opacity', 0.28)
-			.attr('stroke', ASSESS_GREEN)
+			.attr('stroke', ASSESS_BLUE)
 			.attr('stroke-width', 1.5);
 
 		g.append('line')
@@ -484,7 +484,7 @@
 			.attr('x2', bw * 0.82)
 			.attr('y1', (d) => y(d.median))
 			.attr('y2', (d) => y(d.median))
-			.attr('stroke', '#14532d')
+			.attr('stroke', '#0d2c4c')
 			.attr('stroke-width', 2);
 
 		g.append('title').text(
@@ -523,7 +523,7 @@
 			const height = topPad + 7 * (cell + gap) + 4;
 
 			const maxCount = d3.max(activity, (d) => d.count) || 1;
-			const color = d3.scaleQuantize().domain([0, maxCount]).range(GREEN_SCALE);
+			const color = d3.scaleQuantize().domain([0, maxCount]).range(BLUE_SCALE);
 
 			const svg = d3
 				.select(heatEl)
@@ -666,7 +666,7 @@
 {#if section === 'about'}
 	<section class="cell cell-about">
 		{#if site}
-			<p class="m-0 font-headline text-xs font-semibold tracking-wide text-[#16a34a] uppercase">Site</p>
+			<p class="m-0 font-headline text-xs font-semibold tracking-wide text-[#1b75e0] uppercase">Site</p>
 			<h3 class="m-0 mt-1 font-display text-xl text-[#1a2530]">
 				{site.lat.toFixed(5)}, {site.lon.toFixed(5)}
 			</h3>
@@ -696,7 +696,7 @@
 {:else if section === 'bar'}
 	<section class="cell cell-graph">
 		{#if site}
-			<p class="m-0 mb-2 font-headline text-xs font-semibold tracking-wide text-[#16a34a] uppercase">
+			<p class="m-0 mb-2 font-headline text-xs font-semibold tracking-wide text-[#1b75e0] uppercase">
 				Bar chart
 			</p>
 			<div class="mb-3 grid gap-2 sm:grid-cols-2">
@@ -736,7 +736,7 @@
 {:else if section === 'line'}
 	<section class="cell cell-line">
 		{#if site}
-			<p class="m-0 mb-2 font-headline text-xs font-semibold tracking-wide text-[#16a34a] uppercase">
+			<p class="m-0 mb-2 font-headline text-xs font-semibold tracking-wide text-[#1b75e0] uppercase">
 				Line chart
 			</p>
 			<div class="mb-3 grid gap-2 sm:grid-cols-2">
@@ -777,7 +777,7 @@
 	<section class="cell cell-calendar">
 		{#if site}
 			<div class="mb-2 flex flex-wrap items-center justify-between gap-2">
-				<p class="m-0 font-headline text-xs font-semibold tracking-wide text-[#16a34a] uppercase">
+				<p class="m-0 font-headline text-xs font-semibold tracking-wide text-[#1b75e0] uppercase">
 					Collection calendar
 				</p>
 				{#if calWindow}
@@ -856,7 +856,7 @@
 {:else if section === 'box'}
 	<section class="cell cell-box">
 		{#if site}
-			<p class="m-0 mb-2 font-headline text-xs font-semibold tracking-wide text-[#16a34a] uppercase">
+			<p class="m-0 mb-2 font-headline text-xs font-semibold tracking-wide text-[#1b75e0] uppercase">
 				Box plot
 			</p>
 			<div class="mb-3 grid gap-2 sm:grid-cols-2">

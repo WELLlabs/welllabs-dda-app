@@ -12,7 +12,7 @@
 			description:
 				'Map watersheds, draw observation zones, and capture geotagged field notes — synced offline with QField.',
 			status: 'Available',
-			accent: '#0FB3A3',
+			accent: '#1b75e0',
 			accentClass: 'text-diagnose',
 			borderClass: 'hover:border-diagnose/50',
 			badgeClass: 'text-diagnose border-diagnose/30 bg-diagnose/10',
@@ -38,7 +38,7 @@
 			title: 'Assess',
 			description: 'Track outcomes and assess impact of implemented designs over time.',
 			status: 'Available',
-			accent: '#16a34a',
+			accent: '#3969a7',
 			accentClass: 'text-assess',
 			borderClass: 'hover:border-assess/50',
 			badgeClass: 'text-assess border-assess/30 bg-assess/10',
@@ -65,7 +65,7 @@
 </script>
 
 <svelte:head>
-	<title>Dashboard · WST fork</title>
+	<title>Dashboard · Water Security Toolbox</title>
 </svelte:head>
 
 <div class="page relative min-h-screen overflow-hidden font-body">
@@ -167,9 +167,9 @@
 </div>
 
 <style>
-	/* light theme surface — mostly white, soft green hint */
+	/* light theme surface */
 	.page {
-		background: linear-gradient(180deg, #ffffff 0%, #fafefa 42%, #f3faf5 100%);
+		background: linear-gradient(180deg, #f7f9fb 0%, #eef2f6 100%);
 		color: #24303a;
 	}
 
@@ -177,8 +177,8 @@
 	.glow {
 		position: absolute;
 		border-radius: 9999px;
-		filter: blur(100px);
-		opacity: 0.35;
+		filter: blur(90px);
+		opacity: 0.55;
 		animation: drift 18s ease-in-out infinite;
 	}
 	.glow-a {
@@ -186,14 +186,14 @@
 		left: -6%;
 		width: 42vw;
 		height: 42vw;
-		background: radial-gradient(circle, rgba(13, 152, 59, 0.08), transparent 70%);
+		background: radial-gradient(circle, rgba(27, 117, 224, 0.22), transparent 70%);
 	}
 	.glow-b {
 		bottom: -12%;
 		right: -8%;
 		width: 46vw;
 		height: 46vw;
-		background: radial-gradient(circle, rgba(134, 239, 172, 0.12), transparent 70%);
+		background: radial-gradient(circle, rgba(124, 92, 230, 0.18), transparent 70%);
 		animation-delay: -6s;
 	}
 	.glow-c {
@@ -201,7 +201,7 @@
 		right: 20%;
 		width: 26vw;
 		height: 26vw;
-		background: radial-gradient(circle, rgba(74, 222, 128, 0.07), transparent 70%);
+		background: radial-gradient(circle, rgba(201, 138, 22, 0.16), transparent 70%);
 		animation-delay: -11s;
 	}
 	@keyframes drift {
@@ -224,16 +224,16 @@
 		width: 7px;
 		height: 7px;
 		border-radius: 9999px;
-		background: #0fb3a3;
+		background: #1b75e0;
 		animation: ping 2.2s ease-out infinite;
 	}
 	@keyframes ping {
-		0% { box-shadow: 0 0 0 0 rgba(15, 179, 163, 0.5); }
-		70%, 100% { box-shadow: 0 0 0 8px rgba(15, 179, 163, 0); }
+		0% { box-shadow: 0 0 0 0 rgba(27, 117, 224, 0.5); }
+		70%, 100% { box-shadow: 0 0 0 8px rgba(27, 117, 224, 0); }
 	}
 
 	.name-grad {
-		background: linear-gradient(100deg, #0fb3a3, #16a34a 60%, #c98a16);
+		background: linear-gradient(100deg, #1b75e0, #3969a7 60%, #7c5ce6);
 		-webkit-background-clip: text;
 		background-clip: text;
 		color: transparent;

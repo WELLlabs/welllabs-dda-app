@@ -25,7 +25,8 @@
 		"svelte": "^5.56.1",
 		"tailwindcss": "^4.3.1",
 		"vite": "^8.0.16",
-		"vitest": "^4.1.10"
+		"vitest": "^4.1.10",
+		"@sveltejs/adapter-node": "^5.2.11"
 	},
 	"dependencies": {
 		"@mapbox/mapbox-gl-draw": "^1.5.1",

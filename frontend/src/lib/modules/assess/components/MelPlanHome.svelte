@@ -300,7 +300,7 @@
 							No forms yet.
 							<button
 								type="button"
-								class="text-[#16a34a] underline"
+								class="text-[#1b75e0] underline"
 								onclick={() => goto(`${planBase}/new?forms=1`)}
 							>
 								Edit ODK forms
@@ -387,16 +387,16 @@
 		color: var(--color-brand-navy, #1a2530);
 	}
 	.sidebar-secondary-btn:hover {
-		border-color: color-mix(in srgb, #16a34a 40%, transparent);
-		color: #15803d;
+		border-color: color-mix(in srgb, #1b75e0 40%, transparent);
+		color: #1565c0;
 	}
 	.export-btn {
 		width: 100%;
 		flex: none;
 		cursor: pointer;
 		border-radius: 0.5rem;
-		border: 1px solid color-mix(in srgb, #16a34a 40%, transparent);
-		background: #16a34a;
+		border: 1px solid color-mix(in srgb, #1b75e0 40%, transparent);
+		background: #1b75e0;
 		padding: 0.55rem 1rem;
 		font-family: var(--font-body);
 		font-size: 0.875rem;
@@ -404,7 +404,7 @@
 		color: white;
 	}
 	.export-btn:hover:not(:disabled) {
-		background: #15803d;
+		background: #1565c0;
 	}
 	.export-btn:disabled {
 		opacity: 0.55;
@@ -493,12 +493,12 @@
 		margin-left: 0.4rem;
 		display: inline-block;
 		border-radius: 0.25rem;
-		background: color-mix(in srgb, #16a34a 12%, white);
+		background: color-mix(in srgb, #1b75e0 12%, white);
 		padding: 0.05rem 0.35rem;
 		font-family: var(--font-body);
 		font-size: 0.65rem;
 		font-weight: 600;
-		color: #15803d;
+		color: #1565c0;
 		text-transform: none;
 		letter-spacing: 0;
 	}
@@ -562,7 +562,7 @@
 		animation-delay: var(--delay);
 	}
 	.form-card:hover {
-		border-color: color-mix(in srgb, #16a34a 35%, transparent);
+		border-color: color-mix(in srgb, #1b75e0 35%, transparent);
 	}
 	.form-actions {
 		display: flex;
@@ -583,8 +583,8 @@
 		color: var(--color-brand-navy, #1a2530);
 	}
 	.ghost-btn:hover {
-		border-color: color-mix(in srgb, #16a34a 40%, transparent);
-		color: #15803d;
+		border-color: color-mix(in srgb, #1b75e0 40%, transparent);
+		color: #1565c0;
 	}
 	.dashboard-btn {
 		display: inline-flex;
@@ -593,8 +593,8 @@
 		flex: none;
 		cursor: pointer;
 		border-radius: 0.5rem;
-		border: 1px solid color-mix(in srgb, #16a34a 40%, transparent);
-		background: #16a34a;
+		border: 1px solid color-mix(in srgb, #1b75e0 40%, transparent);
+		background: #1b75e0;
 		padding: 0.55rem 0.95rem;
 		font-family: var(--font-body);
 		font-size: 0.8125rem;
@@ -602,7 +602,7 @@
 		color: white;
 	}
 	.dashboard-btn:hover {
-		background: #15803d;
+		background: #1565c0;
 	}
 	@keyframes rise {
 		from {

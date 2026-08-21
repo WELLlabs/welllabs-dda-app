@@ -97,14 +97,14 @@
 							</pattern>
 						</defs>
 						<rect width="400" height="300" fill="url(#mesh-d)" />
-						<line x1="0" y1="90" x2="400" y2="90" stroke="#0d983b" stroke-width="1" opacity="0.7">
+						<line x1="0" y1="90" x2="400" y2="90" stroke="#1b75e0" stroke-width="1" opacity="0.7">
 							<animate attributeName="y1" values="20;280;20" dur="5s" repeatCount="indefinite" />
 							<animate attributeName="y2" values="20;280;20" dur="5s" repeatCount="indefinite" />
 						</line>
-						<circle cx="140" cy="150" r="4" fill="#0d983b" opacity="0.9">
+						<circle cx="140" cy="150" r="4" fill="#1b75e0" opacity="0.9">
 							<animate attributeName="r" values="3;7;3" dur="2.4s" repeatCount="indefinite" />
 						</circle>
-						<circle cx="260" cy="190" r="3" fill="#0d983b" opacity="0.6" />
+						<circle cx="260" cy="190" r="3" fill="#1b75e0" opacity="0.6" />
 					</svg>
 				</div>
 				<div class="relative z-10 flex items-center justify-between font-mono text-[11px] text-diagnose">

@@ -1,0 +1,22 @@
+[Unit]
+Description=Water Security Toolbox Frontend (SvelteKit / Node)
+After=network.target welllabs-backend.service
+
+[Service]
+User=root
+Group=root
+WorkingDirectory=/opt/welllabs/current/frontend
+EnvironmentFile=/opt/welllabs/shared/.env
+Environment=NODE_ENV=production
+Environment=PORT=3000
+# adapter-node CSRF / absolute URLs — ORIGIN is mirrored from FRONTEND_ORIGIN in AfterInstall
+# Server-side /api proxy fallback (browser /api is routed by nginx to FastAPI)
+Environment=API_URL=http://127.0.0.1:8080
+
+ExecStart=/usr/bin/node /opt/welllabs/current/frontend/build/index.js
+
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

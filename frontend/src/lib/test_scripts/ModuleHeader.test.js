@@ -7,7 +7,7 @@ describe('ModuleHeader', () => {
 		render(ModuleHeader, { props: { title: 'Diagnose' } });
 
 		expect(screen.getByRole('link', { name: /home/i })).toHaveAttribute('href', '/home');
-		expect(screen.getByRole('link', { name: /wst fork/i })).toHaveAttribute('href', '/home');
+		expect(screen.getByRole('link', { name: /water security toolbox/i })).toHaveAttribute('href', '/home');
 		expect(screen.getByText('Diagnose')).toBeInTheDocument();
 	});
 
@@ -15,7 +15,7 @@ describe('ModuleHeader', () => {
 		render(ModuleHeader, { props: { homeHref: '/dashboard', title: 'Assess' } });
 
 		expect(screen.getByRole('link', { name: /home/i })).toHaveAttribute('href', '/dashboard');
-		expect(screen.getByRole('link', { name: /wst fork/i })).toHaveAttribute('href', '/dashboard');
+		expect(screen.getByRole('link', { name: /water security toolbox/i })).toHaveAttribute('href', '/dashboard');
 	});
 
 	it('links the module title when titleHref is set', () => {

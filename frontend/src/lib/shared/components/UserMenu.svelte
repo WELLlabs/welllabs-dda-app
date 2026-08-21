@@ -129,7 +129,7 @@
 		font-size: 12px;
 		font-weight: 600;
 		color: #ffffff;
-		background: linear-gradient(135deg, #0fb3a3, #16a34a);
+		background: linear-gradient(135deg, #1b75e0, #1b75e0);
 		box-shadow: 0 6px 16px -8px rgba(124, 92, 230, 0.55);
 	}
 

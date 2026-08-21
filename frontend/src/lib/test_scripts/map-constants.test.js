@@ -9,7 +9,7 @@ import {
 
 describe('map-constants', () => {
 	it('exports brand accent colours', () => {
-		expect(OBSERVATION_ZONE_COLOR).toBe('#0d983b');
+		expect(OBSERVATION_ZONE_COLOR).toBe('#1b75e0');
 		expect(FIELD_NOTE_COLOR).toBe('#d5b443');
 		expect(HYPOTHESIS_COLOR).toBe('#6366f1');
 	});

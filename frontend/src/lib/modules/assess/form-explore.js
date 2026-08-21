@@ -580,5 +580,5 @@ export function sitePickerValues(sites, columnName) {
 }
 
 /** Green sequential palette for map / heatmap */
-export const ASSESS_GREEN = '#16a34a';
-export const GREEN_SCALE = ['#dcfce7', '#86efac', '#22c55e', '#15803d', '#14532d'];
+export const ASSESS_BLUE = '#1b75e0';
+export const BLUE_SCALE = ['#e8f1fc', '#7dc3ff', '#3969a7', '#1565c0', '#0d2c4c'];

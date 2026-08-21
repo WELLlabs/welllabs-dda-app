@@ -6,7 +6,7 @@ describe('Footer', () => {
 	it('renders product label and version', () => {
 		render(Footer);
 
-		expect(screen.getByText(/dda\s+diagnose, design & assess/i)).toBeInTheDocument();
+		expect(screen.getByText(/water security toolbox · diagnose, design & assess/i)).toBeInTheDocument();
 		expect(screen.getByText(/system status: nominal/i)).toBeInTheDocument();
 		expect(screen.getByText('v2.4.1')).toBeInTheDocument();
 	});

@@ -53,7 +53,7 @@
 	<ModuleHeader title="Assess" subtitle="MEL plans" homeHref="/home">
 		<button
 			type="button"
-			class="rounded bg-[#16a34a] px-3 py-1.5 font-body text-sm font-medium text-white hover:bg-[#15803d]"
+			class="rounded bg-[#1b75e0] px-3 py-1.5 font-body text-sm font-medium text-white hover:bg-[#1565c0]"
 			onclick={() => goto('/assess/new')}
 		>
 			Create new MEL plan
@@ -95,7 +95,7 @@
 				</p>
 				<button
 					type="button"
-					class="mt-5 rounded bg-[#16a34a] px-4 py-2 font-body text-sm font-medium text-white hover:bg-[#15803d]"
+					class="mt-5 rounded bg-[#1b75e0] px-4 py-2 font-body text-sm font-medium text-white hover:bg-[#1565c0]"
 					onclick={() => goto('/assess/new')}
 				>
 					Create new MEL plan

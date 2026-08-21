@@ -5,7 +5,7 @@
 				<circle cx="12" cy="12" r="10.5" stroke="#4FD1C5" stroke-width="1" opacity="0.5" />
 				<circle cx="12" cy="12" r="2.5" fill="#4FD1C5" />
 			</svg>
-			<span class="font-mono text-[11px] text-ink-faint">WST fork · Diagnose, Design &amp; Assess</span>
+			<span class="font-mono text-[11px] text-ink-faint">Water Security Toolbox · Diagnose, Design &amp; Assess</span>
 		</div>
 		<div class="flex items-center gap-6 font-mono text-[11px] text-ink-faint">
 			<span>System status: nominal</span>

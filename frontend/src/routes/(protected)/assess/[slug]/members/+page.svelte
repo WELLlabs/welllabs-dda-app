@@ -174,7 +174,7 @@
 	<div class="flex h-screen flex-col items-center justify-center gap-4 bg-white font-body">
 		<p class="m-0 text-brand-navy">{loadError || 'Project not found'}</p>
 		<button
-			class="cursor-pointer rounded bg-[#16a34a] px-4 py-2 font-body text-white hover:bg-[#15803d]"
+			class="cursor-pointer rounded bg-[#1b75e0] px-4 py-2 font-body text-white hover:bg-[#1565c0]"
 			onclick={() => goto('/assess')}
 		>
 			← Back to projects
@@ -228,7 +228,7 @@
 								</div>
 								<span
 									class="rounded-full px-2.5 py-0.5 text-[10px] font-semibold tracking-wide uppercase"
-									style="background: color-mix(in srgb, #0d983b 14%, transparent); color: #0d983b;"
+									style="background: color-mix(in srgb, #1b75e0 14%, transparent); color: #1b75e0;"
 								>
 									owner
 								</span>
@@ -253,7 +253,7 @@
 									</div>
 									<span
 										class="rounded-full px-2.5 py-0.5 text-[10px] font-semibold tracking-wide uppercase"
-										style="background: color-mix(in srgb, #0d983b 14%, transparent); color: #0d983b;"
+										style="background: color-mix(in srgb, #1b75e0 14%, transparent); color: #1b75e0;"
 									>
 										{member.role}
 									</span>
@@ -269,7 +269,7 @@
 										<div class="flex shrink-0 gap-1">
 											<button
 												type="button"
-												class="cursor-pointer rounded border-0 bg-transparent px-2 py-1 text-xs text-[#16a34a] hover:bg-[#dcfce7]"
+												class="cursor-pointer rounded border-0 bg-transparent px-2 py-1 text-xs text-[#1b75e0] hover:bg-[#e8f1fc]"
 												onclick={() => handleToggleRole(member)}
 											>
 												{member.role === 'admin' ? 'Demote' : 'Make admin'}
@@ -294,7 +294,7 @@
 									<input
 										type="email"
 										placeholder="Enter email address"
-										class="flex-1 rounded-lg border border-brand-navy/15 px-3 py-2 font-body text-sm outline-none focus:border-[#16a34a]"
+										class="flex-1 rounded-lg border border-brand-navy/15 px-3 py-2 font-body text-sm outline-none focus:border-[#1b75e0]"
 										bind:value={emailInput}
 										onkeydown={(e) => {
 											if (e.key === 'Enter') {
@@ -305,7 +305,7 @@
 									/>
 									<button
 										type="button"
-										class="cursor-pointer rounded-lg bg-[#16a34a] px-4 py-2 font-body text-sm font-medium text-white hover:bg-[#15803d] disabled:opacity-60"
+										class="cursor-pointer rounded-lg bg-[#1b75e0] px-4 py-2 font-body text-sm font-medium text-white hover:bg-[#1565c0] disabled:opacity-60"
 										disabled={lookingUp || !emailInput.trim()}
 										onclick={handleLookup}
 									>
@@ -328,7 +328,7 @@
 										</div>
 										<button
 											type="button"
-											class="cursor-pointer rounded-lg bg-[#16a34a] px-3 py-1.5 font-body text-xs font-medium text-white hover:bg-[#15803d] disabled:opacity-60"
+											class="cursor-pointer rounded-lg bg-[#1b75e0] px-3 py-1.5 font-body text-xs font-medium text-white hover:bg-[#1565c0] disabled:opacity-60"
 											disabled={addingUser}
 											onclick={handleAddUser}
 										>

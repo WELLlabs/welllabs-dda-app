@@ -7,7 +7,7 @@
 	import { assessCrumbs } from '$lib/modules/assess/breadcrumbs.js';
 	import { createMelProject, deleteMelProject, fetchMelProjects } from '$lib/modules/assess/mel-api';
 
-	const ASSESS_GREEN = '#16a34a';
+	const ASSESS_BLUE = '#1b75e0';
 
 	let projects = $state([]);
 	let loading = $state(true);
@@ -134,7 +134,7 @@
 					type="button"
 					class="card card-new group"
 					class:in={mounted}
-					style="--accent: {ASSESS_GREEN}; --delay: 0ms;"
+					style="--accent: {ASSESS_BLUE}; --delay: 0ms;"
 					onpointermove={handlePointer}
 					onclick={openCreate}
 				>
@@ -168,7 +168,7 @@
 					<div
 						class="card group"
 						class:in={mounted}
-						style="--accent: {ASSESS_GREEN}; --delay: {(i + 1) * 70}ms;"
+						style="--accent: {ASSESS_BLUE}; --delay: {(i + 1) * 70}ms;"
 						role="button"
 						tabindex="0"
 						onpointermove={handlePointer}
@@ -286,7 +286,7 @@
 			<input
 				id="mel-proj-name"
 				type="text"
-				class="mb-5 w-full rounded border border-brand-navy/20 px-3 py-2 font-body outline-none focus:border-[#16a34a] focus:ring-2 focus:ring-[#16a34a]/20"
+				class="mb-5 w-full rounded border border-brand-navy/20 px-3 py-2 font-body outline-none focus:border-[#1b75e0] focus:ring-2 focus:ring-[#1b75e0]/20"
 				placeholder="e.g. Kolar watershed MEL"
 				bind:value={name}
 				onkeydown={(e) => {
@@ -300,7 +300,7 @@
 				<button type="button" class="action-btn" onclick={() => (showCreate = false)}>Cancel</button>
 				<button
 					type="button"
-					class="rounded bg-[#16a34a] px-4 py-2 font-body text-sm font-medium text-white hover:bg-[#15803d] disabled:opacity-50"
+					class="rounded bg-[#1b75e0] px-4 py-2 font-body text-sm font-medium text-white hover:bg-[#1565c0] disabled:opacity-50"
 					disabled={creating || !name.trim()}
 					onclick={handleCreate}
 				>

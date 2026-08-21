@@ -4,8 +4,8 @@
 	import 'maplibre-gl/dist/maplibre-gl.css';
 	import * as d3 from 'd3';
 	import {
-		ASSESS_GREEN,
-		GREEN_SCALE
+		ASSESS_BLUE,
+		BLUE_SCALE
 	} from '$lib/modules/assess/form-explore.js';
 	import FormExploreSidePanel from './FormExploreSidePanel.svelte';
 
@@ -160,7 +160,7 @@
 				source: 'sites',
 				paint: {
 					'circle-radius': 8,
-					'circle-color': ASSESS_GREEN,
+					'circle-color': ASSESS_BLUE,
 					'circle-opacity': 0.85,
 					'circle-stroke-width': 1.5,
 					'circle-stroke-color': '#fff'
@@ -207,14 +207,14 @@
 				['linear'],
 				['coalesce', ['get', 'colorVal'], lo],
 				lo,
-				GREEN_SCALE[0],
+				BLUE_SCALE[0],
 				mid,
-				GREEN_SCALE[2],
+				BLUE_SCALE[2],
 				hi,
-				GREEN_SCALE[4]
+				BLUE_SCALE[4]
 			]);
 		} else {
-			map.setPaintProperty('sites-circle', 'circle-color', ASSESS_GREEN);
+			map.setPaintProperty('sites-circle', 'circle-color', ASSESS_BLUE);
 		}
 
 		map.setPaintProperty('sites-circle', 'circle-stroke-width', [
@@ -226,7 +226,7 @@
 		map.setPaintProperty('sites-circle', 'circle-stroke-color', [
 			'case',
 			['==', ['get', 'selected'], 1],
-			'#14532d',
+			'#0d2c4c',
 			'#ffffff'
 		]);
 	}
