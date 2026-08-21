@@ -1,5 +1,5 @@
 <script lang="ts">
-	export let intensity: 'hero' | 'ambient' = 'hero';
+	let { intensity = 'hero' }: { intensity?: 'hero' | 'ambient' } = $props();
 
 	// Deterministic pseudo-contour ring paths, generated once.
 	const rings = Array.from({ length: 9 }, (_, i) => {

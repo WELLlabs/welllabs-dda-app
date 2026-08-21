@@ -1,5 +1,5 @@
 <script lang="ts">
-	export let variant: 'login' | 'register' = 'login';
+	let { variant = 'login' }: { variant?: 'login' | 'register' } = $props();
 </script>
 
 <nav
