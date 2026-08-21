@@ -2624,9 +2624,9 @@
 
 						{#if fieldCheck}
 							<div
-								class="rounded-md border-l-4 border-[#0fb3a3] bg-[color-mix(in_srgb,#0fb3a3_8%,white)] px-3 py-2"
+								class="rounded-md border-l-4 border-[#1b75e0] bg-[color-mix(in_srgb,#1b75e0_8%,white)] px-3 py-2"
 							>
-								<p class="m-0 mb-1 text-[11px] font-semibold tracking-wide text-[#0a5c55] uppercase">
+								<p class="m-0 mb-1 text-[11px] font-semibold tracking-wide text-[#0d2c4c] uppercase">
 									Field check
 								</p>
 								<p class="m-0 text-sm leading-relaxed text-brand-navy">{fieldCheck}</p>
@@ -3437,24 +3437,24 @@
 		background: rgba(15, 179, 163, 0.06);
 	}
 	.layer-row-selected {
-		background: color-mix(in srgb, #0fb3a3 14%, white);
-		border-color: color-mix(in srgb, #0fb3a3 38%, transparent);
-		box-shadow: inset 3px 0 0 #0fb3a3;
+		background: color-mix(in srgb, #1b75e0 14%, white);
+		border-color: color-mix(in srgb, #1b75e0 38%, transparent);
+		box-shadow: inset 3px 0 0 #1b75e0;
 	}
 	.layer-row-selected .layer-label {
 		font-weight: 600;
-		color: #0a5c55;
+		color: #0d2c4c;
 	}
 	.layer-row-dragging {
 		opacity: 0.55;
 		cursor: grabbing;
-		background: color-mix(in srgb, #0fb3a3 10%, white);
+		background: color-mix(in srgb, #1b75e0 10%, white);
 		box-shadow: 0 8px 20px -10px rgba(20, 40, 60, 0.35);
 		transform: scale(0.98);
 	}
 	.layer-row-over {
-		border-color: color-mix(in srgb, #0fb3a3 45%, transparent);
-		background: color-mix(in srgb, #0fb3a3 8%, white);
+		border-color: color-mix(in srgb, #1b75e0 45%, transparent);
+		background: color-mix(in srgb, #1b75e0 8%, white);
 	}
 
 	.layer-eye,

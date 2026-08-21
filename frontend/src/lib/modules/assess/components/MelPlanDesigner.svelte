@@ -652,7 +652,7 @@
 		<div class="mb-6 flex flex-wrap items-center gap-2">
 			{#each STEPS as label, index}
 				<div
-					class="rounded-full px-3 py-1 font-mono text-[11px] font-semibold tracking-wide uppercase {index === displayStep ? 'bg-[#16a34a] text-white' : index < displayStep ? 'bg-[#dcfce7] text-[#14532d]' : 'bg-white text-brand-steel'}"
+					class="rounded-full px-3 py-1 font-mono text-[11px] font-semibold tracking-wide uppercase {index === displayStep ? 'bg-[#1b75e0] text-white' : index < displayStep ? 'bg-[#e8f1fc] text-[#0d2c4c]' : 'bg-white text-brand-steel'}"
 				>
 					{index + 1}. {label}
 				</div>
@@ -675,7 +675,7 @@
 					{#each interventions as item (item.slug)}
 						<button
 							type="button"
-							class="rounded-xl border p-4 text-left transition {selectedInterventionSlug === item.slug ? 'border-[#16a34a] bg-[#dcfce7]/60 shadow-sm' : 'border-brand-navy/10 bg-white hover:border-[#16a34a]/40'}"
+							class="rounded-xl border p-4 text-left transition {selectedInterventionSlug === item.slug ? 'border-[#1b75e0] bg-[#e8f1fc]/60 shadow-sm' : 'border-brand-navy/10 bg-white hover:border-[#1b75e0]/40'}"
 							onclick={() => selectIntervention(item.slug)}
 						>
 							<h3 class="m-0 font-headline text-sm font-semibold text-brand-navy">{item.name}</h3>
@@ -686,7 +686,7 @@
 				<div class="mt-6 flex justify-end">
 					<button
 						type="button"
-						class="rounded-lg bg-[#16a34a] px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+						class="rounded-lg bg-[#1b75e0] px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
 						disabled={!selectedInterventionSlug}
 						onclick={goToOutcomes}
 					>
@@ -714,7 +714,7 @@
 							<div class="mt-3 max-h-[28rem] space-y-2 overflow-y-auto pr-1">
 								{#each outcomes as outcome (outcome.id)}
 									<div
-										class="overflow-hidden rounded-lg border transition {outcome.must_measure || selectedOutcomeIds.includes(outcome.id) ? 'border-[#16a34a]/40 bg-white' : 'border-brand-navy/10 bg-white'}"
+										class="overflow-hidden rounded-lg border transition {outcome.must_measure || selectedOutcomeIds.includes(outcome.id) ? 'border-[#1b75e0]/40 bg-white' : 'border-brand-navy/10 bg-white'}"
 									>
 										<div class="flex items-start gap-2 p-3">
 											<input
@@ -782,7 +782,7 @@
 					</button>
 					<button
 						type="button"
-						class="rounded-lg bg-[#16a34a] px-4 py-2 text-sm font-medium text-white"
+						class="rounded-lg bg-[#1b75e0] px-4 py-2 text-sm font-medium text-white"
 						onclick={goToPackages}
 					>
 						Continue to MEL types
@@ -867,7 +867,7 @@
 						</button>
 						<button
 							type="button"
-							class="rounded-lg bg-[#16a34a] px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+							class="rounded-lg bg-[#1b75e0] px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
 							disabled={!packages.length}
 							onclick={goToEditForms}
 						>
@@ -892,7 +892,7 @@
 							<div class="mt-3 space-y-2">
 								{#each group.items as pkg (pkg.id)}
 									<label
-										class="flex cursor-pointer gap-2 rounded-lg border p-3 transition {selectedPackageIds.includes(pkg.id) ? 'border-[#16a34a] bg-[#dcfce7]/50' : 'border-brand-navy/10'}"
+										class="flex cursor-pointer gap-2 rounded-lg border p-3 transition {selectedPackageIds.includes(pkg.id) ? 'border-[#1b75e0] bg-[#e8f1fc]/50' : 'border-brand-navy/10'}"
 									>
 										<input
 											type="checkbox"
@@ -918,7 +918,7 @@
 						{#each selectedPackages as pkg (pkg.id)}
 							<button
 								type="button"
-								class="rounded-lg px-3 py-1.5 text-xs font-semibold tracking-wide uppercase {activeEditPackageId === pkg.id ? 'bg-[#16a34a] text-white' : 'border border-brand-navy/15 bg-white text-brand-navy'}"
+								class="rounded-lg px-3 py-1.5 text-xs font-semibold tracking-wide uppercase {activeEditPackageId === pkg.id ? 'bg-[#1b75e0] text-white' : 'border border-brand-navy/15 bg-white text-brand-navy'}"
 								onclick={() => (activeEditPackageId = pkg.id)}
 							>
 								{pkg.title}
@@ -947,7 +947,7 @@
 								</div>
 								<button
 									type="button"
-									class="rounded-lg bg-[#16a34a] px-3 py-2 text-sm font-semibold text-white"
+									class="rounded-lg bg-[#1b75e0] px-3 py-2 text-sm font-semibold text-white"
 									onclick={() => addCustomField(pkg.id)}
 								>
 									+ Add field
@@ -1106,7 +1106,7 @@
 														{/each}
 														<button
 															type="button"
-															class="mt-1 text-sm font-semibold text-[#16a34a] hover:underline"
+															class="mt-1 text-sm font-semibold text-[#1b75e0] hover:underline"
 															onclick={() => addOption(pkg.id, field.id)}
 														>
 															+ Add option
@@ -1126,7 +1126,7 @@
 					<button type="button" class="action-btn" onclick={() => (step = 2)}>Back</button>
 					<button
 						type="button"
-						class="rounded-lg bg-[#16a34a] px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+						class="rounded-lg bg-[#1b75e0] px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
 						disabled={!selectedPackageIds.length}
 						onclick={goToPublish}
 					>
@@ -1195,7 +1195,7 @@
 						<button type="button" class="action-btn" onclick={() => (step = 3)}>Back</button>
 						<button
 							type="button"
-							class="rounded-lg bg-[#16a34a] px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+							class="rounded-lg bg-[#1b75e0] px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
 							disabled={saving}
 							onclick={handlePublish}
 						>

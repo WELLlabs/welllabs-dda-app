@@ -263,7 +263,7 @@
 								</div>
 								<span
 									class="rounded-full px-2.5 py-0.5 text-[10px] font-semibold tracking-wide uppercase"
-									style="background: color-mix(in srgb, #0d983b 14%, transparent); color: #0d983b;"
+									style="background: color-mix(in srgb, #1b75e0 14%, transparent); color: #1b75e0;"
 								>
 									owner
 								</span>
@@ -290,9 +290,9 @@
 									<span
 										class="rounded-full px-2.5 py-0.5 text-[10px] font-semibold tracking-wide uppercase"
 										style:background-color={member.role === 'admin'
-											? 'color-mix(in srgb, #0d983b 14%, transparent)'
-											: 'color-mix(in srgb, #0d983b 14%, transparent)'}
-										style:color={member.role === 'admin' ? '#0d983b' : '#0d983b'}
+											? 'color-mix(in srgb, #1b75e0 14%, transparent)'
+											: 'color-mix(in srgb, #1b75e0 14%, transparent)'}
+										style:color={member.role === 'admin' ? '#1b75e0' : '#1b75e0'}
 									>
 										{member.role}
 									</span>

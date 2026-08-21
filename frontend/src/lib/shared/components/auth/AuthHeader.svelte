@@ -14,7 +14,7 @@
 			<circle cx="12" cy="12" r="6.5" stroke="#4FD1C5" stroke-width="1" opacity="0.8" />
 			<circle cx="12" cy="12" r="2.5" fill="#4FD1C5" />
 		</svg>
-		<span class="font-display text-[15px] font-semibold tracking-wide text-ink">WST fork</span>
+		<span class="font-display text-[15px] font-semibold tracking-wide text-ink">Water Security Toolbox</span>
 	</a>
 
 	<div class="flex items-center gap-3 font-mono text-[11px] text-ink-faint">

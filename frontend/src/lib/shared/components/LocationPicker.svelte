@@ -47,7 +47,7 @@
 	function placeMarker(lon, latVal) {
 		if (!map?.isStyleLoaded()) return;
 		if (marker) marker.remove();
-		marker = new maplibregl.Marker({ color: '#0d983b' })
+		marker = new maplibregl.Marker({ color: '#1b75e0' })
 			.setLngLat([lon, latVal])
 			.addTo(map);
 	}

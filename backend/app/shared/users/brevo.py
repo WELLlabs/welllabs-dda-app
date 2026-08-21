@@ -58,7 +58,7 @@ async def send_email(*, to_email: str, subject: str, html: str, text: str | None
 
 
 async def send_verification_email(to_email: str, token: str) -> None:
-    link = f"{settings.frontend_origin.rstrip('/')}/verify?token={token}"
+    link = f"{settings.public_app_base}/verify?token={token}"
     await send_email(
         to_email=to_email,
         subject="Verify your email — Water Security Tool",
@@ -72,7 +72,7 @@ async def send_verification_email(to_email: str, token: str) -> None:
 
 
 async def send_reset_password_email(to_email: str, token: str) -> None:
-    link = f"{settings.frontend_origin.rstrip('/')}/reset-password?token={token}"
+    link = f"{settings.public_app_base}/reset-password?token={token}"
     await send_email(
         to_email=to_email,
         subject="Reset your password — Water Security Tool",

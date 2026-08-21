@@ -1,3 +1,5 @@
+from urllib.parse import urlparse
+
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings
 
@@ -39,7 +41,10 @@ class Settings(BaseSettings):
     # embed.js and point the web component at the instance.
     metabase_public_url: str = "http://localhost:3000"
 
+    # Browser origin for CORS / cookies (no path). Production example: https://ai.welllabs.org
     frontend_origin: str = "http://localhost:5173"
+    # SvelteKit kit.paths.base in production (empty locally). Example: /wst
+    frontend_base_path: str = ""
     session_cookie_name: str = "dda_session"
     session_ttl_days: int = 30
     session_cookie_secure: bool = False
@@ -68,13 +73,38 @@ class Settings(BaseSettings):
             return None
         return value
 
+    @field_validator("frontend_base_path", mode="before")
+    @classmethod
+    def normalize_base_path(cls, value):
+        if value is None or value == "":
+            return ""
+        text = str(value).strip()
+        if not text or text == "/":
+            return ""
+        if not text.startswith("/"):
+            text = f"/{text}"
+        return text.rstrip("/")
+
+    @property
+    def public_app_origin(self) -> str:
+        """Scheme + host only (for CORS / Origin comparisons)."""
+        parsed = urlparse(self.frontend_origin)
+        if parsed.scheme and parsed.netloc:
+            return f"{parsed.scheme}://{parsed.netloc}"
+        return self.frontend_origin.rstrip("/")
+
+    @property
+    def public_app_base(self) -> str:
+        """Public URL prefix for email links and redirects (origin + optional /wst)."""
+        return f"{self.public_app_origin}{self.frontend_base_path}"
+
     @property
     def cors_origins(self) -> list[str]:
         """Browser origins allowed to call the API with credentials.
 
         Local Vite may bind 5173 or fall back to 5174 — allow both (and 127.0.0.1).
         """
-        origins = [self.frontend_origin.rstrip("/")]
+        origins = [self.public_app_origin]
         for host in ("localhost", "127.0.0.1"):
             for port in (5173, 5174):
                 origin = f"http://{host}:{port}"

@@ -3,9 +3,9 @@ set -e
 echo "=== ApplicationStart: Zero-downtime reload ==="
 
 # ──────────────────────────────────────
-# Backend: Gunicorn (restart to load new code from symlink)
+# Backend: Uvicorn / FastAPI
 # ──────────────────────────────────────
-echo "→ Restarting Gunicorn backend..."
+echo "→ Restarting FastAPI backend (uvicorn)..."
 if ! systemctl is-enabled --quiet welllabs-backend.service; then
     systemctl enable welllabs-backend.service
 fi
@@ -21,7 +21,7 @@ fi
 echo "  ✓ Backend is active."
 
 # ──────────────────────────────────────
-# Frontend: Node.js (restart — no hot reload support)
+# Frontend: Node.js / SvelteKit
 # ──────────────────────────────────────
 echo "→ Restarting SvelteKit frontend..."
 if ! systemctl is-enabled --quiet welllabs-frontend.service; then
@@ -37,7 +37,7 @@ if ! systemctl is-active --quiet welllabs-frontend.service; then
     exit 1
 fi
 echo "  ✓ Frontend is active."
- 
+
 # ──────────────────────────────────────
 # Nginx: Reload config (zero downtime)
 # ──────────────────────────────────────
@@ -47,6 +47,7 @@ echo "  ✓ Nginx reloaded."
 
 echo ""
 echo "=== All services running ==="
-echo "  Backend  → http://127.0.0.1:8000 (Gunicorn/Django)"
-echo "  Frontend → http://127.0.0.1:3000 (Node/SvelteKit)"
+echo "  Backend  → http://127.0.0.1:8080 (Uvicorn / FastAPI)"
+echo "  Frontend → http://127.0.0.1:3000 (Node / SvelteKit, base=/wst)"
 echo "  Nginx    → http://0.0.0.0:80     (Reverse Proxy)"
+echo "  App URL  → /wst/   API → /api/   Health → /health"

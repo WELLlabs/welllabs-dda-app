@@ -51,7 +51,7 @@
 				</svg>
 			</a>
 			<nav class="crumb" class:crumb-wrap={fullProjectTitle || crumbs?.length} aria-label="Breadcrumb">
-				<a href={homeHref} class="brand-name font-display">WST fork</a>
+				<a href={homeHref} class="brand-name font-display">Water Security Toolbox</a>
 				{#each trail as item, i (item.label + (item.href || '') + i)}
 					<span class="sep">/</span>
 					{#if item.href}
@@ -129,9 +129,9 @@
 		width: 2.25rem;
 		flex: none;
 		border-radius: 12px;
-		color: #0fb3a3;
-		border: 1px solid color-mix(in srgb, #0fb3a3 28%, transparent);
-		background: color-mix(in srgb, #0fb3a3 12%, white);
+		color: #1b75e0;
+		border: 1px solid color-mix(in srgb, #1b75e0 28%, transparent);
+		background: color-mix(in srgb, #1b75e0 12%, white);
 		transition:
 			transform 0.3s ease,
 			box-shadow 0.3s ease;
@@ -153,7 +153,7 @@
 	.brand-name {
 		font-size: 1.15rem;
 		letter-spacing: 0.04em;
-		background: linear-gradient(100deg, #0fb3a3, #16a34a);
+		background: linear-gradient(100deg, #1b75e0, #1b75e0);
 		-webkit-background-clip: text;
 		background-clip: text;
 		color: transparent;
@@ -222,18 +222,25 @@
 	.actions :global(button:hover:not(:disabled)),
 	.actions :global(a.action-btn:hover) {
 		background: rgba(15, 179, 163, 0.08);
-		border-color: color-mix(in srgb, #0fb3a3 35%, transparent);
+		border-color: color-mix(in srgb, #1b75e0 35%, transparent);
 	}
 	.actions :global(button:disabled) {
 		cursor: not-allowed;
 		opacity: 0.55;
 	}
 	.actions :global(button.primary) {
-		border-color: color-mix(in srgb, #0fb3a3 40%, transparent);
-		background: color-mix(in srgb, #0fb3a3 14%, white);
+		border-color: color-mix(in srgb, #1b75e0 40%, transparent);
+		background: color-mix(in srgb, #1b75e0 14%, white);
 		color: #0a7a70;
 	}
 	.actions :global(button.primary:hover:not(:disabled)) {
-		background: color-mix(in srgb, #0fb3a3 22%, white);
+		background: color-mix(in srgb, #1b75e0 22%, white);
+	}
+	.actions :global(button.icon-btn) {
+		display: inline-grid;
+		place-items: center;
+		padding: 0.4rem;
+		min-width: 2rem;
+		min-height: 2rem;
 	}
 </style>

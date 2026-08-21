@@ -3,7 +3,7 @@
 </script>
 
 <svelte:head>
-	<title>Design · WST fork</title>
+	<title>Design · Water Security Toolbox</title>
 </svelte:head>
 
 <div class="flex h-full min-h-screen flex-col bg-white font-body">

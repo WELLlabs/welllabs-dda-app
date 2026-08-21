@@ -27,7 +27,7 @@
 </script>
 
 <svelte:head>
-	<title>Reset password · WST fork</title>
+	<title>Reset password · Water Security Toolbox</title>
 </svelte:head>
 
 <div class="relative flex min-h-screen items-center justify-center overflow-hidden bg-void px-4 font-body">

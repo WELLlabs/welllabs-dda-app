@@ -33,7 +33,7 @@
 </script>
 
 <svelte:head>
-	<title>WST fork</title>
+	<title>Water Security Toolbox</title>
 	<meta name="description" content="One workspace. Every watershed. Every decision." />
 </svelte:head>
 

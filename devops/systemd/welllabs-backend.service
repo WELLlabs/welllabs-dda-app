@@ -1,5 +1,5 @@
 [Unit]
-Description=Well Labs Django Backend (Gunicorn)
+Description=Water Security Toolbox API (Uvicorn / FastAPI)
 After=network.target postgresql.service
 Wants=postgresql.service
 
@@ -8,20 +8,26 @@ User=root
 Group=root
 WorkingDirectory=/opt/welllabs/current/backend
 EnvironmentFile=/opt/welllabs/shared/.env
+Environment=PYTHONUNBUFFERED=1
 
-ExecStart=/opt/welllabs/current/backend/venv/bin/gunicorn \
-    config.wsgi:application \
-    --bind 127.0.0.1:8000 \
-    --workers 3 \
-    --timeout 120 \
-    --graceful-timeout 30 \
-    --access-logfile /opt/welllabs/logs/backend-access.log \
-    --error-logfile /opt/welllabs/logs/backend-error.log
+ExecStart=/opt/welllabs/current/backend/venv/bin/uvicorn \
+    app.main:app \
+    --host 127.0.0.1 \
+    --port 8080 \
+    --workers 2 \
+    --proxy-headers \
+    --forwarded-allow-ips=* \
+    --timeout-keep-alive 75 \
+    --access-log \
+    --log-level info
 
 ExecReload=/bin/kill -HUP $MAINPID
 
 Restart=always
 RestartSec=5
+
+# Packaging / QField sync can be long-running
+TimeoutStopSec=60
 
 [Install]
 WantedBy=multi-user.target

@@ -215,7 +215,7 @@
 					type="button"
 					class="card card-new group"
 					class:in={mounted}
-					style="--accent: #0FB3A3; --delay: 0ms;"
+					style="--accent: #1b75e0; --delay: 0ms;"
 					onpointermove={handlePointer}
 					onclick={openCreate}
 				>
@@ -242,7 +242,7 @@
 					<div
 						class="card group"
 						class:in={mounted}
-						style="--accent: #0FB3A3; --delay: {(i + 1) * 70}ms;"
+						style="--accent: #1b75e0; --delay: {(i + 1) * 70}ms;"
 						role="button"
 						tabindex="0"
 						onpointermove={handlePointer}

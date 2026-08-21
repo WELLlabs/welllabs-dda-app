@@ -15,7 +15,7 @@
 				</svg>
 			</span>
 			<span class="brand-text">
-				<span class="brand-name font-display">WST fork</span>
+				<span class="brand-name font-display">Water Security Toolbox</span>
 			</span>
 		</a>
 
@@ -42,9 +42,9 @@
 		height: 2.25rem;
 		width: 2.25rem;
 		border-radius: 12px;
-		color: #0fb3a3;
-		border: 1px solid color-mix(in srgb, #0fb3a3 28%, transparent);
-		background: color-mix(in srgb, #0fb3a3 12%, white);
+		color: #1b75e0;
+		border: 1px solid color-mix(in srgb, #1b75e0 28%, transparent);
+		background: color-mix(in srgb, #1b75e0 12%, white);
 		transition: transform 0.3s ease, box-shadow 0.3s ease;
 	}
 	.brand:hover .brand-mark {
@@ -55,7 +55,7 @@
 	.brand-name {
 		font-size: 1.15rem;
 		letter-spacing: 0.04em;
-		background: linear-gradient(100deg, #0fb3a3, #16a34a);
+		background: linear-gradient(100deg, #1b75e0, #1b75e0);
 		-webkit-background-clip: text;
 		background-clip: text;
 		color: transparent;

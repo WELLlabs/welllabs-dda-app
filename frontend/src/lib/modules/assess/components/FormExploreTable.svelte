@@ -72,7 +72,7 @@
 	<div class="flex flex-wrap items-center justify-between gap-3">
 		<input
 			type="search"
-			class="w-full max-w-sm rounded-lg border border-brand-navy/15 px-3 py-2 text-sm outline-none focus:border-[#16a34a] focus:ring-2 focus:ring-[#16a34a]/20"
+			class="w-full max-w-sm rounded-lg border border-brand-navy/15 px-3 py-2 text-sm outline-none focus:border-[#1b75e0] focus:ring-2 focus:ring-[#1b75e0]/20"
 			placeholder="Filter rows…"
 			value={query}
 			oninput={(e) => {
@@ -90,14 +90,14 @@
 
 	<div class="overflow-auto rounded-xl border border-brand-navy/10 bg-white shadow-sm">
 		<table class="min-w-full border-collapse text-left text-sm">
-			<thead class="sticky top-0 bg-[#f0fdf4]">
+			<thead class="sticky top-0 bg-[#f4f8fc]">
 				<tr>
 					{#each displayCols as col (col.name)}
 						<th class="border-b border-brand-navy/10 px-3 py-2 font-semibold text-brand-navy">
 							<button type="button" class="inline-flex items-center gap-1 border-0 bg-transparent p-0" onclick={() => toggleSort(col.name)}>
 								{col.label}
 								{#if sortKey === col.name}
-									<span class="text-[10px] text-[#16a34a]">{sortDir > 0 ? '▲' : '▼'}</span>
+									<span class="text-[10px] text-[#1b75e0]">{sortDir > 0 ? '▲' : '▼'}</span>
 								{/if}
 							</button>
 						</th>
@@ -106,7 +106,7 @@
 			</thead>
 			<tbody>
 				{#each pageRows as row, i (row.instanceId || i)}
-					<tr class="odd:bg-white even:bg-[#fafafa] hover:bg-[#f0fdf4]/60">
+					<tr class="odd:bg-white even:bg-[#fafafa] hover:bg-[#f4f8fc]/60">
 						{#each displayCols as col (col.name)}
 							<td class="border-b border-brand-navy/5 px-3 py-2 text-brand-navy/90 whitespace-nowrap">
 								{cellValue(row, col)}

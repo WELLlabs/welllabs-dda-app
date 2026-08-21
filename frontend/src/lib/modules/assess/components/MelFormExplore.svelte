@@ -1,8 +1,6 @@
 <script>
-	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 	import ModuleHeader from '$lib/shared/components/ModuleHeader.svelte';
-	import { itemPath } from '$lib/shared/slug.js';
 	import { assessCrumbs } from '$lib/modules/assess/breadcrumbs.js';
 	import { fetchMelFormSubmissions } from '$lib/modules/assess/mel-api';
 	import {
@@ -32,13 +30,11 @@
 	let selectedSiteKey = $state(null);
 	let pickerColumn = $state(SITE_COORD_COLUMN);
 
-	const slugBase = $derived(itemPath('/assess', project, projects));
-	const planBase = $derived(`${slugBase}/plans/${plan.id}`);
+	const headerTitle = $derived(formName || xmlFormId || 'Form');
+	const crumbs = $derived(assessCrumbs({ projects, project, plan, form: headerTitle }));
 	const nums = $derived(numericColumns(columns));
 	const sites = $derived(groupSites(rows));
 	const hasCoords = $derived(sites.length > 0);
-	const headerTitle = $derived(formName || xmlFormId || 'Form');
-	const crumbs = $derived(assessCrumbs({ projects, project, plan, form: headerTitle }));
 	const pickerColumns = $derived(sitePickerColumns(sites, columns));
 	const pickerValues = $derived(sitePickerValues(sites, pickerColumn));
 	const selectedPickerValue = $derived.by(() => {
@@ -111,9 +107,29 @@
 
 <div class="relative flex min-h-screen flex-col bg-transparent font-body">
 	<ModuleHeader title="Assess" titleHref="/assess" wide fullProjectTitle {crumbs}>
-		<button type="button" onclick={() => goto(planBase)}>Plan</button>
-		<button type="button" disabled={loading} onclick={load}>
-			{loading ? 'Refreshing…' : 'Refresh'}
+		<button
+			type="button"
+			class="icon-btn"
+			disabled={loading}
+			onclick={load}
+			aria-label={loading ? 'Refreshing' : 'Refresh'}
+			title={loading ? 'Refreshing…' : 'Refresh'}
+		>
+			<svg
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="2"
+				class="h-4 w-4 {loading ? 'animate-spin' : ''}"
+				aria-hidden="true"
+			>
+				<path
+					d="M21 12a9 9 0 1 1-2.64-6.36"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+				/>
+				<path d="M21 3v6h-6" stroke-linecap="round" stroke-linejoin="round" />
+			</svg>
 		</button>
 	</ModuleHeader>
 
@@ -238,7 +254,7 @@
 		font-weight: 700;
 		letter-spacing: 0.08em;
 		text-transform: uppercase;
-		color: #16a34a;
+		color: #1b75e0;
 	}
 	.nav-meta {
 		margin: 0;
@@ -275,8 +291,8 @@
 	}
 	.nav-tab.active {
 		background: white;
-		border-color: color-mix(in srgb, #16a34a 35%, transparent);
-		color: #16a34a;
+		border-color: color-mix(in srgb, #1b75e0 35%, transparent);
+		color: #1b75e0;
 		box-shadow: 0 1px 4px rgba(20, 40, 60, 0.06);
 	}
 	.explore-main {

@@ -11,7 +11,7 @@
 </script>
 
 <svelte:head>
-	<title>WST fork</title>
+	<title>Water Security Toolbox</title>
 	<link rel="preconnect" href="https://fonts.googleapis.com" />
 	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
 	<link
