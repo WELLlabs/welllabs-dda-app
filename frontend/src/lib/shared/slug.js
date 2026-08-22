@@ -1,5 +1,7 @@
 /** Generic slug helpers, reused by any module that routes items (projects, plans, etc.) by name. */
 
+import { appPath } from '$lib/shared/paths.js';
+
 /** @param {string} name */
 export function slugify(name) {
 	return (
@@ -25,10 +27,11 @@ export function slugify(name) {
 export function itemPath(basePath, item, items = []) {
 	const base = slugify(item.name);
 	const collisions = items.filter((p) => slugify(p.name) === base);
-	if (collisions.length > 1) {
-		return `${basePath}/${base}-${item.id.slice(0, 8)}`;
-	}
-	return `${basePath}/${base}`;
+	const path =
+		collisions.length > 1
+			? `${basePath}/${base}-${item.id.slice(0, 8)}`
+			: `${basePath}/${base}`;
+	return appPath(path);
 }
 
 /**

@@ -19,7 +19,7 @@ describe('assessCrumbs', () => {
 	it('includes project and plan on a plan page', () => {
 		expect(assessCrumbs({ projects: [project], project, plan })).toEqual([
 			{ label: 'Assess', href: '/assess' },
-			{ label: 'Yavatmal', href: '/assess/yavatmal' },
+			{ label: 'Yavatmal', href: '/wst/assess/yavatmal' },
 			{ label: 'BME plan' }
 		]);
 	});
@@ -27,8 +27,8 @@ describe('assessCrumbs', () => {
 	it('includes form name on form explore', () => {
 		expect(assessCrumbs({ projects: [project], project, plan, form: 'Survey A' })).toEqual([
 			{ label: 'Assess', href: '/assess' },
-			{ label: 'Yavatmal', href: '/assess/yavatmal' },
-			{ label: 'BME plan', href: '/assess/yavatmal/plans/pl1' },
+			{ label: 'Yavatmal', href: '/wst/assess/yavatmal' },
+			{ label: 'BME plan', href: '/wst/assess/yavatmal/plans/pl1' },
 			{ label: 'Survey A' }
 		]);
 	});

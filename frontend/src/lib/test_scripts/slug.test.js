@@ -28,7 +28,7 @@ describe('slugify', () => {
 describe('itemPath', () => {
 	it('builds a path from base and slugified name', () => {
 		const item = { id: 'abc12345-xxxx', name: 'North Basin' };
-		expect(itemPath('/diagnose', item)).toBe('/diagnose/north-basin');
+		expect(itemPath('/diagnose', item)).toBe('/wst/diagnose/north-basin');
 	});
 
 	it('appends short id when multiple items share a slug', () => {
@@ -36,8 +36,8 @@ describe('itemPath', () => {
 			{ id: 'aaaaaaaa-1111', name: 'North Basin' },
 			{ id: 'bbbbbbbb-2222', name: 'North Basin' }
 		];
-		expect(itemPath('/diagnose', items[0], items)).toBe('/diagnose/north-basin-aaaaaaaa');
-		expect(itemPath('/diagnose', items[1], items)).toBe('/diagnose/north-basin-bbbbbbbb');
+		expect(itemPath('/diagnose', items[0], items)).toBe('/wst/diagnose/north-basin-aaaaaaaa');
+		expect(itemPath('/diagnose', items[1], items)).toBe('/wst/diagnose/north-basin-bbbbbbbb');
 	});
 
 	it('does not disambiguate when slug is unique among items', () => {
@@ -45,7 +45,7 @@ describe('itemPath', () => {
 			{ id: 'aaaaaaaa-1111', name: 'North Basin' },
 			{ id: 'bbbbbbbb-2222', name: 'South Basin' }
 		];
-		expect(itemPath('/diagnose', items[0], items)).toBe('/diagnose/north-basin');
+		expect(itemPath('/diagnose', items[0], items)).toBe('/wst/diagnose/north-basin');
 	});
 });
 

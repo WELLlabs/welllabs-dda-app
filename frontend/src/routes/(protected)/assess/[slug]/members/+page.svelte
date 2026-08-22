@@ -3,6 +3,7 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { session } from '$lib/shared/session.svelte.js';
+	import { appPath } from '$lib/shared/paths.js';
 	import { findBySlug, itemPath } from '$lib/shared/slug.js';
 	import ModuleHeader from '$lib/shared/components/ModuleHeader.svelte';
 	import { assessCrumbs } from '$lib/modules/assess/breadcrumbs.js';
@@ -38,7 +39,7 @@
 		isOwner ||
 			(session.user && users.some((u) => u.id === session.user.id && u.role === 'admin'))
 	);
-	const slugBase = $derived(project ? itemPath('/assess', project, projects) : '/assess');
+	const slugBase = $derived(project ? itemPath('/assess', project, projects) : appPath('/assess'));
 	const crumbs = $derived(
 		project ? assessCrumbs({ projects, project, tail: [{ label: 'Members' }] }) : []
 	);
