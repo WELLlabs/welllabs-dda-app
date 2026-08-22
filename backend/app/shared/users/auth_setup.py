@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import html
+import json
 import logging
 import uuid
 from typing import Any, cast
 
-from fastapi import status
 from fastapi_users import FastAPIUsers
 from fastapi_users.authentication import (
     AuthenticationBackend,
@@ -15,7 +16,7 @@ from fastapi_users.authentication import (
 )
 from httpx_oauth.clients.google import GoogleOAuth2
 from httpx_oauth.exceptions import GetIdEmailError
-from starlette.responses import RedirectResponse, Response
+from starlette.responses import HTMLResponse, Response
 
 from app.shared.config import settings
 from app.shared.users.db import User
@@ -101,10 +102,22 @@ class RedirectCookieTransport(CookieTransport):
             dest = self.post_login_redirect_url
         else:
             dest = f"{origin}{self.post_login_redirect_url}"
-        response = RedirectResponse(
-            url=dest,
-            status_code=status.HTTP_302_FOUND,
+        safe_meta_url = html.escape(dest, quote=True)
+        safe_js_url = json.dumps(dest)
+        response = HTMLResponse(
+            content=f"""<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta http-equiv="refresh" content="0;url={safe_meta_url}">
+<title>Signing you in…</title>
+</head><body>
+<p>Signing you in…</p>
+<script>window.location.replace({safe_js_url});</script>
+</body></html>""",
+            status_code=200,
         )
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["CDN-Cache-Control"] = "no-store"
         response.set_cookie(
             self.cookie_name,
             token,

@@ -18,6 +18,10 @@ import { onMount } from 'svelte';
 
 	// If OAuth returned here with the callback URL stuffed into ?next=, resume it.
 	onMount(() => {
+		if (page.url.searchParams.get('oauth_error') === '1') {
+			error = 'Google sign-in failed. Please try again (use a fresh sign-in, not a bookmarked callback URL).';
+			return;
+		}
 		const next = page.url.searchParams.get('next');
 		if (isGoogleOAuthCallback(next)) {
 			completingOAuth = true;

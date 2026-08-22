@@ -1,8 +1,10 @@
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+from fastapi_users.router.oauth import OAuth2AuthorizeCallbackError
 
 from app.modules.accounts.routers import auth, orgs, qfield_account, users
 from app.modules.assess.routers import access as assess_access
@@ -40,6 +42,30 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="DDA Product API", version="0.3.0", lifespan=lifespan)
+
+
+@app.exception_handler(OAuth2AuthorizeCallbackError)
+async def oauth_callback_error_handler(request: Request, exc: OAuth2AuthorizeCallbackError):
+    """Send OAuth failures to the login page instead of raw JSON on the callback URL."""
+    if "/google/callback" not in request.url.path:
+        from fastapi.responses import JSONResponse
+
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    login = f"{settings.public_app_base}/login?oauth_error=1"
+    safe = login.replace("\\", "\\\\").replace('"', '\\"')
+    return HTMLResponse(
+        content=f"""<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta http-equiv="refresh" content="0;url={login}">
+<title>Sign-in failed</title>
+</head><body>
+<p>Google sign-in failed. Redirecting…</p>
+<script>window.location.replace("{safe}");</script>
+</body></html>""",
+        status_code=200,
+        headers={"Cache-Control": "no-store", "CDN-Cache-Control": "no-store"},
+    )
 
 # Honor X-Forwarded-* from the Vite/SvelteKit /api proxy (localhost:5173/5174)
 app.add_middleware(ForwardedHostMiddleware)
