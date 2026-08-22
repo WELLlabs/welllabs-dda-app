@@ -387,6 +387,15 @@ fi
 rm -f /etc/nginx/conf.d/welllabs.conf.bak
 echo "Nginx config installed cleanly (nginx.conf rewritten, no legacy server blocks)."
 
+# Start nginx immediately so the origin stays reachable even if ApplicationStart fails.
+systemctl enable nginx
+if systemctl is-active --quiet nginx; then
+  systemctl reload nginx || systemctl restart nginx
+else
+  systemctl start nginx
+fi
+echo "  ✓ Nginx is running after config install."
+
 cp "$RELEASE_DIR/devops/systemd/welllabs-backend.service"  /etc/systemd/system/
 cp "$RELEASE_DIR/devops/systemd/welllabs-frontend.service" /etc/systemd/system/
 systemctl daemon-reload
