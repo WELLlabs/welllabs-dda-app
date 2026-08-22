@@ -23,7 +23,7 @@
 		updateHypothesis,
 		updateObservationZone
 	} from '$lib/modules/diagnose/api';
-	import { apiPath } from '$lib/shared/paths.js';
+	import { apiPath, resolveApiUrl } from '$lib/shared/paths.js';
 	import { MAX_FIELD_NOTE_MEDIA_BYTES, OBSERVATION_ZONE_COLOR, FIELD_NOTE_COLOR, HYPOTHESIS_COLOR, ZONE_COLORS } from '$lib/modules/diagnose/map-constants';
 	import FieldNoteIcon from '$lib/modules/diagnose/components/icons/FieldNoteIcon.svelte';
 	import HypothesisIcon from '$lib/modules/diagnose/components/icons/HypothesisIcon.svelte';
@@ -563,6 +563,15 @@
 	onMount(async () => {
 		map = new maplibregl.Map({
 			container,
+			transformRequest: (url, resourceType) => {
+				if (
+					resourceType === 'Tile' &&
+					(url.startsWith('/') || url.startsWith(window.location.origin))
+				) {
+					return { url, credentials: 'include' };
+				}
+				return { url };
+			},
 			style: {
 				version: 8,
 				glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
@@ -1438,7 +1447,7 @@
 	}
 
 	async function fetchClippedGeoJSON(url) {
-		const response = await fetch(url, { credentials: 'include' });
+		const response = await fetch(resolveApiUrl(url), { credentials: 'include' });
 		if (!response.ok) {
 			throw new Error(`Failed to fetch vector layer (${response.status})`);
 		}

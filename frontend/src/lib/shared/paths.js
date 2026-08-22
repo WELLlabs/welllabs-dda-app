@@ -65,3 +65,22 @@ export function isGoogleOAuthCallback(path) {
 		path.includes('/accounts/auth/google/callback')
 	);
 }
+
+/**
+ * Normalize API URLs from the backend (may be /api/*, /backend/*, or /wst/backend/*).
+ * @param {string | null | undefined} url
+ * @returns {string}
+ */
+export function resolveApiUrl(url) {
+	if (url == null || url === '') return url;
+	if (/^(https?:|blob:|data:)/i.test(url)) return url;
+
+	let path = url;
+	if (base && path.startsWith(`${base}/backend/`)) return path;
+	if (path.startsWith('/wst/backend/')) return path;
+
+	if (path.startsWith('/api/')) path = path.slice(4);
+	else if (path.startsWith('/backend/')) path = path.slice('/backend'.length);
+
+	return apiPath(path.startsWith('/') ? path : `/${path}`);
+}

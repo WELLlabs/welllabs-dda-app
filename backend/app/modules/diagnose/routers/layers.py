@@ -528,21 +528,24 @@ async def _check_cog(layer: CogLayer, bbox: list[float] | None = None) -> CogLay
 
     try:
         http_url = _presigned_url_cached(layer.s3_key)
-        internal_url = _titiler_info_url(http_url)
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.get(internal_url)
-        if not resp.is_success:
-            detail = resp.json().get("detail", resp.text) if resp.content else resp.reason_phrase
-            return layer.model_copy(update={"status": "error", "error": str(detail)})
-        info = resp.json()
-        bounds = _intersect_bounds(info.get("bounds"), bbox)
+
+        def _read_bounds() -> list[float]:
+            with Reader(http_url) as src:
+                info = src.info()
+            raw = getattr(info, "bounds", None) or getattr(info, "geographic_bounds", None)
+            if raw is None:
+                raise ValueError("COG has no bounds metadata")
+            return list(raw)
+
+        bounds_raw = await asyncio.to_thread(_read_bounds)
+        bounds = _intersect_bounds(bounds_raw, bbox)
         return layer.model_copy(update={"status": "ok", "bounds": bounds})
     except ClientError as exc:
         err = exc.response.get("Error", {})
         return layer.model_copy(
             update={"status": "error", "error": f"{err.get('Code')}: {err.get('Message')}"}
         )
-    except httpx.HTTPError as exc:
+    except Exception as exc:
         return layer.model_copy(update={"status": "error", "error": str(exc)})
 
 
