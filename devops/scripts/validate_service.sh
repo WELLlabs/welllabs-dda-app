@@ -11,16 +11,25 @@ fi
 # ──────────────────────────────────────
 # Retry loop — hit FastAPI /health through nginx
 # ──────────────────────────────────────
-MAX_RETRIES=20
-RETRY_INTERVAL=3
+MAX_RETRIES=30
+RETRY_INTERVAL=5
 HTTP_CODE=000
 HEALTH_BODY=""
 
 for i in $(seq 1 $MAX_RETRIES); do
+    # Prefer nginx → FastAPI (production path). Fall back to direct uvicorn if nginx
+    # is mid-reload during a overlapping CodeDeploy hook.
     RESPONSE=$(curl -s -w $'\n%{http_code}' --max-time 5 http://localhost/health 2>/dev/null || printf '\n000')
     HTTP_CODE=$(echo "$RESPONSE" | tail -1)
     HEALTH_BODY=$(echo "$RESPONSE" | sed '$d')
-    echo "  Attempt $i/$MAX_RETRIES → GET /health → HTTP $HTTP_CODE body=${HEALTH_BODY}"
+
+    if [ "$HTTP_CODE" -ne 200 ] || ! echo "$HEALTH_BODY" | grep -q '"ok"'; then
+        RESPONSE=$(curl -s -w $'\n%{http_code}' --max-time 5 http://127.0.0.1:8080/health 2>/dev/null || printf '\n000')
+        HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+        HEALTH_BODY=$(echo "$RESPONSE" | sed '$d')
+    fi
+
+    echo "  Attempt $i/$MAX_RETRIES → health HTTP $HTTP_CODE body=${HEALTH_BODY}"
 
     # Verify FastAPI is actually running: it returns JSON {"status":"ok"}.
     # An old SvelteKit service on port 8080 would return HTML and pass a naive

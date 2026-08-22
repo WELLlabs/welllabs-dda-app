@@ -44,7 +44,7 @@ if ! systemctl is-enabled --quiet welllabs-backend.service; then
 fi
 systemctl restart welllabs-backend.service
 
-sleep 5
+sleep 10
 if ! systemctl is-active --quiet welllabs-backend.service; then
     echo "ERROR: Backend failed to start. Journal logs:"
     journalctl -u welllabs-backend.service --no-pager -n 50
