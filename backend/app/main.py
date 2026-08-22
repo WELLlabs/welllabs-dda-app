@@ -4,7 +4,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
-from fastapi_users.router.oauth import OAuth2AuthorizeCallbackError
+from httpx_oauth.integrations.fastapi import OAuth2AuthorizeCallbackError
 
 from app.modules.accounts.routers import auth, orgs, qfield_account, users
 from app.modules.assess.routers import access as assess_access
