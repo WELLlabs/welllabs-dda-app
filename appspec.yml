@@ -23,5 +23,5 @@ hooks:
 
   ValidateService:
     - location: devops/scripts/validate_service.sh
-      timeout: 60
+      timeout: 120
       runas: root

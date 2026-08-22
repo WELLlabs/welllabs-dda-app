@@ -6,13 +6,15 @@ echo "=== ValidateService: Running health check ==="
 # Retry loop — up to 30s (10 × 3s)
 # Hit FastAPI /health through nginx
 # ──────────────────────────────────────
-MAX_RETRIES=20
-RETRY_INTERVAL=3
+MAX_RETRIES=12
+RETRY_INTERVAL=2
 HTTP_CODE=000
+HEALTH_BODY=""
 
 for i in $(seq 1 $MAX_RETRIES); do
-    HEALTH_BODY=$(curl -s http://localhost/health || true)
-    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/health || echo "000")
+    RESPONSE=$(curl -s -w $'\n%{http_code}' --max-time 5 http://localhost/health 2>/dev/null || printf '\n000')
+    HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+    HEALTH_BODY=$(echo "$RESPONSE" | sed '$d')
     echo "  Attempt $i/$MAX_RETRIES → GET /health → HTTP $HTTP_CODE body=${HEALTH_BODY}"
 
     # Verify FastAPI is actually running: it returns JSON {"status":"ok"}.
