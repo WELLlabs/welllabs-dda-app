@@ -1,8 +1,11 @@
-import { base, resolve } from '$app/paths';
+import { base } from '$app/paths';
 
 /**
  * Prefix an app-root path with kit.paths.base (e.g. /login → /wst/login).
  * Leaves absolute/external URLs and already-prefixed paths unchanged.
+ *
+ * Always returns an absolute path (never ./relative) so links and assets work
+ * even when the page URL omits the trailing slash (/wst vs /wst/).
  *
  * @param {string} path
  * @returns {string}
@@ -25,5 +28,6 @@ export function appPath(path) {
 	const pathname = path.slice(0, cut) || '/';
 	const suffix = path.slice(cut);
 	const normalized = pathname.startsWith('/') ? pathname : `/${pathname}`;
-	return `${resolve(/** @type {any} */ (normalized))}${suffix}`;
+	const prefix = base || '';
+	return `${prefix}${normalized === '/' ? '' : normalized}${suffix}`;
 }
