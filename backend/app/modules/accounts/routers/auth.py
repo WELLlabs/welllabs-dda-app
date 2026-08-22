@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import html
+import json
+
 from fastapi import APIRouter, Depends
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse
 from fastapi_users.router.oauth import (
     CSRF_TOKEN_COOKIE_NAME,
     CSRF_TOKEN_KEY,
@@ -61,7 +64,14 @@ if google_oauth_client is not None:
     # Browser-friendly OAuth entry (sets CSRF cookie + redirects to Google).
     # Prefer over /authorize JSON for sign-in buttons — avoids fetch/cookie edge cases.
     @router.get("/google/start")
-    async def google_oauth_browser_start() -> RedirectResponse:
+    async def google_oauth_browser_start() -> HTMLResponse:
+        """Start Google OAuth in the browser.
+
+        Returns HTML with a client-side redirect instead of HTTP 302.
+        Cloudflare (and some other proxies) follow 302s to Google server-side
+        and serve accounts.google.com HTML on our domain — that breaks the
+        account picker and leaves the CSRF cookie unset.
+        """
         redirect_uri = f"{settings.api_public_origin}/accounts/auth/google/callback"
         csrf_token = generate_csrf_token()
         state_data = {CSRF_TOKEN_KEY: csrf_token}
@@ -70,9 +80,25 @@ if google_oauth_client is not None:
             redirect_uri,
             state,
             None,
+            extras_params={"prompt": "select_account"},
         )
-        redirect = RedirectResponse(authorization_url, status_code=302)
-        redirect.set_cookie(
+        safe_meta_url = html.escape(authorization_url, quote=True)
+        safe_js_url = json.dumps(authorization_url)
+        response = HTMLResponse(
+            content=f"""<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta http-equiv="refresh" content="0;url={safe_meta_url}">
+<title>Redirecting to Google…</title>
+</head><body>
+<p>Redirecting to Google sign-in…</p>
+<script>window.location.replace({safe_js_url});</script>
+</body></html>""",
+            status_code=200,
+        )
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["CDN-Cache-Control"] = "no-store"
+        response.set_cookie(
             CSRF_TOKEN_COOKIE_NAME,
             csrf_token,
             max_age=3600,
@@ -81,7 +107,7 @@ if google_oauth_client is not None:
             httponly=True,
             samesite="lax",
         )
-        return redirect
+        return response
 
     # Production: pin callback to FRONTEND_ORIGIN so Cloudflare/nginx Host/proto
     # quirks cannot produce redirect_uri_mismatch (saw http://dda.welllabs.org/...).
