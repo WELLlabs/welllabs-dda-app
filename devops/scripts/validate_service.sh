@@ -2,12 +2,17 @@
 set -e
 echo "=== ValidateService: Running health check ==="
 
+# If a prior hook left nginx stopped, try to bring it back before checking.
+if ! systemctl is-active --quiet nginx; then
+    echo "Nginx not active — attempting start before health checks..."
+    nginx -t && systemctl start nginx || true
+fi
+
 # ──────────────────────────────────────
-# Retry loop — up to 30s (10 × 3s)
-# Hit FastAPI /health through nginx
+# Retry loop — hit FastAPI /health through nginx
 # ──────────────────────────────────────
-MAX_RETRIES=12
-RETRY_INTERVAL=2
+MAX_RETRIES=20
+RETRY_INTERVAL=3
 HTTP_CODE=000
 HEALTH_BODY=""
 

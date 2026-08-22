@@ -2,28 +2,35 @@
 set -e
 echo "=== ApplicationStart: Zero-downtime reload ==="
 
-# ──────────────────────────────────────
-# Nginx first — keep origin reachable for Cloudflare (avoids 521 during restarts)
-# ──────────────────────────────────────
-echo "→ Ensuring Nginx is running with latest config..."
-systemctl stop nginx 2>/dev/null || true
-# Evict any stale listener on 80/443 (legacy SvelteKit, etc.) so nginx can bind.
-fuser -k 80/tcp  2>/dev/null || true
-fuser -k 443/tcp 2>/dev/null || true
-sleep 2
-if ! nginx -t; then
-    echo "ERROR: Nginx config invalid:"
-    nginx -t 2>&1 || true
-    exit 1
-fi
-systemctl enable nginx
-systemctl start nginx
-if ! systemctl is-active --quiet nginx; then
-    echo "ERROR: Nginx failed to start. Journal logs:"
-    journalctl -u nginx --no-pager -n 30
-    exit 1
-fi
-echo "  ✓ Nginx is active."
+ensure_nginx() {
+    echo "→ Ensuring Nginx is running with latest config..."
+    if ! nginx -t; then
+        echo "ERROR: Nginx config invalid:"
+        nginx -t 2>&1 || true
+        return 1
+    fi
+    systemctl enable nginx
+    if systemctl is-active --quiet nginx; then
+        # Prefer reload — keeps port 80/443 bound (avoids 521 during deploy).
+        systemctl reload nginx && echo "  ✓ Nginx reloaded." && return 0
+        echo "  Reload failed — restarting nginx..."
+        systemctl stop nginx 2>/dev/null || true
+    fi
+    # Not running (or reload failed): evict stale listeners then start.
+    fuser -k 80/tcp  2>/dev/null || true
+    fuser -k 443/tcp 2>/dev/null || true
+    sleep 2
+    systemctl start nginx
+    if ! systemctl is-active --quiet nginx; then
+        echo "ERROR: Nginx failed to start. Journal logs:"
+        journalctl -u nginx --no-pager -n 30
+        return 1
+    fi
+    echo "  ✓ Nginx started."
+}
+
+# Nginx first so origin stays reachable even if app services restart slowly.
+ensure_nginx
 
 # ──────────────────────────────────────
 # Backend: Uvicorn / FastAPI
@@ -58,6 +65,9 @@ if ! systemctl is-active --quiet welllabs-frontend.service; then
     exit 1
 fi
 echo "  ✓ Frontend is active."
+
+# Re-check nginx after service restarts (legacy processes can grab 443).
+ensure_nginx
 
 echo ""
 echo "=== All services running ==="
