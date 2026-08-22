@@ -32,31 +32,36 @@ export function appPath(path) {
 	return `${prefix}${normalized === '/' ? '' : normalized}${suffix}`;
 }
 
+/** Browser API segment under kit.paths.base — /backend not /api (Cloudflare Worker crashes POST on /wst/api/*). */
+const API_SEGMENT = '/backend';
+
 /**
- * Public API path under kit.paths.base (e.g. /wst/api/accounts).
- * @param {string} [path] — suffix after /api, e.g. "/accounts" or "/diagnose/projects"
+ * Public API path under kit.paths.base (e.g. /wst/backend/accounts).
+ * @param {string} [path] — suffix after the API segment, e.g. "/accounts"
  * @returns {string}
  */
 export function apiPath(path = '') {
 	const suffix =
-		!path || path === '/api' || path === '/api/'
+		!path || path === API_SEGMENT || path === `${API_SEGMENT}/`
 			? ''
-			: path.startsWith('/api/')
-				? path.slice(4)
-				: path.startsWith('/')
-					? path
-					: `/${path}`;
-	return `${appPath('/api')}${suffix}`;
+			: path.startsWith(`${API_SEGMENT}/`)
+				? path.slice(API_SEGMENT.length)
+				: path.startsWith('/api/')
+					? path.slice(4)
+					: path.startsWith('/')
+						? path
+						: `/${path}`;
+	return `${appPath(API_SEGMENT)}${suffix}`;
 }
 
-/** Google OAuth callback — under /wst/api in production (same origin as the app). */
-export const GOOGLE_OAUTH_CALLBACK_PREFIX = `${appPath('/api')}/accounts/auth/google/callback`;
+/** Google OAuth callback — under /wst/backend (same origin as the app). */
+export const GOOGLE_OAUTH_CALLBACK_PREFIX = `${appPath(API_SEGMENT)}/accounts/auth/google/callback`;
 
 /** @param {string | null | undefined} path */
 export function isGoogleOAuthCallback(path) {
 	if (typeof path !== 'string') return false;
 	return (
 		path.startsWith(GOOGLE_OAUTH_CALLBACK_PREFIX) ||
-		path.startsWith('/api/accounts/auth/google/callback')
+		path.includes('/accounts/auth/google/callback')
 	);
 }

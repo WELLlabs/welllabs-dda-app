@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     frontend_origin: str = "http://localhost:5173"
     # SvelteKit kit.paths.base in production (empty locally). Example: /wst
     frontend_base_path: str = ""
+    # Browser API segment under frontend_base_path (/backend avoids CF Worker 1101 on /wst/api POST)
+    api_public_segment: str = "/backend"
     session_cookie_name: str = "dda_session"
     session_ttl_days: int = 30
     session_cookie_secure: bool = False
@@ -100,10 +102,11 @@ class Settings(BaseSettings):
 
     @property
     def api_public_prefix(self) -> str:
-        """Browser-visible API path prefix (e.g. /wst/api in production)."""
+        """Browser-visible API path prefix (e.g. /wst/backend in production)."""
+        seg = self.api_public_segment if self.api_public_segment.startswith("/") else f"/{self.api_public_segment}"
         if self.frontend_base_path:
-            return f"{self.frontend_base_path}/api"
-        return "/api"
+            return f"{self.frontend_base_path}{seg.rstrip('/')}"
+        return seg.rstrip("/") or "/backend"
 
     @property
     def api_public_origin(self) -> str:

@@ -18,10 +18,10 @@ describe('createApiClient', () => {
 			json: async () => ({ id: 'p1' })
 		});
 
-		const request = createApiClient('/wst/api/diagnose');
+		const request = createApiClient('/wst/backend/diagnose');
 		const data = await request('/projects');
 
-		expect(fetch).toHaveBeenCalledWith('/wst/api/diagnose/projects', { credentials: 'include' });
+		expect(fetch).toHaveBeenCalledWith('/wst/backend/diagnose/projects', { credentials: 'include' });
 		expect(data).toEqual({ id: 'p1' });
 	});
 
@@ -32,14 +32,14 @@ describe('createApiClient', () => {
 			json: async () => ({ ok: true })
 		});
 
-		const request = createApiClient('/wst/api/accounts');
+		const request = createApiClient('/wst/backend/accounts');
 		await request('/auth/login', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({ email: 'a@b.com', password: 'x' })
 		});
 
-		expect(fetch).toHaveBeenCalledWith('/wst/api/accounts/auth/login', {
+		expect(fetch).toHaveBeenCalledWith('/wst/backend/accounts/auth/login', {
 			credentials: 'include',
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
@@ -56,7 +56,7 @@ describe('createApiClient', () => {
 			}
 		});
 
-		const request = createApiClient('/wst/api/diagnose');
+		const request = createApiClient('/wst/backend/diagnose');
 		await expect(request('/projects/1', { credentials: 'include', method: 'DELETE' })).resolves.toBeUndefined();
 	});
 
@@ -68,7 +68,7 @@ describe('createApiClient', () => {
 			text: async () => JSON.stringify({ detail: 'Name required' })
 		});
 
-		const request = createApiClient('/wst/api/diagnose');
+		const request = createApiClient('/wst/backend/diagnose');
 		await expect(request('/projects', { method: 'POST' })).rejects.toThrow('Name required');
 	});
 
@@ -80,7 +80,7 @@ describe('createApiClient', () => {
 			text: async () => JSON.stringify({ detail: [{ msg: 'invalid' }] })
 		});
 
-		const request = createApiClient('/wst/api/diagnose');
+		const request = createApiClient('/wst/backend/diagnose');
 		await expect(request('/projects')).rejects.toThrow('[{"msg":"invalid"}]');
 	});
 
@@ -92,7 +92,7 @@ describe('createApiClient', () => {
 			text: async () => 'upstream failed'
 		});
 
-		const request = createApiClient('/wst/api/diagnose');
+		const request = createApiClient('/wst/backend/diagnose');
 		await expect(request('/projects')).rejects.toThrow('upstream failed');
 	});
 });
@@ -135,7 +135,7 @@ describe('streamSSE', () => {
 
 		const onProgress = vi.fn();
 		const onDone = vi.fn();
-		const result = await streamSSE('/wst/api/diagnose/package', { method: 'POST' }, { onProgress, onDone });
+		const result = await streamSSE('/wst/backend/diagnose/package', { method: 'POST' }, { onProgress, onDone });
 
 		expect(onProgress).toHaveBeenCalledWith(40, 'Packaging', undefined);
 		expect(onDone).toHaveBeenCalledWith({ package_id: 'pkg-1' });
@@ -149,7 +149,7 @@ describe('streamSSE', () => {
 		);
 
 		const onError = vi.fn();
-		await expect(streamSSE('/wst/api/diagnose/sync', {}, { onError })).rejects.toThrow('Sync failed');
+		await expect(streamSSE('/wst/backend/diagnose/sync', {}, { onError })).rejects.toThrow('Sync failed');
 		expect(onError).toHaveBeenCalledWith('Sync failed');
 	});
 
@@ -162,7 +162,7 @@ describe('streamSSE', () => {
 			body: null
 		}));
 
-		await expect(streamSSE('/wst/api/diagnose/sync', {})).rejects.toThrow('Busy');
+		await expect(streamSSE('/wst/backend/diagnose/sync', {})).rejects.toThrow('Busy');
 	});
 
 	it('throws when response has no body stream', async () => {
@@ -171,7 +171,7 @@ describe('streamSSE', () => {
 			body: null
 		}));
 
-		await expect(streamSSE('/wst/api/diagnose/sync', {})).rejects.toThrow('No response stream from server');
+		await expect(streamSSE('/wst/backend/diagnose/sync', {})).rejects.toThrow('No response stream from server');
 	});
 
 	it('throws when stream ends without a done event', async () => {
@@ -180,6 +180,6 @@ describe('streamSSE', () => {
 			vi.fn().mockResolvedValue(mockStream(['data: {"type":"progress","percent":10,"message":"Start"}\n\n']))
 		);
 
-		await expect(streamSSE('/wst/api/diagnose/sync', {})).rejects.toThrow('Stream ended unexpectedly');
+		await expect(streamSSE('/wst/backend/diagnose/sync', {})).rejects.toThrow('Stream ended unexpectedly');
 	});
 });

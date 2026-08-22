@@ -1,8 +1,7 @@
-/** Dev proxy: forward /wst/api/* to the FastAPI backend.
+/** Dev proxy: forward /wst/backend/* to the FastAPI backend at /api/*.
  *
- * In development, browser requests to /wst/api/* hit this SvelteKit catch-all
- * (Vite's `server.proxy` is intentionally unused for `/api` — see vite.config.js).
- * In production, nginx routes /wst/api/* directly to FastAPI so uploads never pass through Node.
+ * Production nginx routes /wst/backend/* directly to FastAPI (not /wst/api — a
+ * Cloudflare Worker on ai.welllabs.org throws error 1101 on POST to /wst/api/*).
  */
 
 import { env } from '$env/dynamic/private';
@@ -64,7 +63,6 @@ async function proxy(event) {
 	const headers = new Headers(request.headers);
 	headers.delete('host');
 	headers.delete('connection');
-	// So FastAPI/OAuth builds callback URLs on the Vite origin (5173/5174), not :8080
 	headers.set('x-forwarded-host', url.host);
 	headers.set('x-forwarded-proto', url.protocol.replace(':', '') || 'http');
 	headers.set('x-forwarded-port', url.port || (url.protocol === 'https:' ? '443' : '80'));
@@ -74,15 +72,11 @@ async function proxy(event) {
 	const init = {
 		method: request.method,
 		headers,
-		// Critical for OAuth/login: do not follow upstream 302s or Set-Cookie is lost
 		redirect: 'manual'
 	};
 
 	if (request.method !== 'GET' && request.method !== 'HEAD') {
 		const contentType = request.headers.get('content-type') || '';
-		// Stream large multipart uploads (field-note photo/audio). Buffer JSON and
-		// other small bodies — Node undici often fails on streamed JSON POSTs
-		// when Content-Length is present (login/register, etc.).
 		if (contentType.includes('multipart/form-data') && request.body) {
 			headers.delete('content-length');
 			init.body = request.body;
@@ -109,7 +103,6 @@ async function proxy(event) {
 		typeof res.headers.getSetCookie === 'function' ? res.headers.getSetCookie() : [];
 	applyUpstreamCookies(cookies, setCookies);
 
-	// OAuth / login redirects: cookies are already applied via cookies.set above
 	if (res.status >= 300 && res.status < 400) {
 		const location = res.headers.get('location');
 		if (location) {

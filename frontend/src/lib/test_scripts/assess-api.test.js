@@ -31,20 +31,20 @@ describe('assess api', () => {
 	it('fetchProjects lists assess projects', async () => {
 		mockJson([{ id: 'p1' }]);
 		await expect(fetchProjects()).resolves.toEqual([{ id: 'p1' }]);
-		expect(fetch).toHaveBeenCalledWith('/wst/api/assess/projects', { credentials: 'include' });
+		expect(fetch).toHaveBeenCalledWith('/wst/backend/assess/projects', { credentials: 'include' });
 	});
 
 	it('importProjects hits the ODK projects endpoint', async () => {
 		mockJson({ imported: 2 });
 		await expect(importProjects()).resolves.toEqual({ imported: 2 });
-		expect(fetch).toHaveBeenCalledWith('/wst/api/assess/odk/projects', { credentials: 'include' });
+		expect(fetch).toHaveBeenCalledWith('/wst/backend/assess/odk/projects', { credentials: 'include' });
 	});
 
 	it('fetchProjectReport encodes the project id', async () => {
 		mockJson({ configured: false });
 		await fetchProjectReport('proj/with spaces');
 		expect(fetch).toHaveBeenCalledWith(
-			'/wst/api/assess/projects/proj%2Fwith%20spaces/reports',
+			'/wst/backend/assess/projects/proj%2Fwith%20spaces/reports',
 			{ credentials: 'include' }
 		);
 	});
@@ -52,14 +52,14 @@ describe('assess api', () => {
 	it('fetchForms lists forms for a project', async () => {
 		mockJson([{ xmlFormId: 'form-a' }]);
 		await expect(fetchForms('p1')).resolves.toEqual([{ xmlFormId: 'form-a' }]);
-		expect(fetch).toHaveBeenCalledWith('/wst/api/assess/projects/p1/forms', { credentials: 'include' });
+		expect(fetch).toHaveBeenCalledWith('/wst/backend/assess/projects/p1/forms', { credentials: 'include' });
 	});
 
 	it('fetchSubmissions encodes project and form ids', async () => {
 		mockJson([]);
 		await fetchSubmissions('p1', 'form/a');
 		expect(fetch).toHaveBeenCalledWith(
-			'/wst/api/assess/projects/p1/forms/form%2Fa/submissions',
+			'/wst/backend/assess/projects/p1/forms/form%2Fa/submissions',
 			{ credentials: 'include' }
 		);
 	});
@@ -68,7 +68,7 @@ describe('assess api', () => {
 		mockJson({ instanceId: 'i1' });
 		await fetchSubmission('p1', 'form-a', 'uuid:abc');
 		expect(fetch).toHaveBeenCalledWith(
-			'/wst/api/assess/projects/p1/forms/form-a/submissions/uuid%3Aabc',
+			'/wst/backend/assess/projects/p1/forms/form-a/submissions/uuid%3Aabc',
 			{ credentials: 'include' }
 		);
 	});

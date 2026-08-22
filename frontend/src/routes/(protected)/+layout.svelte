@@ -12,9 +12,9 @@
 		if (!session.loaded || !session.user) {
 			if (session.loaded && !session.user) {
 				const pathname = page.url.pathname;
-				// Never stash API OAuth callback URLs as ?next= — they must hit FastAPI directly.
 				const apiPrefix = apiPath('');
-				if (pathname.startsWith(`${apiPrefix}/`) || pathname.startsWith('/api/')) {
+				// Never stash API OAuth callback URLs as ?next= — they must hit FastAPI directly.
+				if (pathname.startsWith(`${apiPrefix}/`) || pathname.includes('/accounts/auth/google/callback')) {
 					window.location.replace(pathname + page.url.search);
 					return;
 				}
