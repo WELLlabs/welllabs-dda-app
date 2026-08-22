@@ -39,11 +39,19 @@ fi
 echo "  ✓ Frontend is active."
 
 # ──────────────────────────────────────
-# Nginx: Reload config (zero downtime)
+# Nginx: Reload config
 # ──────────────────────────────────────
 echo "→ Reloading Nginx configuration..."
-nginx -t && systemctl reload nginx
-echo "  ✓ Nginx reloaded."
+# A legacy service (e.g. old SvelteKit on port 443 with Restart=always) may
+# have rebound to port 443 during the deployment.  Kill it one final time so
+# nginx can bind both port 80 and 443.
+fuser -k 80/tcp  2>/dev/null || true
+fuser -k 443/tcp 2>/dev/null || true
+sleep 1
+# Use stop+start instead of reload so nginx picks up the new listen directives
+# (reload only reloads worker config, not listening sockets).
+nginx -t && systemctl restart nginx
+echo "  ✓ Nginx restarted."
 
 echo ""
 echo "=== All services running ==="
