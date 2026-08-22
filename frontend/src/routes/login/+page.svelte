@@ -1,10 +1,11 @@
 <script>
+import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { login, requestVerifyEmail, startGoogleAuth } from '$lib/modules/accounts/api.js';
 	import { session } from '$lib/shared/session.svelte.js';
 	import ContourBackground from '$lib/shared/components/landing/ContourBackground.svelte';
-	import { appPath } from '$lib/shared/paths.js';
+	import { appPath, isGoogleOAuthCallback } from '$lib/shared/paths.js';
 
 	let email = $state('');
 	let password = $state('');
@@ -13,6 +14,24 @@
 	let needsVerify = $state(false);
 	let resendMsg = $state('');
 	let googleBusy = $state(false);
+	let completingOAuth = $state(false);
+
+	// If OAuth returned here with the callback URL stuffed into ?next=, resume it.
+	onMount(() => {
+		const next = page.url.searchParams.get('next');
+		if (isGoogleOAuthCallback(next)) {
+			completingOAuth = true;
+			window.location.replace(next);
+		}
+	});
+
+	function redirectAfterLogin(next) {
+		if (isGoogleOAuthCallback(next)) {
+			window.location.href = next;
+			return;
+		}
+		goto(appPath(next));
+	}
 
 	function isUnverifiedError(message) {
 		const m = String(message).toLowerCase();
@@ -30,7 +49,7 @@
 			const user = await login(email.trim(), password);
 			session.setUser(user);
 			const next = page.url.searchParams.get('next') || '/home';
-			goto(appPath(next));
+			redirectAfterLogin(next);
 		} catch (err) {
 			const msg = String(err.message ?? err);
 			error = msg;
@@ -54,7 +73,7 @@
 		googleBusy = true;
 		error = '';
 		try {
-			await startGoogleAuth();
+			startGoogleAuth();
 		} catch (err) {
 			error = String(err.message ?? err);
 			googleBusy = false;
@@ -69,6 +88,9 @@
 <div class="relative flex min-h-screen items-center justify-center overflow-hidden bg-void px-4 font-body">
 	<ContourBackground intensity="ambient" />
 
+	{#if completingOAuth}
+		<div class="relative z-10 font-body text-ink-dim">Completing Google sign-in…</div>
+	{:else}
 	<div class="relative z-10 w-full max-w-sm rounded-[20px] border border-hairline bg-panel p-8 shadow-glass">
 		<span class="font-mono text-[11px] uppercase tracking-[0.2em] text-diagnose">Welcome back</span>
 		<h1 class="mt-2 font-display text-2xl text-ink">Sign in</h1>
@@ -150,4 +172,5 @@
 			<a href={appPath('/register')} class="font-medium text-diagnose hover:underline">Register</a>
 		</p>
 	</div>
+	{/if}
 </div>

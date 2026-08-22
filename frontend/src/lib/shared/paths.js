@@ -15,6 +15,10 @@ export function appPath(path) {
 	if (/^(https?:|mailto:|tel:)/i.test(path) || path.startsWith('#') || path.startsWith('//')) {
 		return path;
 	}
+	// API routes live at /api/* on the host root — never under kit.paths.base.
+	if (path.startsWith('/api/')) {
+		return path;
+	}
 	if (base && (path === base || path.startsWith(`${base}/`))) {
 		return path;
 	}
@@ -30,4 +34,12 @@ export function appPath(path) {
 	const normalized = pathname.startsWith('/') ? pathname : `/${pathname}`;
 	const prefix = base || '';
 	return `${prefix}${normalized === '/' ? '' : normalized}${suffix}`;
+}
+
+/** Google OAuth callback — must hit FastAPI at /api/*, not /wst/api/*. */
+export const GOOGLE_OAUTH_CALLBACK_PREFIX = '/api/accounts/auth/google/callback';
+
+/** @param {string | null | undefined} path */
+export function isGoogleOAuthCallback(path) {
+	return typeof path === 'string' && path.startsWith(GOOGLE_OAUTH_CALLBACK_PREFIX);
 }

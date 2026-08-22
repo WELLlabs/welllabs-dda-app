@@ -11,7 +11,13 @@
 	$effect(() => {
 		if (!session.loaded || !session.user) {
 			if (session.loaded && !session.user) {
-				const next = encodeURIComponent(page.url.pathname + page.url.search);
+				const pathname = page.url.pathname;
+				// Never stash API OAuth callback URLs as ?next= — they must hit FastAPI directly.
+				if (pathname.startsWith('/api/')) {
+					window.location.replace(pathname + page.url.search);
+					return;
+				}
+				const next = encodeURIComponent(pathname + page.url.search);
 				goto(appPath(`/login?next=${next}`));
 			}
 			return;

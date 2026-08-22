@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi.responses import RedirectResponse
+from fastapi_users.router.oauth import (
+    CSRF_TOKEN_COOKIE_NAME,
+    CSRF_TOKEN_KEY,
+    generate_csrf_token,
+    generate_state_token,
+)
 
 from app.shared.auth import get_current_user
 from app.shared.config import settings
@@ -51,6 +58,37 @@ async def me(user: dict = Depends(get_current_user)):
 
 
 if google_oauth_client is not None:
+    # Browser-friendly OAuth entry (sets CSRF cookie + redirects to Google).
+    # Prefer over /authorize JSON for sign-in buttons — avoids fetch/cookie edge cases.
+    @router.get("/google/start")
+    async def google_oauth_browser_start(response: Response) -> RedirectResponse:
+        redirect_uri = (
+            f"{settings.public_app_origin}/api/accounts/auth/google/callback"
+            if settings.public_app_origin.startswith("https://")
+            else None
+        )
+        if redirect_uri is None:
+            raise HTTPException(status_code=501, detail="Google OAuth start requires HTTPS origin")
+
+        csrf_token = generate_csrf_token()
+        state_data = {CSRF_TOKEN_KEY: csrf_token}
+        state = generate_state_token(state_data, settings.auth_jwt_secret)
+        authorization_url = await google_oauth_client.get_authorization_url(
+            redirect_uri,
+            state,
+            None,
+        )
+        response.set_cookie(
+            CSRF_TOKEN_COOKIE_NAME,
+            csrf_token,
+            max_age=3600,
+            path="/",
+            secure=settings.session_cookie_secure,
+            httponly=True,
+            samesite="lax",
+        )
+        return RedirectResponse(authorization_url, status_code=302)
+
     # Production: pin callback to FRONTEND_ORIGIN so Cloudflare/nginx Host/proto
     # quirks cannot produce redirect_uri_mismatch (saw http://dda.welllabs.org/...).
     # Local: omit redirect_url so Vite :5173/:5174 both work via X-Forwarded-Host.

@@ -73,18 +73,9 @@ export async function resetPassword(token, password) {
 	});
 }
 
-/** Start Google OAuth (sign-up or sign-in). Fetches authorize URL then redirects. */
-export async function startGoogleAuth() {
-	const res = await fetch(`${API}/auth/google/authorize`, { credentials: 'include' });
-	if (!res.ok) {
-		const text = await res.text();
-		throw new Error(text || `Google authorize failed (${res.status})`);
-	}
-	const data = await res.json();
-	if (!data?.authorization_url) {
-		throw new Error('Google authorize did not return a URL');
-	}
-	window.location.href = data.authorization_url;
+/** Start Google OAuth (sign-up or sign-in). Full-page navigation sets CSRF cookie reliably. */
+export function startGoogleAuth() {
+	window.location.href = `${API}/auth/google/start`;
 }
 
 /** @deprecated Prefer startGoogleAuth() — authorize endpoint returns JSON, not a redirect. */

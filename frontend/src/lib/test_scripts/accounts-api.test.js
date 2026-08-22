@@ -158,11 +158,8 @@ describe('accounts api', () => {
 			}
 		});
 		mockJson({ authorization_url: 'https://accounts.google.com/o/oauth2/v2/auth?x=1' });
-		await startGoogleAuth();
-		expect(fetch).toHaveBeenCalledWith('/api/accounts/auth/google/authorize', {
-			credentials: 'include'
-		});
-		expect(hrefSetter).toHaveBeenCalledWith('https://accounts.google.com/o/oauth2/v2/auth?x=1');
+		startGoogleAuth();
+		expect(hrefSetter).toHaveBeenCalledWith('/api/accounts/auth/google/start');
 	});
 
 	it('lookupUserByEmail encodes the email query', async () => {

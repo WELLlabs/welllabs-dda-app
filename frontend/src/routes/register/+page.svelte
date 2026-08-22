@@ -30,7 +30,7 @@
 		googleBusy = true;
 		error = '';
 		try {
-			await startGoogleAuth();
+			startGoogleAuth();
 		} catch (err) {
 			error = String(err.message ?? err);
 			googleBusy = false;
