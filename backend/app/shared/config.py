@@ -99,6 +99,18 @@ class Settings(BaseSettings):
         return f"{self.public_app_origin}{self.frontend_base_path}"
 
     @property
+    def api_public_prefix(self) -> str:
+        """Browser-visible API path prefix (e.g. /wst/api in production)."""
+        if self.frontend_base_path:
+            return f"{self.frontend_base_path}/api"
+        return "/api"
+
+    @property
+    def api_public_origin(self) -> str:
+        """Absolute public API base URL for OAuth redirect URIs."""
+        return f"{self.public_app_origin}{self.api_public_prefix}"
+
+    @property
     def cors_origins(self) -> list[str]:
         """Browser origins allowed to call the API with credentials.
 

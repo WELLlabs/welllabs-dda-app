@@ -15,10 +15,6 @@ export function appPath(path) {
 	if (/^(https?:|mailto:|tel:)/i.test(path) || path.startsWith('#') || path.startsWith('//')) {
 		return path;
 	}
-	// API routes live at /api/* on the host root — never under kit.paths.base.
-	if (path.startsWith('/api/')) {
-		return path;
-	}
 	if (base && (path === base || path.startsWith(`${base}/`))) {
 		return path;
 	}
@@ -36,10 +32,31 @@ export function appPath(path) {
 	return `${prefix}${normalized === '/' ? '' : normalized}${suffix}`;
 }
 
-/** Google OAuth callback — must hit FastAPI at /api/*, not /wst/api/*. */
-export const GOOGLE_OAUTH_CALLBACK_PREFIX = '/api/accounts/auth/google/callback';
+/**
+ * Public API path under kit.paths.base (e.g. /wst/api/accounts).
+ * @param {string} [path] — suffix after /api, e.g. "/accounts" or "/diagnose/projects"
+ * @returns {string}
+ */
+export function apiPath(path = '') {
+	const suffix =
+		!path || path === '/api' || path === '/api/'
+			? ''
+			: path.startsWith('/api/')
+				? path.slice(4)
+				: path.startsWith('/')
+					? path
+					: `/${path}`;
+	return `${appPath('/api')}${suffix}`;
+}
+
+/** Google OAuth callback — under /wst/api in production (same origin as the app). */
+export const GOOGLE_OAUTH_CALLBACK_PREFIX = `${appPath('/api')}/accounts/auth/google/callback`;
 
 /** @param {string | null | undefined} path */
 export function isGoogleOAuthCallback(path) {
-	return typeof path === 'string' && path.startsWith(GOOGLE_OAUTH_CALLBACK_PREFIX);
+	if (typeof path !== 'string') return false;
+	return (
+		path.startsWith(GOOGLE_OAUTH_CALLBACK_PREFIX) ||
+		path.startsWith('/api/accounts/auth/google/callback')
+	);
 }

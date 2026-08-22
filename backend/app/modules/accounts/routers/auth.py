@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from fastapi.responses import RedirectResponse
 from fastapi_users.router.oauth import (
     CSRF_TOKEN_COOKIE_NAME,
@@ -62,14 +62,7 @@ if google_oauth_client is not None:
     # Prefer over /authorize JSON for sign-in buttons — avoids fetch/cookie edge cases.
     @router.get("/google/start")
     async def google_oauth_browser_start() -> RedirectResponse:
-        redirect_uri = (
-            f"{settings.public_app_origin}/api/accounts/auth/google/callback"
-            if settings.public_app_origin.startswith("https://")
-            else None
-        )
-        if redirect_uri is None:
-            raise HTTPException(status_code=501, detail="Google OAuth start requires HTTPS origin")
-
+        redirect_uri = f"{settings.api_public_origin}/accounts/auth/google/callback"
         csrf_token = generate_csrf_token()
         state_data = {CSRF_TOKEN_KEY: csrf_token}
         state = generate_state_token(state_data, settings.auth_jwt_secret)
@@ -97,11 +90,8 @@ if google_oauth_client is not None:
         "associate_by_email": True,
         "is_verified_by_default": True,
         "csrf_token_cookie_secure": settings.session_cookie_secure,
+        "redirect_url": f"{settings.api_public_origin}/accounts/auth/google/callback",
     }
-    if settings.public_app_origin.startswith("https://"):
-        oauth_kwargs["redirect_url"] = (
-            f"{settings.public_app_origin}/api/accounts/auth/google/callback"
-        )
     router.include_router(
         fastapi_users.get_oauth_router(
             google_oauth_client,

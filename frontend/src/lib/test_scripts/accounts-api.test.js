@@ -42,7 +42,7 @@ describe('accounts api', () => {
 	it('register posts credentials to /auth/register', async () => {
 		mockJson({ id: 'u1' });
 		await register('a@b.com', 'Ada', 'secret');
-		expect(fetch).toHaveBeenCalledWith('/api/accounts/auth/register', {
+		expect(fetch).toHaveBeenCalledWith('/wst/api/accounts/auth/register', {
 			credentials: 'include',
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
@@ -66,7 +66,7 @@ describe('accounts api', () => {
 				text: async () => JSON.stringify({ id: 'u1', email: 'a@b.com' })
 			});
 		await expect(login('a@b.com', 'secret')).resolves.toEqual({ id: 'u1', email: 'a@b.com' });
-		expect(fetch).toHaveBeenNthCalledWith(1, '/api/accounts/auth/login', {
+		expect(fetch).toHaveBeenNthCalledWith(1, '/wst/api/accounts/auth/login', {
 			credentials: 'include',
 			method: 'POST',
 			headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -75,13 +75,13 @@ describe('accounts api', () => {
 		const body = fetch.mock.calls[0][1].body;
 		expect(body.get('username')).toBe('a@b.com');
 		expect(body.get('password')).toBe('secret');
-		expect(fetch).toHaveBeenNthCalledWith(2, '/api/accounts/auth/me', { credentials: 'include' });
+		expect(fetch).toHaveBeenNthCalledWith(2, '/wst/api/accounts/auth/me', { credentials: 'include' });
 	});
 
 	it('logout posts to /auth/logout', async () => {
 		fetch.mockResolvedValue({ ok: true, status: 204 });
 		await logout();
-		expect(fetch).toHaveBeenCalledWith('/api/accounts/auth/logout', {
+		expect(fetch).toHaveBeenCalledWith('/wst/api/accounts/auth/logout', {
 			credentials: 'include',
 			method: 'POST'
 		});
@@ -90,7 +90,7 @@ describe('accounts api', () => {
 	it('me fetches the current user', async () => {
 		mockJson({ id: 'u1', name: 'Ada' });
 		await expect(me()).resolves.toEqual({ id: 'u1', name: 'Ada' });
-		expect(fetch).toHaveBeenCalledWith('/api/accounts/auth/me', { credentials: 'include' });
+		expect(fetch).toHaveBeenCalledWith('/wst/api/accounts/auth/me', { credentials: 'include' });
 	});
 
 	it('updateMe patches /auth/users/me', async () => {
@@ -99,7 +99,7 @@ describe('accounts api', () => {
 			id: 'u1',
 			name: 'Ada Lovelace'
 		});
-		expect(fetch).toHaveBeenCalledWith('/api/accounts/auth/users/me', {
+		expect(fetch).toHaveBeenCalledWith('/wst/api/accounts/auth/users/me', {
 			credentials: 'include',
 			method: 'PATCH',
 			headers: { 'Content-Type': 'application/json' },
@@ -110,7 +110,7 @@ describe('accounts api', () => {
 	it('verify / request-verify / forgot / reset hit auth endpoints', async () => {
 		mockJson({});
 		await verifyEmail('tok');
-		expect(fetch).toHaveBeenCalledWith('/api/accounts/auth/verify', {
+		expect(fetch).toHaveBeenCalledWith('/wst/api/accounts/auth/verify', {
 			credentials: 'include',
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
@@ -119,7 +119,7 @@ describe('accounts api', () => {
 
 		mockJson({});
 		await requestVerifyEmail('a@b.com');
-		expect(fetch).toHaveBeenCalledWith('/api/accounts/auth/request-verify-token', {
+		expect(fetch).toHaveBeenCalledWith('/wst/api/accounts/auth/request-verify-token', {
 			credentials: 'include',
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
@@ -128,7 +128,7 @@ describe('accounts api', () => {
 
 		mockJson({});
 		await forgotPassword('a@b.com');
-		expect(fetch).toHaveBeenCalledWith('/api/accounts/auth/forgot-password', {
+		expect(fetch).toHaveBeenCalledWith('/wst/api/accounts/auth/forgot-password', {
 			credentials: 'include',
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
@@ -137,7 +137,7 @@ describe('accounts api', () => {
 
 		mockJson({});
 		await resetPassword('tok', 'password123');
-		expect(fetch).toHaveBeenCalledWith('/api/accounts/auth/reset-password', {
+		expect(fetch).toHaveBeenCalledWith('/wst/api/accounts/auth/reset-password', {
 			credentials: 'include',
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
@@ -159,14 +159,14 @@ describe('accounts api', () => {
 		});
 		mockJson({ authorization_url: 'https://accounts.google.com/o/oauth2/v2/auth?x=1' });
 		startGoogleAuth();
-		expect(hrefSetter).toHaveBeenCalledWith('/api/accounts/auth/google/start');
+		expect(hrefSetter).toHaveBeenCalledWith('/wst/api/accounts/auth/google/start');
 	});
 
 	it('lookupUserByEmail encodes the email query', async () => {
 		mockJson({ id: 'u2' });
 		await lookupUserByEmail('ada lovelace@example.com');
 		expect(fetch).toHaveBeenCalledWith(
-			'/api/accounts/users/lookup?email=ada%20lovelace%40example.com',
+			'/wst/api/accounts/users/lookup?email=ada%20lovelace%40example.com',
 			{ credentials: 'include' }
 		);
 	});
@@ -182,7 +182,7 @@ describe('accounts api', () => {
 	it('createOrg posts the org name', async () => {
 		mockJson({ id: 'o1', name: 'New Org' });
 		await createOrg('New Org');
-		expect(fetch).toHaveBeenCalledWith('/api/accounts/orgs', {
+		expect(fetch).toHaveBeenCalledWith('/wst/api/accounts/orgs', {
 			credentials: 'include',
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
@@ -193,7 +193,7 @@ describe('accounts api', () => {
 	it('fetchOrgMembers returns members array', async () => {
 		mockJson({ members: [{ id: 'u1' }] });
 		await expect(fetchOrgMembers('o1')).resolves.toEqual([{ id: 'u1' }]);
-		expect(fetch).toHaveBeenCalledWith('/api/accounts/orgs/o1/members', {
+		expect(fetch).toHaveBeenCalledWith('/wst/api/accounts/orgs/o1/members', {
 			credentials: 'include'
 		});
 	});
@@ -201,7 +201,7 @@ describe('accounts api', () => {
 	it('addOrgMember posts email to members endpoint', async () => {
 		mockJson({ id: 'm1' });
 		await addOrgMember('o1', 'a@b.com');
-		expect(fetch).toHaveBeenCalledWith('/api/accounts/orgs/o1/members', {
+		expect(fetch).toHaveBeenCalledWith('/wst/api/accounts/orgs/o1/members', {
 			credentials: 'include',
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
@@ -212,13 +212,13 @@ describe('accounts api', () => {
 	it('removeOrgMember and deleteOrg issue DELETE requests', async () => {
 		fetch.mockResolvedValue({ ok: true, status: 204 });
 		await removeOrgMember('o1', 'u1');
-		expect(fetch).toHaveBeenCalledWith('/api/accounts/orgs/o1/members/u1', {
+		expect(fetch).toHaveBeenCalledWith('/wst/api/accounts/orgs/o1/members/u1', {
 			credentials: 'include',
 			method: 'DELETE'
 		});
 
 		await deleteOrg('o1');
-		expect(fetch).toHaveBeenCalledWith('/api/accounts/orgs/o1', {
+		expect(fetch).toHaveBeenCalledWith('/wst/api/accounts/orgs/o1', {
 			credentials: 'include',
 			method: 'DELETE'
 		});

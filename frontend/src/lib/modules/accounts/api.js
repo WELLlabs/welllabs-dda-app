@@ -1,6 +1,7 @@
 import { createApiClient } from '$lib/shared/api-client.js';
+import { apiPath } from '$lib/shared/paths.js';
 
-const API = '/api/accounts';
+const API = apiPath('/accounts');
 const request = createApiClient(API);
 
 export async function register(email, name, password) {

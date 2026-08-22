@@ -2,7 +2,7 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { session } from '$lib/shared/session.svelte.js';
-	import { appPath } from '$lib/shared/paths.js';
+	import { appPath, apiPath } from '$lib/shared/paths.js';
 
 	let { children } = $props();
 
@@ -13,7 +13,8 @@
 			if (session.loaded && !session.user) {
 				const pathname = page.url.pathname;
 				// Never stash API OAuth callback URLs as ?next= — they must hit FastAPI directly.
-				if (pathname.startsWith('/api/')) {
+				const apiPrefix = apiPath('');
+				if (pathname.startsWith(`${apiPrefix}/`) || pathname.startsWith('/api/')) {
 					window.location.replace(pathname + page.url.search);
 					return;
 				}

@@ -23,6 +23,7 @@
 		updateHypothesis,
 		updateObservationZone
 	} from '$lib/modules/diagnose/api';
+	import { apiPath } from '$lib/shared/paths.js';
 	import { MAX_FIELD_NOTE_MEDIA_BYTES, OBSERVATION_ZONE_COLOR, FIELD_NOTE_COLOR, HYPOTHESIS_COLOR, ZONE_COLORS } from '$lib/modules/diagnose/map-constants';
 	import FieldNoteIcon from '$lib/modules/diagnose/components/icons/FieldNoteIcon.svelte';
 	import HypothesisIcon from '$lib/modules/diagnose/components/icons/HypothesisIcon.svelte';
@@ -330,7 +331,7 @@
 	function cogTileUrl(layerId) {
 		const params = new URLSearchParams();
 		params.set('project_id', project.id);
-		return `/api/diagnose/layers/cog/${layerId}/tiles/WebMercatorQuad/{z}/{x}/{y}?${params.toString()}`;
+		return apiPath(`/diagnose/layers/cog/${layerId}/tiles/WebMercatorQuad/{z}/{x}/{y}?${params.toString()}`);
 	}
 
 	function removeCogLayers() {

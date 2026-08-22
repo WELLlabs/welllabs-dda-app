@@ -1,8 +1,9 @@
 /** API client for MEL plan design in the Assess module. */
 
 import { createApiClient } from '$lib/shared/api-client.js';
+import { apiPath } from '$lib/shared/paths.js';
 
-const request = createApiClient('/api/assess/mel');
+const request = createApiClient(apiPath('/assess/mel'));
 
 /** List MEL projects the current user owns or is a member of. */
 export async function fetchMelProjects() {
@@ -180,7 +181,7 @@ export async function createMelOdkForms({
 
 /** Download the MEL plan as a PDF. */
 export async function exportMelPlanPdf({ interventionSlug, outcomeIds, projectId, planId }) {
-	const res = await fetch('/api/assess/mel/plans/export-pdf', {
+	const res = await fetch(apiPath('/assess/mel/plans/export-pdf'), {
 		method: 'POST',
 		credentials: 'include',
 		headers: { 'Content-Type': 'application/json' },

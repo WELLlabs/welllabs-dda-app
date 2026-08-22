@@ -1,6 +1,7 @@
 import { createApiClient, streamSSE } from '$lib/shared/api-client.js';
+import { apiPath } from '$lib/shared/paths.js';
 
-const API = '/api/diagnose';
+const API = apiPath('/diagnose');
 const request = createApiClient(API);
 
 function bboxQuery(bounds) {

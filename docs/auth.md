@@ -10,7 +10,7 @@ Use the Vite app only:
 - Primary: [http://localhost:5173](http://localhost:5173)
 - Fallback if 5173 is busy: [http://localhost:5174](http://localhost:5174)
 
-Do **not** open the API on `:8080` in the browser. `/api/*` is proxied by SvelteKit to FastAPI.
+Do **not** open the API on `:8080` in the browser. `/wst/api/*` is proxied by SvelteKit to FastAPI.
 CORS allows both Vite ports (and `127.0.0.1` equivalents).
 
 ## Sign-up / sign-in
@@ -47,9 +47,9 @@ Set these in `backend/.env` (see `.env.example`):
 
 Add **Authorized redirect URIs** (exact match):
 
-- `http://localhost:5173/api/accounts/auth/google/callback`
-- `http://localhost:5174/api/accounts/auth/google/callback`
-- `https://ai.welllabs.org/api/accounts/auth/google/callback` (production / CodeDeploy)
+- `http://localhost:5173/wst/api/accounts/auth/google/callback`
+- `http://localhost:5174/wst/api/accounts/auth/google/callback`
+- `https://ai.welllabs.org/wst/api/accounts/auth/google/callback` (production / CodeDeploy)
 
 Also add **Authorized JavaScript origins**:
 

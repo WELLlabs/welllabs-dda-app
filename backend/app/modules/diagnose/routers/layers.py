@@ -499,7 +499,7 @@ def _build_layer(
             category=category,
         )
 
-    tiles_url = f"/api/layers/cog/{layer_id}/tiles/WebMercatorQuad/{{z}}/{{x}}/{{y}}{_tile_query(bbox, project_id)}"
+    tiles_url = f"{settings.api_public_prefix}/diagnose/layers/cog/{layer_id}/tiles/WebMercatorQuad/{{z}}/{{x}}/{{y}}{_tile_query(bbox, project_id)}"
     return CogLayer(
         id=layer_id,
         name=name,
@@ -963,7 +963,7 @@ async def list_vector_layers(
             continue
         entry = _build_vector_layer(cfg)
         q = f"?project_id={quote(project_id, safe='')}" if project_id else ""
-        proxy_url = f"/api/diagnose/layers/vector/{cfg.id}/data{q}"
+        proxy_url = f"{settings.api_public_prefix}/diagnose/layers/vector/{cfg.id}/data{q}"
         layers.append(entry.model_copy(update={"url": proxy_url}))
     return VectorLayersResponse(vector_layers=layers)
 

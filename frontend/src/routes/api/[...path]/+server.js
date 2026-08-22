@@ -1,9 +1,8 @@
-/** Dev proxy: forward /api/* to the FastAPI backend.
+/** Dev proxy: forward /wst/api/* to the FastAPI backend.
  *
- * In development, all browser `/api/*` requests hit this SvelteKit catch-all
+ * In development, browser requests to /wst/api/* hit this SvelteKit catch-all
  * (Vite's `server.proxy` is intentionally unused for `/api` — see vite.config.js).
- * In production, put a reverse proxy (nginx, Caddy, or ALB) in front and route
- * `/api/*` directly to FastAPI so uploads never pass through Node.
+ * In production, nginx routes /wst/api/* directly to FastAPI so uploads never pass through Node.
  */
 
 import { env } from '$env/dynamic/private';

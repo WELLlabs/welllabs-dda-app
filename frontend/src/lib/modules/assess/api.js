@@ -1,8 +1,9 @@
 /** API client for the Assess module (ODK Central-backed monitoring data). */
 
 import { createApiClient } from '$lib/shared/api-client.js';
+import { apiPath } from '$lib/shared/paths.js';
 
-const API = '/api/assess';
+const API = apiPath('/assess');
 const request = createApiClient(API);
 
 /** Fetch a project's Metabase report (access-checked; `{ configured: false }` if unmapped). */
