@@ -400,6 +400,14 @@ cp "$RELEASE_DIR/devops/systemd/welllabs-backend.service"  /etc/systemd/system/
 cp "$RELEASE_DIR/devops/systemd/welllabs-frontend.service" /etc/systemd/system/
 systemctl daemon-reload
 
+# Pre-pull PyQGIS image so first QField package does not block on a multi-GB download.
+if command -v docker >/dev/null 2>&1; then
+  echo "Pre-pulling QGIS Docker image for QField packaging..."
+  docker pull qgis/qgis:release-3_34 || echo "WARN: QGIS image pull failed — retry on next deploy or first package"
+else
+  echo "WARN: docker not available — QField PyQGIS packaging will fail until Docker is installed"
+fi
+
 # ──────────────────────────────────────────────────────────────────────────────
 # [7/7] Atomic symlink swap to new release
 # ──────────────────────────────────────────────────────────────────────────────

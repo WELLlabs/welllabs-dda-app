@@ -5,8 +5,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import subprocess
 from pathlib import Path
+
+from app.modules.diagnose.services.package_progress import PackageProgress
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +61,17 @@ def _build_script_mount() -> tuple[Path, str]:
     raise RuntimeError("Missing QGIS build script (expected /app/qgis/build_qfield_project.py)")
 
 
+def _require_docker(progress: PackageProgress | None = None) -> None:
+    if shutil.which("docker") is None:
+        msg = (
+            "Docker is not installed on this server. QField packaging needs Docker to run "
+            "the PyQGIS project builder (qgis/qgis image)."
+        )
+        if progress:
+            progress.log(msg)
+        raise RuntimeError(msg)
+
+
 def build_qfield_project_with_qgis(
     package_dir: Path,
     project_name: str,
@@ -67,9 +81,11 @@ def build_qfield_project_with_qgis(
     secondary_vectors: list[dict] | None = None,
     zone_colors: list[str],
     extent: list[float] | None,
+    progress: PackageProgress | None = None,
     # Back-compat for older callers
     raster_filename: str | None = None,
 ) -> Path:
+    _require_docker(progress)
     package_dir = package_dir.resolve()
     host_package_dir = _host_package_dir(package_dir)
     build_script_host, build_script_container = _build_script_mount()
@@ -107,9 +123,29 @@ def build_qfield_project_with_qgis(
         cmd.extend(["--extent", json.dumps(extent)])
 
     logger.info("Running QGIS project builder for %s", host_package_dir)
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    if progress:
+        progress.log(f"Running PyQGIS in Docker ({QGIS_IMAGE})…")
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=900,
+        )
+    except subprocess.TimeoutExpired as exc:
+        detail = (exc.stderr or exc.stdout or "").strip()
+        raise RuntimeError(
+            f"QGIS project build timed out after 15 minutes{': ' + detail if detail else ''}"
+        ) from exc
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "Docker executable not found. Install Docker on the server for QField packaging."
+        ) from exc
     if result.returncode != 0:
         detail = (result.stderr or result.stdout).strip()
+        if progress and detail:
+            for line in detail.strip().splitlines()[-8:]:
+                progress.log(line)
         raise RuntimeError(f"QGIS project build failed: {detail}")
 
     output = package_dir / f"{project_name}.qgs"

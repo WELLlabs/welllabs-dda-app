@@ -510,9 +510,9 @@ def _clip_to_geotiff(
         "gdalwarp",
         "-cutline",
         str(cutline),
-        "-cutline_srs",
-        "EPSG:4326",
         "-crop_to_cutline",
+        "-t_srs",
+        "EPSG:4326",
         "-ts",
         str(ts_x),
         str(ts_y),
@@ -1036,6 +1036,7 @@ def package_and_upload(
         secondary_vectors=secondary_vectors,
         zone_colors=zone_colors,
         extent=extent,
+        progress=progress,
     )
     qgs_path = package_dir / f"{project_name}.qgs"
 

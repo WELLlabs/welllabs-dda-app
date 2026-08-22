@@ -63,7 +63,12 @@ apt_retry apt-get install -y \
   curl \
   openssl \
   postgresql-client \
-  nginx
+  nginx \
+  docker.io
+
+# Docker — PyQGIS QField project builder (qgis/qgis container)
+systemctl enable docker || true
+systemctl start docker || true
 
 # Install / upgrade Node.js 22+ (SvelteKit / jsdom transitive deps require >=22.13)
 NODE_MAJOR=0
