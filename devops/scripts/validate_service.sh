@@ -6,7 +6,7 @@ echo "=== ValidateService: Running health check ==="
 # Retry loop — up to 30s (10 × 3s)
 # Hit FastAPI /health through nginx
 # ──────────────────────────────────────
-MAX_RETRIES=10
+MAX_RETRIES=20
 RETRY_INTERVAL=3
 HTTP_CODE=000
 
