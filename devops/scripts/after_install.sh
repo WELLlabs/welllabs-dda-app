@@ -297,6 +297,23 @@ npm run build
 # ──────────────────────────────────────────────────────────────────────────────
 echo "Installing Nginx & systemd configs..."
 
+# ── TLS certificate for port 443 ─────────────────────────────────────────────
+# Cloudflare connects to origin on port 443 (SSL mode = Full / Full Strict).
+# We need nginx to listen on 443; generate a long-lived self-signed cert if one
+# doesn't already exist.  Cloudflare "Full" mode accepts self-signed certs.
+mkdir -p /etc/ssl/welllabs
+if [ ! -f /etc/ssl/welllabs/cert.pem ] || [ ! -f /etc/ssl/welllabs/key.pem ]; then
+  echo "Generating self-signed TLS certificate for origin port 443..."
+  openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+    -keyout /etc/ssl/welllabs/key.pem \
+    -out    /etc/ssl/welllabs/cert.pem \
+    -subj   "/CN=ai.welllabs.org" 2>/dev/null
+  chmod 600 /etc/ssl/welllabs/key.pem
+  echo "  ✓ Certificate written to /etc/ssl/welllabs/"
+else
+  echo "  ✓ Existing TLS certificate found — skipping generation."
+fi
+
 # ── Comprehensive nginx clean-slate ──────────────────────────────────────────
 # Old deployments may have left server blocks in many places:
 #   • /etc/nginx/conf.d/*.conf
@@ -338,7 +355,8 @@ http {
     include /etc/nginx/mime.types;
     default_type application/octet-stream;
 
-    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
     ssl_prefer_server_ciphers on;
 
     access_log /var/log/nginx/access.log;
