@@ -297,13 +297,61 @@ npm run build
 # ──────────────────────────────────────────────────────────────────────────────
 echo "Installing Nginx & systemd configs..."
 
-# Remove ALL old conf.d / sites-enabled configs before installing ours.
-# A leftover file from a previous deployment could shadow our location blocks
-# (e.g. an old server block with "server_name _;" becomes the nginx default and
-# its /health or /api/ rules take precedence over ours).
+# ── Comprehensive nginx clean-slate ──────────────────────────────────────────
+# Old deployments may have left server blocks in many places:
+#   • /etc/nginx/conf.d/*.conf
+#   • /etc/nginx/sites-enabled/*  (symlinks)
+#   • /etc/nginx/nginx.conf        (inline http{} server{} stanzas)
+#   • /etc/nginx/sites-available/* (conf files referenced by broken symlinks)
+#
+# We overwrite nginx.conf with a minimal skeleton that ONLY pulls in our single
+# welllabs.conf, then nuke every other server-block location.  This prevents
+# any stale "server_name ai.welllabs.org;" block from shadowing our rules.
+
 cp /etc/nginx/conf.d/welllabs.conf /etc/nginx/conf.d/welllabs.conf.bak 2>/dev/null || true
+
+# Remove conf.d fragments and sites-enabled symlinks
 rm -f /etc/nginx/conf.d/*.conf
 rm -f /etc/nginx/sites-enabled/*
+
+# Rewrite nginx.conf to a clean skeleton — eliminates any inline server{} blocks
+# that were baked in by the old deployment and survive the conf.d cleanup above.
+cat > /etc/nginx/nginx.conf << 'NGINX_MAIN'
+user www-data;
+worker_processes auto;
+pid /run/nginx.pid;
+include /etc/nginx/modules-enabled/*.conf;
+
+events {
+    worker_connections 1024;
+    multi_accept on;
+}
+
+http {
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    types_hash_max_size 2048;
+    server_tokens off;
+
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers on;
+
+    access_log /var/log/nginx/access.log;
+    error_log  /var/log/nginx/error.log;
+
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript
+               text/xml application/xml application/xml+rss text/javascript;
+
+    # Single application config — the only server block we run.
+    include /etc/nginx/conf.d/welllabs.conf;
+}
+NGINX_MAIN
 
 cp "$RELEASE_DIR/devops/nginx/welllabs.conf" /etc/nginx/conf.d/welllabs.conf
 
@@ -315,6 +363,7 @@ if ! nginx -t; then
   exit 1
 fi
 rm -f /etc/nginx/conf.d/welllabs.conf.bak
+echo "Nginx config installed cleanly (nginx.conf rewritten, no legacy server blocks)."
 
 cp "$RELEASE_DIR/devops/systemd/welllabs-backend.service"  /etc/systemd/system/
 cp "$RELEASE_DIR/devops/systemd/welllabs-frontend.service" /etc/systemd/system/
