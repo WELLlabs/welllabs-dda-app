@@ -9,12 +9,12 @@ describe('DashboardHeader', () => {
 		expect(screen.getByRole('link', { name: /water security tool/i })).toBeInTheDocument();
 	});
 
-	it('links the brand to /home', () => {
+	it('links the brand to /wst/home', () => {
 		render(DashboardHeader);
 
 		expect(screen.getByRole('link', { name: /water security tool/i })).toHaveAttribute(
 			'href',
-			'/home'
+			'/wst/home'
 		);
 	});
 

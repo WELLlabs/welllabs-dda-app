@@ -19,7 +19,11 @@ import { onMount } from 'svelte';
 	// If OAuth returned here with the callback URL stuffed into ?next=, resume it.
 	onMount(() => {
 		if (page.url.searchParams.get('oauth_error') === '1') {
-			error = 'Google sign-in failed. Please try again (use a fresh sign-in, not a bookmarked callback URL).';
+			const detail = page.url.searchParams.get('oauth_detail') || '';
+			error =
+				'Google sign-in failed. Open login in a new incognito window and try again.' +
+				(detail ? ` (${detail})` : '') +
+				' Ensure Google Cloud Console has redirect URI: https://ai.welllabs.org/wst/backend/accounts/auth/google/callback';
 			return;
 		}
 		const next = page.url.searchParams.get('next');

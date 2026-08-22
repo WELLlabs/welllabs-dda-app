@@ -1,10 +1,12 @@
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+import html
+import json
+
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
-from httpx_oauth.integrations.fastapi import OAuth2AuthorizeCallbackError
 
 from app.modules.accounts.routers import auth, orgs, qfield_account, users
 from app.modules.assess.routers import access as assess_access
@@ -44,28 +46,36 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="DDA Product API", version="0.3.0", lifespan=lifespan)
 
 
-@app.exception_handler(OAuth2AuthorizeCallbackError)
-async def oauth_callback_error_handler(request: Request, exc: OAuth2AuthorizeCallbackError):
-    """Send OAuth failures to the login page instead of raw JSON on the callback URL."""
-    if "/google/callback" not in request.url.path:
-        from fastapi.responses import JSONResponse
-
-        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
-    login = f"{settings.public_app_base}/login?oauth_error=1"
-    safe = login.replace("\\", "\\\\").replace('"', '\\"')
+def _oauth_callback_login_redirect(detail: str = "") -> HTMLResponse:
+    """Browser-friendly redirect to login after OAuth callback errors."""
+    params = "oauth_error=1"
+    if detail:
+        params += f"&oauth_detail={detail[:120]}"
+    login = f"{settings.public_app_base}/login?{params}"
+    safe_meta = html.escape(login, quote=True)
+    safe_js = json.dumps(login)
     return HTMLResponse(
         content=f"""<!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="utf-8">
-<meta http-equiv="refresh" content="0;url={login}">
+<meta http-equiv="refresh" content="0;url={safe_meta}">
 <title>Sign-in failed</title>
 </head><body>
-<p>Google sign-in failed. Redirecting…</p>
-<script>window.location.replace("{safe}");</script>
+<p>Google sign-in could not be completed. Redirecting to login…</p>
+<script>window.location.replace({safe_js});</script>
 </body></html>""",
         status_code=200,
         headers={"Cache-Control": "no-store", "CDN-Cache-Control": "no-store"},
     )
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """Never leave users on the raw callback URL with JSON errors."""
+    if "google/callback" not in request.url.path:
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+    return _oauth_callback_login_redirect(detail)
 
 # Honor X-Forwarded-* from the Vite/SvelteKit /api proxy (localhost:5173/5174)
 app.add_middleware(ForwardedHostMiddleware)

@@ -6,7 +6,7 @@ describe('AuthHeader', () => {
 	it('renders brand link to home for login variant', () => {
 		render(AuthHeader, { props: { variant: 'login' } });
 
-		expect(screen.getByRole('link', { name: /water security tool/i })).toHaveAttribute('href', '/wst/');
+		expect(screen.getByRole('link', { name: /water security tool/i })).toHaveAttribute('href', '/wst');
 		expect(screen.getByRole('link', { name: /create account/i })).toHaveAttribute('href', '/wst/register');
 		expect(screen.queryByRole('link', { name: /sign in/i })).not.toBeInTheDocument();
 	});

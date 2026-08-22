@@ -45,6 +45,13 @@ def test_cors_allows_configured_frontend_origin(client):
     assert response.headers.get("access-control-allow-credentials") == "true"
 
 
+def test_oauth_callback_errors_return_html_not_json(client):
+    response = client.get("/api/accounts/auth/google/callback?error=test")
+    assert response.status_code == 200
+    assert "text/html" in response.headers.get("content-type", "")
+    assert "oauth_error=1" in response.text
+
+
 def test_lifespan_initializes_and_closes_pool():
     with (
         patch("app.main.init_pool") as init_pool,
