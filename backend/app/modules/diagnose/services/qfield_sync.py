@@ -3,6 +3,7 @@
 import json
 import logging
 import math
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -10,7 +11,7 @@ import time
 import uuid
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 from qfieldcloud_sdk import sdk
 
@@ -92,13 +93,23 @@ def _layer_name_from_key(key: str) -> str:
     return basename.rsplit(".", 1)[0]
 
 
-def _ogr_pg_dsn() -> str:
+def _ogr_pg_connection() -> tuple[str, dict[str, str]]:
+    """Build ogr2ogr PostgreSQL DSN + env for passwords with special characters.
+
+    GDAL's PG: driver mangles URL-encoded or punctuation-heavy passwords when they
+    are embedded in the connection string. libpq reads PGPASSWORD instead.
+    """
     parsed = urlparse(settings.database_url)
-    return (
+    env = os.environ.copy()
+    password = unquote(parsed.password or "")
+    if password:
+        env["PGPASSWORD"] = password
+    dsn = (
         f"PG:dbname={parsed.path.lstrip('/')} "
-        f"host={parsed.hostname} port={parsed.port or 5432} "
-        f"user={parsed.username} password={parsed.password}"
+        f"host={parsed.hostname or 'localhost'} port={parsed.port or 5432} "
+        f"user={parsed.username or ''}"
     )
+    return dsn, env
 
 
 def _fetch_zone_colors(project_id: str) -> list[str]:
@@ -127,7 +138,7 @@ def _export_vectors_gpkg(
         if path.exists():
             path.unlink()
 
-    dsn = _ogr_pg_dsn()
+    dsn, pg_env = _ogr_pg_connection()
     _run_gdal(
         [
             "ogr2ogr",
@@ -148,6 +159,7 @@ def _export_vectors_gpkg(
             "EPSG:4326",
         ],
         progress,
+        env=pg_env,
     )
     _run_gdal(
         [
@@ -170,6 +182,7 @@ def _export_vectors_gpkg(
             "EPSG:4326",
         ],
         progress,
+        env=pg_env,
     )
     _run_gdal(
         [
@@ -189,6 +202,7 @@ def _export_vectors_gpkg(
             "NONE",
         ],
         progress,
+        env=pg_env,
     )
     if not zones_gpkg.is_file() or not notes_gpkg.is_file() or not hypotheses_gpkg.is_file():
         raise RuntimeError("GeoPackage export failed")
@@ -237,12 +251,17 @@ def _apply_gpkg_insert_defaults(gpkg_path: Path, table: str, project_id: str) ->
         conn.close()
 
 
-def _run_gdal(cmd: list[str], progress: PackageProgress | None = None) -> None:
+def _run_gdal(
+    cmd: list[str],
+    progress: PackageProgress | None = None,
+    *,
+    env: dict[str, str] | None = None,
+) -> None:
     label = Path(cmd[-1]).name if cmd else "gdal"
     logger.info("GDAL: %s", " ".join(cmd))
     if progress:
         progress.log(f"GDAL: {cmd[0]} → {label}")
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, env=env)
     if result.returncode != 0:
         detail = result.stderr or result.stdout
         if progress and detail:
