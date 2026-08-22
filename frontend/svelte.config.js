@@ -10,7 +10,10 @@ const config = {
 	kit: {
 		adapter: adapter(),
 		paths: {
-			base: '/wst'
+			base: '/wst',
+			// Emit absolute /wst/... URLs in SSR HTML (not ./relative) so assets and
+			// links work when the page URL omits the trailing slash.
+			relative: false
 		}
 	}
 };
