@@ -6,16 +6,12 @@ echo "=== BeforeInstall: Preparing for deployment ==="
 mkdir -p /opt/welllabs/{releases,shared,logs,shared/packages}
 
 # ── Free ports before deployment ──────────────────────────────────────────────
-# Kill anything occupying the ports we need.
-# Port 80/443  — nginx (reverse proxy).  An old nginx/caddy/node listener here
-#                prevents our new nginx config from binding.  We kill the
-#                process but NOT the systemd service — nginx will be re-enabled
-#                and started with the correct config in AfterInstall/ApplicationStart.
-# Port 8080    — FastAPI (uvicorn).  Old service must vacate so uvicorn binds.
-# Port 3000    — SvelteKit (node).   Same reason.
-echo "Freeing ports 80, 443, 8080 and 3000..."
-fuser -k 80/tcp   2>/dev/null || true
-fuser -k 443/tcp  2>/dev/null || true
+# Kill anything occupying the app service ports.
+# Port 8080 — FastAPI (uvicorn).  Old service must vacate so uvicorn binds.
+# Port 3000 — SvelteKit (node).   Same reason.
+# Do NOT kill 80/443 here — nginx must keep serving traffic during the deploy.
+# Ports 80/443 are cleared in application_start.sh immediately before nginx starts.
+echo "Freeing ports 8080 and 3000..."
 fuser -k 8080/tcp 2>/dev/null || true
 fuser -k 3000/tcp 2>/dev/null || true
 # Brief pause to let the OS release the sockets cleanly before we start new services
