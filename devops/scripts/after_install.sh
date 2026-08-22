@@ -307,7 +307,11 @@ if [ ! -f /etc/ssl/welllabs/cert.pem ] || [ ! -f /etc/ssl/welllabs/key.pem ]; th
   openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
     -keyout /etc/ssl/welllabs/key.pem \
     -out    /etc/ssl/welllabs/cert.pem \
-    -subj   "/CN=ai.welllabs.org" 2>/dev/null
+    -subj   "/CN=ai.welllabs.org"
+  if [ ! -f /etc/ssl/welllabs/cert.pem ]; then
+    echo "ERROR: openssl failed to generate certificate — aborting"
+    exit 1
+  fi
   chmod 600 /etc/ssl/welllabs/key.pem
   echo "  ✓ Certificate written to /etc/ssl/welllabs/"
 else

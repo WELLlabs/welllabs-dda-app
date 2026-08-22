@@ -65,6 +65,7 @@ apt_retry apt-get install -y \
   libgdal-dev \
   gdal-bin \
   curl \
+  openssl \
   postgresql-client \
   nginx
 
