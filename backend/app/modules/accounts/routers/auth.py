@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import RedirectResponse
 from fastapi_users.router.oauth import (
     CSRF_TOKEN_COOKIE_NAME,
@@ -61,7 +61,7 @@ if google_oauth_client is not None:
     # Browser-friendly OAuth entry (sets CSRF cookie + redirects to Google).
     # Prefer over /authorize JSON for sign-in buttons — avoids fetch/cookie edge cases.
     @router.get("/google/start")
-    async def google_oauth_browser_start(response: Response) -> RedirectResponse:
+    async def google_oauth_browser_start() -> RedirectResponse:
         redirect_uri = (
             f"{settings.public_app_origin}/api/accounts/auth/google/callback"
             if settings.public_app_origin.startswith("https://")
@@ -78,7 +78,8 @@ if google_oauth_client is not None:
             state,
             None,
         )
-        response.set_cookie(
+        redirect = RedirectResponse(authorization_url, status_code=302)
+        redirect.set_cookie(
             CSRF_TOKEN_COOKIE_NAME,
             csrf_token,
             max_age=3600,
@@ -87,7 +88,7 @@ if google_oauth_client is not None:
             httponly=True,
             samesite="lax",
         )
-        return RedirectResponse(authorization_url, status_code=302)
+        return redirect
 
     # Production: pin callback to FRONTEND_ORIGIN so Cloudflare/nginx Host/proto
     # quirks cannot produce redirect_uri_mismatch (saw http://dda.welllabs.org/...).
