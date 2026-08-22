@@ -3,7 +3,6 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { session } from '$lib/shared/session.svelte.js';
-	import { appPath } from '$lib/shared/paths.js';
 	import { findBySlug, itemPath } from '$lib/shared/slug.js';
 	import ModuleHeader from '$lib/shared/components/ModuleHeader.svelte';
 	import { assessCrumbs } from '$lib/modules/assess/breadcrumbs.js';
