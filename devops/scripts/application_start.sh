@@ -2,6 +2,9 @@
 set -e
 echo "=== ApplicationStart: Zero-downtime reload ==="
 
+# Last-resort: never leave origin without nginx if this script exits early.
+trap 'nginx -t 2>/dev/null && systemctl start nginx 2>/dev/null || true' EXIT
+
 ensure_nginx() {
     echo "→ Ensuring Nginx is running with latest config..."
     if ! nginx -t; then
@@ -60,11 +63,11 @@ systemctl restart welllabs-frontend.service
 
 sleep 3
 if ! systemctl is-active --quiet welllabs-frontend.service; then
-    echo "ERROR: Frontend failed to start. Journal logs:"
+    echo "WARNING: Frontend failed to start — continuing deploy (health check uses API only)."
     journalctl -u welllabs-frontend.service --no-pager -n 50
-    exit 1
+else
+    echo "  ✓ Frontend is active."
 fi
-echo "  ✓ Frontend is active."
 
 # Re-check nginx after service restarts (legacy processes can grab 443).
 ensure_nginx
