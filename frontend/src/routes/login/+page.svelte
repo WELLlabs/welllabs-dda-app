@@ -23,7 +23,7 @@ import { onMount } from 'svelte';
 			error =
 				'Google sign-in failed. Open login in a new incognito window and try again.' +
 				(detail ? ` (${detail})` : '') +
-				' Ensure Google Cloud Console has redirect URI: https://ai.welllabs.org/wst/backend/accounts/auth/google/callback';
+				' Ensure Google Cloud Console has redirect URI: https://beta.welllabs.org/wst/backend/accounts/auth/google/callback';
 			return;
 		}
 		const next = page.url.searchParams.get('next');

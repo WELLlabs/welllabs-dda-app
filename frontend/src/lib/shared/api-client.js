@@ -5,7 +5,7 @@ async function parseErrorMessage(res) {
 	if (text.includes('error code: 1101') || text.includes('Worker threw exception')) {
 		return (
 			'Cloudflare Worker error (1101): POST requests to the API are blocked. ' +
-			'An admin must disable or fix the Worker on ai.welllabs.org (see devops/cloudflare/README.md).'
+			'An admin must disable or fix the Worker on beta.welllabs.org (see devops/cloudflare/README.md).'
 		);
 	}
 	let message = text || res.statusText;

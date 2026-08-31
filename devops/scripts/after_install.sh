@@ -145,7 +145,7 @@ if frontend_origin_host:
     cfg["FRONTEND_ORIGIN"] = frontend_origin_host
 
 defaults = {
-    "ORIGIN": frontend_origin_host or "https://ai.welllabs.org",
+    "ORIGIN": frontend_origin_host or "https://beta.welllabs.org",
     "FRONTEND_BASE_PATH": "/wst",
     "API_URL": "http://127.0.0.1:8080",
     "API_PUBLIC_URL": "http://127.0.0.1:8080",
