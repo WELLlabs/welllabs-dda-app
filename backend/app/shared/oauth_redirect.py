@@ -9,11 +9,15 @@ from app.shared.config import settings
 
 
 def _request_host(request: Request) -> str | None:
-    """Public host from proxy headers or Host (beta vs prod on shared nginx)."""
-    forwarded = request.headers.get("x-forwarded-host")
-    host = request.headers.get("host")
-    value = (forwarded or host or "").split(",")[0].strip()
-    return value or None
+    """Public host from nginx / proxy headers or Host (beta vs prod on shared nginx)."""
+    for header in ("x-wst-public-host", "x-forwarded-host", "host"):
+        raw = request.headers.get(header)
+        if not raw:
+            continue
+        host = raw.split(",")[0].strip()
+        if host and not host.startswith("127.0.0.1") and host != "localhost":
+            return host
+    return None
 
 
 def _request_proto(request: Request) -> str:

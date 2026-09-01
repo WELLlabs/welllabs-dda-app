@@ -101,6 +101,7 @@ if google_oauth_client is not None:
         )
         response.headers["Cache-Control"] = "no-store"
         response.headers["CDN-Cache-Control"] = "no-store"
+        response.headers["X-OAuth-Redirect-Uri"] = redirect_uri
         response.set_cookie(
             CSRF_TOKEN_COOKIE_NAME,
             csrf_token,
