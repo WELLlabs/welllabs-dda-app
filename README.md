@@ -39,6 +39,7 @@ flowchart LR
 
 ```
 geo-field-pipeline/
+├── appspec.yml                     # CodeDeploy hooks → devops/scripts/
 ├── backend/
 │   ├── app/
 │   │   ├── main.py                 # Router registration, CORS
@@ -56,8 +57,9 @@ geo-field-pipeline/
 │   ├── tests/                      # Unit / API smoke tests
 │   ├── docker-compose.yml          # PostGIS, Titiler, API
 │   └── Dockerfile
+├── devops/                         # EC2 CodeDeploy, nginx, systemd, Cloudflare notes
 ├── docs/                           # Module + setup + API docs
-└── frontend/                       # SvelteKit + MapLibre + Plotly
+└── frontend/                       # SvelteKit + MapLibre + Plotly (kit.paths.base = /wst)
     └── src/
         ├── routes/(protected)/
         │   ├── diagnose/           # Project picker + map + members
@@ -101,12 +103,16 @@ This starts:
 cd frontend && npm run dev
 ```
 
-Open [http://localhost:5173](http://localhost:5173) (or `:5174` if 5173 is busy). Use the Vite
-URL only — do not browse the API on `:8080`.
+Open [http://localhost:5173/wst/](http://localhost:5173/wst/) (or `:5174` if 5173 is busy).
+Use the Vite URL only — do not browse the API on `:8080`.
 
-**API proxying:** In development, browser requests to `/api/*` are forwarded to FastAPI
-(`localhost:8080`) by the SvelteKit catch-all at `frontend/src/routes/api/[...path]/+server.js`
-(preserves `Set-Cookie` for login / Google OAuth). Vite's `server.proxy` is only used for `/titiler`.
+**API proxying:** Browser calls go to `/wst/backend/*` via `apiPath()` in
+`frontend/src/lib/shared/paths.js`. In development, SvelteKit proxies those to FastAPI
+`/api/*` at `frontend/src/routes/backend/[...path]/+server.js` (preserves `Set-Cookie` for
+login / Google OAuth). Vite's `server.proxy` is only used for `/titiler`.
+
+Production uses the same `/wst/backend/*` paths through nginx (not `/wst/api/*` — a Cloudflare
+Worker can crash POST there). See [devops/README.md](devops/README.md).
 
 ### 4. Run tests (optional)
 
@@ -135,7 +141,7 @@ cd frontend && npm run test:run
 - **Observation zones** — draw polygons with label, observations, questions, color
 - **Hypotheses** — link zones, collect field-note evidence, validate / invalidate
 - **Field notes** — geotagged points with optional photo/audio and hypothesis link
-- **Package to QField** — watershed-clipped rasters (MBTiles) + project vectors to QField Cloud
+- **Package to QField** — watershed-clipped GeoTIFFs + vectors + PyQGIS `.qgs` uploaded to QField Cloud
 
 ### QField mobile
 
@@ -143,6 +149,11 @@ cd frontend && npm run test:run
 2. Download the project (named `{QFIELD_PROJECT_NAME}-{your-project-name}`)
 3. Edit observation zones and field notes offline
 4. Sync when back online — deltas apply to PostGIS
+
+**Packaging requirements:** GDAL (`ogr2ogr` / `gdalwarp`) for vectors and COG clips, and
+**Docker** with image `qgis/qgis:release-3_34` for the PyQGIS project builder. Local Compose
+mounts the Docker socket; production installs `docker.io` and pre-pulls the image on deploy
+(see [devops/README.md](devops/README.md#qfield-packaging-on-production)).
 
 ## Usage (Assess)
 
@@ -168,7 +179,23 @@ See [docs/database.md](docs/database.md) for the full schema.
 For offline sync, QField Cloud must reach the host in `POSTGIS_PUBLIC_HOST` (not `localhost`).
 For local development, use a tunnel (ngrok, Cloudflare Tunnel) or a cloud VM.
 
+## Production
+
+Host: [https://ai.welllabs.org/wst/](https://ai.welllabs.org/wst/)
+
+| Path | Role |
+|------|------|
+| `/wst/` | SvelteKit UI |
+| `/wst/backend/...` | FastAPI (browser API; maps to internal `/api/...`) |
+| `/health` | FastAPI health for CodeDeploy |
+
+Push to branch `dev` runs CodePipeline `well-labs-dda-product-dev-pipeline`. Full deploy layout,
+hooks, QField host deps, and Cloudflare notes: **[devops/README.md](devops/README.md)**.
+
 ## API (summary)
+
+Browser paths are under `/wst/backend/...` in production and local Vite. Internal FastAPI
+routes remain `/api/...`.
 
 ### Diagnose (`/api/diagnose/...`)
 
@@ -203,6 +230,8 @@ Full reference: [docs/api.md](docs/api.md).
 
 | Doc | Contents |
 |-----|----------|
+| [devops/README.md](devops/README.md) | EC2 CodeDeploy, nginx `/wst` + `/wst/backend`, QField host deps, Cloudflare |
+| [devops/cloudflare/README.md](devops/cloudflare/README.md) | Worker 1101 on `/wst/api` POST |
 | [docs/setup.md](docs/setup.md) | Environment, Docker, S3 layout, tests |
 | [docs/auth.md](docs/auth.md) | FastAPI Users, Brevo, Google OAuth, Vite ports |
 | [docs/diagnosis.md](docs/diagnosis.md) | Diagnose capabilities, layers, 3D, QField, access |
@@ -216,4 +245,4 @@ Full reference: [docs/api.md](docs/api.md).
 
 - Complete Design module data models and UI
 - Finish Assess Metabase embed (config keys exist; router still to land)
-- Production deploy (HTTPS, reverse proxy for `/api`, public PostGIS for QField)
+- Public PostGIS (or tunnel) so QField Cloud can reach the database for delta sync
