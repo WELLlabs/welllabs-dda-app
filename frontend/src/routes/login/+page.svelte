@@ -22,9 +22,9 @@ import { onMount } from 'svelte';
 			const detail = page.url.searchParams.get('oauth_detail') || '';
 			const localCallback = `${window.location.origin}${appPath('/backend/accounts/auth/google/callback')}`;
 			error =
-				'Google sign-in failed. Try again in a private window.' +
+				'Google sign-in failed. Open login in a new incognito window and try again.' +
 				(detail ? ` (${detail})` : '') +
-				` Add this redirect URI in Google Cloud Console: ${localCallback}`;
+				` Ensure Google Cloud Console has redirect URI: ${localCallback}`;
 			return;
 		}
 		const next = page.url.searchParams.get('next');

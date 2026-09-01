@@ -21,6 +21,12 @@ def test_oauth_callback_redirect_uri_uses_forwarded_host():
     assert uri == "http://127.0.0.1:5174/wst/backend/accounts/auth/google/callback"
 
 
+def test_oauth_callback_redirect_uri_uses_host_when_forwarded_missing():
+    request = _FakeRequest({"host": "beta.welllabs.org", "x-forwarded-proto": "https"})
+    uri = oauth_callback_redirect_uri(request)
+    assert uri == "https://beta.welllabs.org/wst/backend/accounts/auth/google/callback"
+
+
 def test_oauth_callback_redirect_uri_falls_back_to_settings():
     uri = oauth_callback_redirect_uri(None)
     assert uri.endswith("/wst/backend/accounts/auth/google/callback")

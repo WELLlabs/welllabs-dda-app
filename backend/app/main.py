@@ -23,6 +23,7 @@ from app.modules.diagnose.routers import (
 )
 from app.shared.config import settings
 from app.shared.database import close_pool, init_pool
+from app.shared.oauth_redirect import request_public_app_base
 from app.shared.forwarded_host import ForwardedHostMiddleware
 from app.shared.users.db import engine as users_async_engine
 
@@ -52,12 +53,12 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="DDA Product API", version="0.3.0", lifespan=lifespan)
 
 
-def _oauth_callback_login_redirect(detail: str = "") -> HTMLResponse:
+def _oauth_callback_login_redirect(request: Request, detail: str = "") -> HTMLResponse:
     """Browser-friendly redirect to login after OAuth callback errors."""
     params = "oauth_error=1"
     if detail:
         params += f"&oauth_detail={detail[:120]}"
-    login = f"{settings.public_app_base}/login?{params}"
+    login = f"{request_public_app_base(request)}/login?{params}"
     safe_meta = html.escape(login, quote=True)
     safe_js = json.dumps(login)
     return HTMLResponse(
@@ -81,7 +82,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     if "google/callback" not in request.url.path:
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
     detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
-    return _oauth_callback_login_redirect(detail)
+    return _oauth_callback_login_redirect(request, detail)
 
 # Honor X-Forwarded-* from the Vite/SvelteKit /api proxy (localhost:5173/5174)
 app.add_middleware(ForwardedHostMiddleware)
