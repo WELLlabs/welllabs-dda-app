@@ -36,6 +36,12 @@ except ImportError:  # pragma: no cover
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     init_pool(min_size=2, max_size=10)
+    # Warm village typeahead index in the background (S3 attribute read ~30–60s first time).
+    import threading
+
+    from app.shared.watersheds import warm_village_name_index
+
+    threading.Thread(target=warm_village_name_index, name="village-index-warm", daemon=True).start()
     try:
         yield
     finally:

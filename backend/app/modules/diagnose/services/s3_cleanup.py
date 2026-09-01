@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import re
-import uuid
 
 from app.shared.config import settings
 from app.shared.database import db_cursor
@@ -61,7 +60,7 @@ def _active_project_ids() -> set[str]:
 
 def cleanup_project_s3(project_id: str, *, dry_run: bool = False) -> dict:
     """
-    Delete orphaned media in {project_id}/media/ that is no longer referenced by field notes.
+    Delete orphaned media in diagnose/{project_id}/media/ that is no longer referenced by field notes.
 
     Package artifacts are kept in sync via mirror upload during QField packaging; use
     cleanup_orphan_projects() for prefixes left behind after project deletion.
@@ -70,12 +69,19 @@ def cleanup_project_s3(project_id: str, *, dry_run: bool = False) -> dict:
         return _empty_result(dry_run)
 
     referenced = _referenced_media_keys(project_id)
+    referenced_expanded = set(referenced)
+    for key in referenced:
+        referenced_expanded.add(s3_storage.canonicalize_diagnose_key(key))
+        referenced_expanded.add(s3_storage.legacy_key_from_canonical(key))
     to_delete: list[str] = []
 
-    media_prefix = f"{project_id}/media/"
-    for key in s3_storage.list_keys(media_prefix):
-        if key not in referenced:
-            to_delete.append(key)
+    for prefix in (
+        s3_storage.media_prefix(project_id),
+        s3_storage.legacy_project_prefix(project_id) + "media/",
+    ):
+        for key in s3_storage.list_keys(prefix):
+            if key not in referenced_expanded:
+                to_delete.append(key)
 
     return _delete_keys_report(to_delete, dry_run=dry_run, label=f"project {project_id}")
 
@@ -89,25 +95,25 @@ def cleanup_orphan_projects(*, dry_run: bool = False) -> dict:
     to_delete_prefixes: list[str] = []
     orphan_keys: list[str] = []
 
-    for prefix in s3_storage.list_top_level_prefixes():
-        if not _UUID_PREFIX_RE.match(prefix):
+    orphan_project_ids = sorted(
+        set(s3_storage.list_diagnose_project_ids()) | set(s3_storage.list_legacy_project_ids())
+    )
+    for project_id in orphan_project_ids:
+        if project_id in active:
             continue
-        try:
-            uuid.UUID(prefix)
-        except ValueError:
-            continue
-        if prefix in active:
-            continue
-        to_delete_prefixes.append(prefix)
-        orphan_keys.extend(s3_storage.list_keys(s3_storage.project_prefix(prefix)))
+        to_delete_prefixes.append(project_id)
+        orphan_keys.extend(s3_storage.list_keys(s3_storage.project_prefix(project_id)))
+        legacy_prefix = s3_storage.legacy_project_prefix(project_id)
+        if legacy_prefix != s3_storage.project_prefix(project_id):
+            orphan_keys.extend(s3_storage.list_keys(legacy_prefix))
 
     if not orphan_keys:
         return {**_empty_result(dry_run), "orphan_prefixes": []}
 
     freed_bytes = _keys_byte_size(orphan_keys)
     if not dry_run:
-        for prefix in to_delete_prefixes:
-            s3_storage.delete_prefix(s3_storage.project_prefix(prefix))
+        for project_id in to_delete_prefixes:
+            s3_storage.delete_project_storage(project_id)
         logger.info(
             "Removed %d orphan object(s) across %d deleted project prefix(es)",
             len(orphan_keys),

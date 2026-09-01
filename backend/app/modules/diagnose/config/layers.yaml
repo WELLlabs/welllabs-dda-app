@@ -73,6 +73,83 @@ layers:
     field_check: >-
       Verify flow paths, nala condition, erosion marks, slope breaks, and seasonal retention.
 
+  - id: cropping_intensity
+    category: Hydrology & Landscape Controls
+    s3_key: rasters/Cropping Intensity of India.tif
+    name: Cropping Intensity
+    source: cog
+    analysis_type: continuous_raster
+    tile_strategy: watershed_image
+    analysis_batch: false
+    render:
+      type: continuous
+      colormap: viridis
+    meaning: >-
+      Long-term cropping intensity shows where multiple cropping cycles occur — a proxy for irrigation access and agricultural pressure on water.
+    uncertainty: >-
+      Intensity is a regional proxy; it does not prove irrigation source, reliability, or sustainability.
+    field_check: >-
+      Verify irrigation source, seasonality, tail-end access, and whether intensity depends on unsustainable groundwater pumping.
+
+  - id: canals
+    category: Reference
+    overlay: true
+    s3_key: vector/Canals.gpkg
+    name: Canal Network
+    source: vector_fgb
+    analysis_type: vector_length
+    map_render: true
+    render:
+      type: line
+      line_color: rust
+      line_width: 2.5
+    meaning: >-
+      Canal networks indicate possible surface-water delivery paths. Compare with cropping, groundwater stress, and tail-end access.
+    uncertainty: >-
+      Mapped canals may be inactive, seasonal, or incomplete; presence on the map does not prove reliable delivery.
+    field_check: >-
+      Verify whether canals carry water, timing relative to crop demand, and head-tail equity.
+
+  - id: drainage
+    category: Reference
+    overlay: true
+    s3_key: vector/india_rivers_level_12.gpkg
+    name: Stream Network
+    source: vector_fgb
+    analysis_type: vector_length
+    map_render: true
+    render:
+      type: line
+      line_color: deep_blue
+      line_width: 2
+    meaning: >-
+      Stream network density and order help locate drainage paths, runoff concentration, and possible recharge or flood pathways.
+    uncertainty: >-
+      Derived stream lines may not match seasonal nalas or local drainage modifications.
+    field_check: >-
+      Verify active flow paths, nala condition, seasonality, and local diversions or blockages.
+
+  - id: lineaments
+    category: Hydrology & Landscape Controls
+    s3_key: vector/Lineaments.gpkg
+    name: Lineaments
+    source: vector_fgb
+    analysis_type: vector_categorical
+    render:
+      type: categorical
+      geometry: line
+      column: structure_type
+      classes:
+        - { value: dyke, label: Dyke, color: "#377eb8" }
+        - { value: fault, label: Fault, color: "#e41a1c" }
+        - { value: fold, label: Fold, color: "#4daf4a" }
+    meaning: >-
+      Geological structures suggest possible groundwater pathways. Use as a structural clue alongside well behaviour and local hydrogeology.
+    uncertainty: >-
+      Regional lineament mapping is indicative only; local fracture or dyke influence requires field or well validation.
+    field_check: >-
+      Check well yields, seepage, fractures, and whether structure type matches local geology.
+
   - id: aquifers
     category: Hydrology & Landscape Controls
     s3_key: vector/aquifers.fgb
@@ -201,6 +278,7 @@ layers:
 
   - id: village_boundaries
     category: Reference
+    overlay: true
     s3_key: vector/villages.fgb
     name: Village Boundaries
     source: vector_fgb
@@ -265,6 +343,29 @@ layers:
       These are population-in-AOI figures, not impact estimates.
     field_check: >-
       Confirm hamlets/groups with weaker access, time burden, costs, plot locations, and exclusion from decisions.
+
+  - id: literacy
+    category: Social & Demographic Profile
+    s3_key: vector/villages.fgb
+    name: Overall Literacy (%)
+    source: vector_fgb
+    analysis_type: demographics_literacy
+    map_render: true
+    render:
+      type: choropleth
+      column: pct_literate
+      stops:
+        - { min: 0, max: 50, label: "< 50%", color: "#f7fcf5" }
+        - { min: 50, max: 65, label: "50 – 65%", color: "#c2e699" }
+        - { min: 65, max: 75, label: "65 – 75%", color: "#78c679" }
+        - { min: 75, max: 85, label: "75 – 85%", color: "#31a354" }
+        - { min: 85, max: 100, label: "> 85%", color: "#006d2c" }
+    meaning: >-
+      Literacy patterns can support facilitation planning and help identify villages where written materials may need extra support.
+    uncertainty: >-
+      Census literacy figures may not reflect current local literacy practice or language preference.
+    field_check: >-
+      Confirm how communities prefer to receive information and whether literacy differs by hamlet or social group.
 
   - id: jrc_occurrence
     category: Surface Water Dynamics

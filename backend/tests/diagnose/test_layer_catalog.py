@@ -136,6 +136,69 @@ layers:
     assert a.titiler_colormap() != b.titiler_colormap()
 
 
+def test_notebook_gap_layers_resolve_by_s3_key():
+    catalog = get_catalog()
+
+    cropping = catalog.by_id("cropping_intensity")
+    assert cropping is not None
+    assert cropping.s3_key == "rasters/Cropping Intensity of India.tif"
+    assert cropping.render_type == "continuous"
+    assert cropping.analysis_type == "continuous_raster"
+    assert cropping.continuous.get("colormap") == "viridis"
+    assert cropping.tile_strategy == "watershed_image"
+    assert cropping.analysis_batch is False
+    assert len(cropping.companions) == 0
+
+    canals = catalog.by_id("canals")
+    assert canals is not None
+    assert canals.category == "Reference"
+    assert canals.s3_key == "vector/Canals.gpkg"
+    assert canals.render_type == "line"
+    assert canals.map_render is True
+    assert canals.overlay is True
+    assert canals.line_color == "#b5523a"
+    assert canals.line_width == 2.5
+    assert canals.analysis_type == "vector_length"
+
+    drainage = catalog.by_id("drainage")
+    assert drainage is not None
+    assert drainage.category == "Reference"
+    assert drainage.overlay is True
+    assert drainage.s3_key == "vector/india_rivers_level_12.gpkg"
+    assert drainage.render_type == "line"
+    assert drainage.line_color == "#00306d"
+
+    lineaments = catalog.by_id("lineaments")
+    assert lineaments is not None
+    assert lineaments.geometry_kind == "line"
+    assert lineaments.style_column == "structure_type"
+    legend = {e.value: e.color for e in lineaments.legend_entries()}
+    assert legend["dyke"] == "#377eb8"
+    assert legend["fault"] == "#e41a1c"
+
+    literacy = catalog.by_id("literacy")
+    assert literacy is not None
+    assert literacy.render_type == "choropleth"
+    assert literacy.style_column == "pct_literate"
+    assert len(literacy.choropleth_stops) == 5
+
+
+def test_soil_label_normalization():
+    from app.modules.diagnose.services.layer_analysis import normalize_soil_label
+
+    assert normalize_soil_label("1") == "Fine/Clay texture"
+    assert normalize_soil_label("medium loam") == "Medium/Loam texture"
+    assert normalize_soil_label("coarse sand") == "Coarse/Sandy texture"
+    assert normalize_soil_label("rock") == "Rocky and non soil"
+    assert normalize_soil_label("") is None
+
+
+def test_gpkg_auto_detected_as_vector():
+    layer = get_layer_for_key("vector/Canals.gpkg")
+    assert layer is not None
+    assert layer.source == "vector_fgb"
+
+
 def test_unknown_color_name_raises(tmp_path: Path):
     path = tmp_path / "bad.yaml"
     path.write_text(

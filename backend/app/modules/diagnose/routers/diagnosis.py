@@ -1,9 +1,10 @@
 import json
 from pathlib import Path
+from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, model_validator
 
 from app.shared.access import (
     diagnosis_access_where,
@@ -15,15 +16,27 @@ from app.shared.auth import get_current_user
 from app.shared.config import settings
 from app.shared.database import db_cursor
 from app.shared import s3_storage
-from app.shared.watersheds import lookup_watershed
+from app.shared.watersheds import custom_aoi_from_geometry, lookup_watershed, parse_geojson_polygon
 
 router = APIRouter()
 
 
 class ProjectCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
-    lng: float = Field(..., ge=-180, le=180)
-    lat: float = Field(..., ge=-90, le=90)
+    lng: float | None = Field(default=None, ge=-180, le=180)
+    lat: float | None = Field(default=None, ge=-90, le=90)
+    geometry: dict[str, Any] | None = None
+    watershed_id: str | None = Field(default=None, max_length=500)
+    watershed_name: str | None = Field(default=None, max_length=500)
+    source: Literal["point", "village", "custom"] = "point"
+
+    @model_validator(mode="after")
+    def require_point_or_geometry(self):
+        has_point = self.lng is not None and self.lat is not None
+        has_geom = self.geometry is not None
+        if not has_point and not has_geom:
+            raise ValueError("Provide lng/lat or geometry")
+        return self
 
 
 class AddUserAccess(BaseModel):
@@ -121,11 +134,33 @@ def get_project(project_id: str, user: dict = Depends(require_diagnosis_access))
 @router.post("", status_code=201)
 def create_project(body: ProjectCreate, user: dict = Depends(get_current_user)):
     try:
-        watershed = lookup_watershed(body.lng, body.lat)
+        if body.geometry is not None:
+            # Client-supplied clip (village union or custom AOI) — validate, do not re-lookup.
+            parse_geojson_polygon(body.geometry)
+            if body.source == "custom" or (body.watershed_id or "") == "custom":
+                watershed = custom_aoi_from_geometry(body.geometry, name=body.watershed_name)
+            else:
+                from shapely.geometry import shape as shp_shape
+
+                geom = shp_shape(body.geometry)
+                centroid = geom.centroid
+                watershed = {
+                    "watershed_id": (body.watershed_id or f"union:geom").strip()[:500],
+                    "watershed_name": (body.watershed_name or "Watershed union").strip()[:500],
+                    "geometry": body.geometry,
+                    "seed_lng": float(centroid.x),
+                    "seed_lat": float(centroid.y),
+                }
+            seed_lng = body.lng if body.lng is not None else watershed["seed_lng"]
+            seed_lat = body.lat if body.lat is not None else watershed["seed_lat"]
+        else:
+            watershed = lookup_watershed(body.lng, body.lat)
+            seed_lng = body.lng
+            seed_lat = body.lat
     except ValueError as exc:
-        raise HTTPException(404, str(exc)) from exc
+        raise HTTPException(400 if body.geometry is not None else 404, str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(502, f"Watershed lookup failed: {exc}") from exc
+        raise HTTPException(502, f"Watershed resolve failed: {exc}") from exc
 
     with db_cursor() as cur:
         cur.execute(
@@ -160,8 +195,8 @@ def create_project(body: ProjectCreate, user: dict = Depends(get_current_user)):
                 "watershed_id": watershed["watershed_id"],
                 "watershed_name": watershed["watershed_name"],
                 "watershed_geom": json.dumps(watershed["geometry"]),
-                "seed_lng": body.lng,
-                "seed_lat": body.lat,
+                "seed_lng": seed_lng,
+                "seed_lat": seed_lat,
             },
         )
         row = cur.fetchone()
@@ -189,7 +224,7 @@ def delete_project(project_id: str, user: dict = Depends(require_diagnosis_owner
         if local.is_file():
             local.unlink()
 
-    s3_storage.delete_prefix(s3_storage.project_prefix(project_id))
+    s3_storage.delete_project_storage(project_id)
 
 
 # --- Sharing: owner or diagnosis-admin management of user/org grants ---

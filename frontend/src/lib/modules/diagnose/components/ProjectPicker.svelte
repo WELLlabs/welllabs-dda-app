@@ -3,12 +3,24 @@
 	import { onMount } from 'svelte';
 	import ModuleHeader from '$lib/shared/components/ModuleHeader.svelte';
 	import LocationPicker from '$lib/shared/components/LocationPicker.svelte';
+	import SearchableSelect from '$lib/shared/components/SearchableSelect.svelte';
 	import WatershedThumb from '$lib/shared/components/WatershedThumb.svelte';
 	import { itemPath } from '$lib/shared/slug.js';
 	import { session } from '$lib/shared/session.svelte.js';
 	import FieldNoteIcon from '$lib/modules/diagnose/components/icons/FieldNoteIcon.svelte';
 	import ObservationZoneIcon from '$lib/modules/diagnose/components/icons/ObservationZoneIcon.svelte';
-	import { createProject, deleteProject, fetchProjects, lookupWatershed } from '$lib/modules/diagnose/api';
+	import { parseAoiFile } from '$lib/modules/diagnose/aoi-parse.js';
+	import {
+		createProject,
+		deleteProject,
+		fetchProjects,
+		fetchVillageDistricts,
+		fetchVillageStates,
+		fetchVillagesByDistrict,
+		lookupWatershed,
+		watershedsFromGeometry,
+		watershedsFromVillage
+	} from '$lib/modules/diagnose/api';
 
 	let projects = $state([]);
 	let loading = $state(true);
@@ -18,17 +30,55 @@
 	let name = $state('');
 	let lng = $state(77.2);
 	let lat = $state(28.6);
+	/** @type {'point' | 'village' | 'custom'} */
+	let selectMode = $state('point');
 	let watershedPreview = $state(null);
 	let previewLoading = $state(false);
 	let creating = $state(false);
 	let deletingId = $state(null);
 	let mounted = $state(false);
 
+	let villageState = $state('');
+	let villageDistrict = $state('');
+	let villageId = $state('');
+	/** @type {string[]} */
+	let stateOptions = $state([]);
+	/** @type {string[]} */
+	let districtOptions = $state([]);
+	/** @type {Array<{ id: string, name: string }>} */
+	let villageOptions = $state([]);
+	let cascadeLoading = $state('');
+	let cascadeError = $state('');
+	let uploadError = $state('');
+	let uploadName = $state('');
+	let coordError = $state('');
+	let coordInput = $state('');
+
+	const stateSelectOptions = $derived(
+		stateOptions.map((s) => ({ value: s, label: titleCase(s) }))
+	);
+	const districtSelectOptions = $derived(
+		districtOptions.map((d) => ({ value: d, label: titleCase(d) }))
+	);
+	const villageSelectOptions = $derived(
+		villageOptions.map((v) => ({ value: v.id, label: v.name }))
+	);
+
+	function titleCase(s) {
+		return String(s || '')
+			.split(/\s+/)
+			.map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
+			.join(' ');
+	}
+
 	onMount(() => {
 		loadProjects();
+		void ensureStatesLoaded();
 		mounted = true;
 		document.addEventListener('click', closeMenu);
-		return () => document.removeEventListener('click', closeMenu);
+		return () => {
+			document.removeEventListener('click', closeMenu);
+		};
 	});
 
 	function handlePointer(event) {
@@ -55,12 +105,188 @@
 		}
 	}
 
-	async function previewWatershed() {
+	function setMode(mode) {
+		selectMode = mode;
+		watershedPreview = null;
+		previewLoading = false;
+		cascadeError = '';
+		uploadError = '';
+		uploadName = '';
+		coordError = '';
+		if (mode === 'point') {
+			coordInput = formatCoordInput(lat, lng);
+		}
+		if (mode === 'village') {
+			ensureStatesLoaded();
+		} else {
+			resetVillageCascade();
+		}
+	}
+
+	function resetVillageCascade() {
+		villageState = '';
+		villageDistrict = '';
+		villageId = '';
+		districtOptions = [];
+		villageOptions = [];
+		cascadeError = '';
+	}
+
+	async function ensureStatesLoaded() {
+		if (stateOptions.length) return;
+		cascadeLoading = 'states';
+		cascadeError = '';
+		try {
+			stateOptions = await fetchVillageStates();
+		} catch (err) {
+			cascadeError = String(err);
+		} finally {
+			cascadeLoading = '';
+		}
+	}
+
+	async function onStateChange(state) {
+		villageState = state;
+		villageDistrict = '';
+		villageId = '';
+		districtOptions = [];
+		villageOptions = [];
+		watershedPreview = null;
+		if (!state) return;
+		cascadeLoading = 'districts';
+		cascadeError = '';
+		try {
+			districtOptions = await fetchVillageDistricts(state);
+		} catch (err) {
+			cascadeError = String(err);
+		} finally {
+			cascadeLoading = '';
+		}
+	}
+
+	async function onDistrictChange(district) {
+		villageDistrict = district;
+		villageId = '';
+		villageOptions = [];
+		watershedPreview = null;
+		if (!district || !villageState) return;
+		cascadeLoading = 'villages';
+		cascadeError = '';
+		try {
+			villageOptions = await fetchVillagesByDistrict(villageState, district);
+		} catch (err) {
+			cascadeError = String(err);
+		} finally {
+			cascadeLoading = '';
+		}
+	}
+
+	async function onVillageChange(id) {
+		villageId = id;
+		if (!id) {
+			watershedPreview = null;
+			return;
+		}
+		const hit = villageOptions.find((v) => v.id === id);
+		previewLoading = true;
+		watershedPreview = null;
+		cascadeError = '';
+		try {
+			const result = await watershedsFromVillage({ villageId: id });
+			watershedPreview = result;
+			if (result.seed_lng != null) lng = result.seed_lng;
+			if (result.seed_lat != null) lat = result.seed_lat;
+			if (!name.trim() && hit?.name) name = titleCase(hit.name);
+		} catch (err) {
+			watershedPreview = { error: String(err) };
+		} finally {
+			previewLoading = false;
+		}
+	}
+
+	function formatCoordInput(latVal, lon) {
+		return `${Number(latVal).toFixed(5)}, ${Number(lon).toFixed(5)}`;
+	}
+
+	/** @param {string} text */
+	function parseLatLngPair(text) {
+		const raw = String(text).trim();
+		if (!raw) return { error: 'Enter latitude and longitude.' };
+		const parts = raw.split(/[,;\s]+/).filter(Boolean);
+		if (parts.length !== 2) {
+			return { error: 'Use latitude, longitude — e.g. 12.9716, 77.5946' };
+		}
+		const a = Number.parseFloat(parts[0]);
+		const b = Number.parseFloat(parts[1]);
+		if (!Number.isFinite(a) || !Number.isFinite(b)) {
+			return { error: 'Enter valid decimal numbers.' };
+		}
+		let latVal = a;
+		let lon = b;
+		// Accept longitude, latitude if the first value cannot be a latitude.
+		if (Math.abs(a) > 90 && Math.abs(b) <= 90) {
+			lon = a;
+			latVal = b;
+		}
+		if (latVal < -90 || latVal > 90) {
+			return { error: 'Latitude must be between −90 and 90.' };
+		}
+		if (lon < -180 || lon > 180) {
+			return { error: 'Longitude must be between −180 and 180.' };
+		}
+		return { lat: latVal, lng: lon };
+	}
+
+	async function previewWatershedFromPoint() {
+		coordInput = formatCoordInput(lat, lng);
 		previewLoading = true;
 		watershedPreview = null;
 		try {
-			watershedPreview = await lookupWatershed(lng, lat);
+			const result = await lookupWatershed(lng, lat);
+			watershedPreview = { ...result, source: 'point' };
 		} catch (err) {
+			watershedPreview = { error: String(err) };
+		} finally {
+			previewLoading = false;
+		}
+	}
+
+	function applyManualCoordinates() {
+		coordError = '';
+		const parsed = parseLatLngPair(coordInput);
+		if (parsed.error) {
+			coordError = parsed.error;
+			return;
+		}
+		lat = parsed.lat;
+		lng = parsed.lng;
+		void previewWatershedFromPoint();
+	}
+
+	function onCoordKeydown(event) {
+		if (event.key === 'Enter') {
+			event.preventDefault();
+			applyManualCoordinates();
+		}
+	}
+
+	async function onAoiFileChange(event) {
+		uploadError = '';
+		uploadName = '';
+		const file = event.currentTarget?.files?.[0];
+		event.currentTarget.value = '';
+		if (!file) return;
+		previewLoading = true;
+		watershedPreview = null;
+		try {
+			const { geometry, name: aoiName } = await parseAoiFile(file);
+			uploadName = aoiName;
+			const result = await watershedsFromGeometry(geometry, aoiName);
+			watershedPreview = result;
+			if (result.seed_lng != null) lng = result.seed_lng;
+			if (result.seed_lat != null) lat = result.seed_lat;
+		} catch (err) {
+			uploadError = String(err);
 			watershedPreview = { error: String(err) };
 		} finally {
 			previewLoading = false;
@@ -71,15 +297,28 @@
 		goto(itemPath('/diagnose', project, projects));
 	}
 
+	function previewOk() {
+		return Boolean(watershedPreview && !watershedPreview.error && watershedPreview.geometry);
+	}
+
 	async function handleCreate() {
-		if (!name.trim()) return;
+		if (!name.trim() || !previewOk()) return;
 		creating = true;
 		error = '';
 		try {
-			const project = await createProject(name.trim(), lng, lat);
+			const project = await createProject({
+				name: name.trim(),
+				source: selectMode,
+				lng: watershedPreview.seed_lng ?? lng,
+				lat: watershedPreview.seed_lat ?? lat,
+				geometry: watershedPreview.geometry,
+				watershed_id: watershedPreview.watershed_id,
+				watershed_name: watershedPreview.watershed_name
+			});
 			showCreate = false;
 			name = '';
 			watershedPreview = null;
+			selectMode = 'point';
 			await loadProjects();
 			openProject(project);
 		} catch (err) {
@@ -93,6 +332,12 @@
 		showCreate = true;
 		error = '';
 		watershedPreview = null;
+		selectMode = 'point';
+		coordError = '';
+		coordInput = formatCoordInput(lat, lng);
+		resetVillageCascade();
+		uploadError = '';
+		uploadName = '';
 	}
 
 	function formatProjectDate(iso) {
@@ -140,6 +385,14 @@
 			deletingId = null;
 		}
 	}
+
+	const mapHint = $derived(
+		selectMode === 'point'
+			? 'Click the map or enter coordinates (latitude, longitude) to detect the watershed.'
+			: selectMode === 'village'
+				? 'Choose state → district → village. Preview shows the village boundary (purple) and each intersecting Level-12 basin in its own colour.'
+				: 'Upload a polygon AOI (GeoJSON, KML, or GPX polygon). That shape becomes the clip boundary.'
+	);
 </script>
 
 <div class="relative min-h-screen bg-transparent font-body">
@@ -149,7 +402,7 @@
 		{#if loading}
 			<p class="text-brand-steel">Loading projects…</p>
 		{:else if showCreate}
-			<div class="mx-auto max-w-2xl rounded-xl bg-white p-6 shadow-sm">
+			<div class="mx-auto max-w-3xl rounded-xl bg-white p-6 shadow-sm">
 				<h2 class="m-0 mb-4 font-headline text-lg font-semibold text-brand-navy">New project</h2>
 
 				<label class="mb-1 block font-body text-sm font-medium text-brand-navy" for="proj-name"
@@ -163,22 +416,144 @@
 					placeholder="e.g. North basin survey"
 				/>
 
+				<div class="mb-3 flex flex-wrap gap-2" role="tablist" aria-label="Watershed selection mode">
+					{#each [
+						{ id: 'point', label: 'Map click' },
+						{ id: 'village', label: 'Village' },
+						{ id: 'custom', label: 'Upload AOI' }
+					] as mode}
+						<button
+							type="button"
+							role="tab"
+							aria-selected={selectMode === mode.id}
+							class="mode-tab"
+							class:active={selectMode === mode.id}
+							onclick={() => setMode(mode.id)}
+						>
+							{mode.label}
+						</button>
+					{/each}
+				</div>
+
+				{#if selectMode === 'point'}
+					<div class="mb-3 grid gap-2 sm:grid-cols-[1fr_auto] sm:items-end">
+						<div>
+							<label class="mb-1 block font-body text-sm font-medium text-brand-navy" for="coord-input"
+								>Coordinates (lat, lng)</label
+							>
+							<input
+								id="coord-input"
+								type="text"
+								inputmode="decimal"
+								autocomplete="off"
+								class="w-full rounded border border-brand-navy/20 px-3 py-2 font-body"
+								bind:value={coordInput}
+								onkeydown={onCoordKeydown}
+								placeholder="e.g. 12.9716, 77.5946"
+							/>
+						</div>
+						<button
+							type="button"
+							class="cursor-pointer rounded bg-brand-blue px-4 py-2 font-body text-sm text-white disabled:opacity-60"
+							disabled={previewLoading}
+							onclick={applyManualCoordinates}
+						>
+							{previewLoading ? 'Finding…' : 'Find watershed'}
+						</button>
+					</div>
+					{#if coordError}
+						<p class="m-0 mb-3 text-xs text-red-600">{coordError}</p>
+					{/if}
+				{:else if selectMode === 'village'}
+					<div class="mb-3 grid gap-3 sm:grid-cols-3">
+						<SearchableSelect
+							id="village-state"
+							label="State"
+							placeholder="Search state…"
+							options={stateSelectOptions}
+							bind:value={villageState}
+							loading={cascadeLoading === 'states'}
+							disabled={cascadeLoading === 'states'}
+							onChange={onStateChange}
+						/>
+						<SearchableSelect
+							id="village-district"
+							label="District"
+							placeholder="Search district…"
+							options={districtSelectOptions}
+							bind:value={villageDistrict}
+							loading={cascadeLoading === 'districts'}
+							disabled={!villageState || cascadeLoading === 'districts'}
+							onChange={onDistrictChange}
+						/>
+						<SearchableSelect
+							id="village-name"
+							label="Village"
+							placeholder="Search village…"
+							options={villageSelectOptions}
+							bind:value={villageId}
+							loading={cascadeLoading === 'villages'}
+							disabled={!villageDistrict || cascadeLoading === 'villages'}
+							emptyText="No villages in this district"
+							onChange={onVillageChange}
+						/>
+					</div>
+					{#if cascadeError}
+						<p class="m-0 mb-3 text-xs text-red-600">{cascadeError}</p>
+					{/if}
+				{:else if selectMode === 'custom'}
+					<div class="mb-3">
+						<label class="mb-1 block font-body text-sm font-medium text-brand-navy" for="aoi-file"
+							>AOI file</label
+						>
+						<input
+							id="aoi-file"
+							type="file"
+							accept=".geojson,.json,.kml,.gpx,application/geo+json,application/json,application/vnd.google-earth.kml+xml"
+							class="block w-full font-body text-sm"
+							onchange={onAoiFileChange}
+						/>
+						<p class="m-0 mt-1 text-xs text-brand-steel">
+							GeoJSON, KML, or GPX polygon. The uploaded shape is used as the clip boundary.
+						</p>
+						{#if uploadName}
+							<p class="m-0 mt-1 text-xs text-brand-navy">Loaded: {uploadName}</p>
+						{/if}
+						{#if uploadError}
+							<p class="m-0 mt-1 text-xs text-red-600">{uploadError}</p>
+						{/if}
+					</div>
+				{/if}
+
 				<div class="mb-4 h-80">
-					<LocationPicker bind:lng bind:lat onPick={previewWatershed} />
+					<LocationPicker
+						bind:lng
+						bind:lat
+						onPick={previewWatershedFromPoint}
+						clipGeometry={watershedPreview?.geometry ?? null}
+						villageGeometry={watershedPreview?.village_geometry ?? null}
+						parts={watershedPreview?.parts ?? null}
+						interactiveClick={selectMode === 'point'}
+						hint={mapHint}
+					/>
 				</div>
 
 				<div class="mb-4 rounded-lg bg-brand-sky/20 p-3 font-body text-sm">
 					{#if previewLoading}
-						<p class="m-0 text-brand-steel">Looking up watershed…</p>
+						<p class="m-0 text-brand-steel">Resolving clip area…</p>
 					{:else if watershedPreview?.error}
 						<p class="m-0 text-red-600">{watershedPreview.error}</p>
 					{:else if watershedPreview}
-						<p class="m-0 font-medium text-brand-navy">Watershed: {watershedPreview.watershed_name}</p>
+						<p class="m-0 font-medium text-brand-navy">{watershedPreview.watershed_name}</p>
 						<p class="m-0 mt-1 text-brand-steel">ID: {watershedPreview.watershed_id}</p>
+						{#if watershedPreview.parts?.length}
+							<p class="m-0 mt-1 text-brand-steel">
+								{watershedPreview.parts.length} basin{watershedPreview.parts.length === 1 ? '' : 's'} —
+								each colour is a Level-12 watershed; purple outline is the village boundary.
+							</p>
+						{/if}
 					{:else}
-						<p class="m-0 text-brand-steel">
-							Click the map to detect the watershed at that location.
-						</p>
+						<p class="m-0 text-brand-steel">{mapHint}</p>
 					{/if}
 				</div>
 
@@ -189,7 +564,7 @@
 				<div class="flex gap-2">
 					<button
 						class="cursor-pointer rounded bg-brand-blue px-4 py-2 font-body text-white disabled:opacity-60"
-						disabled={creating || !name.trim()}
+						disabled={creating || !name.trim() || !previewOk()}
 						onclick={handleCreate}
 					>
 						{creating ? 'Creating…' : 'Create project'}
@@ -552,6 +927,23 @@
 	}
 	.menu-item-danger:hover {
 		background: #fef2f2;
+	}
+
+	.mode-tab {
+		cursor: pointer;
+		border-radius: 999px;
+		border: 1px solid rgba(0, 48, 109, 0.2);
+		background: white;
+		padding: 0.4rem 0.9rem;
+		font-family: inherit;
+		font-size: 0.8125rem;
+		color: #56646f;
+	}
+	.mode-tab.active {
+		border-color: #1b75e0;
+		background: color-mix(in srgb, #1b75e0 12%, white);
+		color: #00306d;
+		font-weight: 600;
 	}
 
 	@media (prefers-reduced-motion: reduce) {

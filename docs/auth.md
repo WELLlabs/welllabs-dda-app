@@ -49,13 +49,22 @@ Add **Authorized redirect URIs** (exact match):
 
 - `http://localhost:5173/wst/backend/accounts/auth/google/callback`
 - `http://localhost:5174/wst/backend/accounts/auth/google/callback`
-- `https://ai.welllabs.org/wst/backend/accounts/auth/google/callback` (production / CodeDeploy)
+- `https://beta.welllabs.org/wst/backend/accounts/auth/google/callback` (dev / beta)
+- `https://ai.welllabs.org/wst/backend/accounts/auth/google/callback` (production)
 
 Also add **Authorized JavaScript origins**:
 
 - `http://localhost:5173`
 - `http://localhost:5174`
+- `https://beta.welllabs.org`
 - `https://ai.welllabs.org`
+
+### Per-environment Secrets Manager
+
+| Environment | Pipeline branch | `FRONTEND_ORIGIN` in secret |
+|-------------|-----------------|----------------------------|
+| Beta (dev) | `dev` | `https://beta.welllabs.org` |
+| Production | `main` | `https://ai.welllabs.org` |
 
 ## Schema notes
 

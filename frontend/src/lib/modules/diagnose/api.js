@@ -18,11 +18,15 @@ export async function fetchProject(id) {
 	return request(`/projects/${id}`);
 }
 
-export async function createProject(name, lng, lat) {
+export async function createProject(nameOrPayload, lng, lat) {
+	const body =
+		typeof nameOrPayload === 'object' && nameOrPayload !== null
+			? nameOrPayload
+			: { name: nameOrPayload, lng, lat };
 	return request('/projects', {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ name, lng, lat })
+		body: JSON.stringify(body)
 	});
 }
 
@@ -77,6 +81,52 @@ export async function lookupWatershed(lng, lat) {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({ lng, lat })
+	});
+}
+
+export async function searchVillages(q, limit = 20, bounds = null) {
+	const params = new URLSearchParams({ q, limit: String(limit) });
+	if (bounds && bounds.length === 4) {
+		params.set('bbox', bounds.map(String).join(','));
+	}
+	const data = await request(`/watersheds/villages/search?${params}`);
+	return data.villages ?? [];
+}
+
+export async function fetchVillageStates() {
+	const data = await request('/watersheds/villages/states');
+	return data.states ?? [];
+}
+
+export async function fetchVillageDistricts(state) {
+	const params = new URLSearchParams({ state });
+	const data = await request(`/watersheds/villages/districts?${params}`);
+	return data.districts ?? [];
+}
+
+export async function fetchVillagesByDistrict(state, district, q = '', limit = 500) {
+	const params = new URLSearchParams({ state, district, limit: String(limit) });
+	if (q) params.set('q', q);
+	const data = await request(`/watersheds/villages/by-district?${params}`);
+	return data.villages ?? [];
+}
+
+export async function watershedsFromVillage({ villageId, geometry } = {}) {
+	return request('/watersheds/from-village', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({
+			village_id: villageId ?? null,
+			geometry: geometry ?? null
+		})
+	});
+}
+
+export async function watershedsFromGeometry(geometry, name = null) {
+	return request('/watersheds/from-geometry', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ geometry, name })
 	});
 }
 

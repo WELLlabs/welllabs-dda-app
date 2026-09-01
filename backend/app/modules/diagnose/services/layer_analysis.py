@@ -66,6 +66,131 @@ def _normalize_rank(value: Any) -> str:
     return WISER_RANK_NORMALIZE.get(key, str(value).strip() or "NA")
 
 
+def _length_m(geom) -> float:
+    """Approximate geodesic length in metres (EPSG:6933)."""
+    try:
+        import pyproj
+
+        project = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:6933", always_xy=True).transform
+        return float(shp_transform(project, geom).length)
+    except Exception:
+        return float(geom.length) * 111_320.0
+
+
+def normalize_soil_label(value: Any) -> str | None:
+    if value is None:
+        return None
+    soil_key = str(value).strip().lower()
+    if soil_key.endswith(".0"):
+        soil_key = soil_key[:-2]
+    if soil_key in {"1", "01"} or "fine" in soil_key or "clay" in soil_key:
+        return "Fine/Clay texture"
+    if soil_key in {"2", "02"} or "medium" in soil_key or "loam" in soil_key:
+        return "Medium/Loam texture"
+    if soil_key in {"3", "03"} or "coarse" in soil_key or "sand" in soil_key:
+        return "Coarse/Sandy texture"
+    if soil_key in {"4", "04"} or "rock" in soil_key or "non soil" in soil_key or "non-soil" in soil_key:
+        return "Rocky and non soil"
+    if soil_key in {"unknown", "nan", "none", ""}:
+        return None
+    return str(value).strip().title()
+
+
+def enrich_vector_gdf(gdf, layer_cfg: LayerConfig):
+    """Derive style columns (soil texture, literacy) on clipped GeoDataFrame."""
+    if gdf.empty:
+        return gdf
+    gdf = gdf.copy()
+    column = layer_cfg.style_column
+    atype = layer_cfg.analysis_type or ""
+
+    if atype == "vector_soil" or column == "__soil_texture_class":
+        col = _find_column(
+            gdf,
+            column or "__soil_texture_class",
+            "Texture",
+            search_terms=("texture", "soil", "type", "class", "desc", "grid", "code"),
+        )
+        if col:
+            gdf[column or "__soil_texture_class"] = gdf[col].apply(normalize_soil_label)
+    elif atype == "demographics_literacy" or column == "pct_literate":
+        target = column or "pct_literate"
+        if target not in gdf.columns or gdf[target].isna().all():
+            literate = _find_column(gdf, "Total_Lite", "total_lite", "Total_Liter")
+            pop = _find_column(gdf, "Total_Popu", "total_popu", "Population")
+            if literate and pop:
+                pop_v = gdf[pop].replace(0, np.nan)
+                gdf[target] = (gdf[literate].fillna(0) / pop_v) * 100
+    elif atype == "wiser_gw_stress" and column:
+        col = _find_column(gdf, column, "category", search_terms=("category", "gw", "stress", "stage"))
+        if col and column not in gdf.columns:
+            gdf[column] = gdf[col].apply(_normalize_gw)
+        elif column in gdf.columns:
+            gdf[column] = gdf[column].apply(_normalize_gw)
+    elif atype == "wiser_rank" and column:
+        col = _find_column(gdf, column, "Irr_access", "Kharif_res", "Rabi_res")
+        if col and column not in gdf.columns:
+            gdf[column] = gdf[col].apply(_normalize_rank)
+        elif column in gdf.columns:
+            gdf[column] = gdf[column].apply(_normalize_rank)
+    elif atype == "demographics_marginalized" or column == "pct_scst":
+        target = column or "pct_scst"
+        if target not in gdf.columns or gdf[target].isna().all():
+            sc = _find_column(gdf, "Total_SC_P", "total_sc_p")
+            st = _find_column(gdf, "Total_ST_P", "total_st_p")
+            pop = _find_column(gdf, "Total_Popu", "total_popu", "Population")
+            if sc and st and pop:
+                pop_v = gdf[pop].replace(0, np.nan)
+                gdf[target] = ((gdf[sc].fillna(0) + gdf[st].fillna(0)) / pop_v) * 100
+
+    return gdf
+
+
+def _clip_lines_to_watershed(gdf, watershed_geom: dict):
+    import geopandas as gpd
+    from shapely.geometry import GeometryCollection, LineString, MultiLineString
+
+    ws = shape(watershed_geom)
+    if gdf.crs is None:
+        gdf = gdf.set_crs(4326)
+    else:
+        gdf = gdf.to_crs(4326)
+
+    gdf = gdf[gdf.geometry.intersects(ws)].copy()
+    gdf.geometry = gdf.geometry.intersection(ws)
+    gdf = gdf[~gdf.geometry.is_empty]
+
+    rows = []
+    for _, row in gdf.iterrows():
+        geom = row.geometry
+        if geom is None or geom.is_empty:
+            continue
+        if isinstance(geom, (LineString, MultiLineString)):
+            rows.append(row)
+        elif isinstance(geom, GeometryCollection):
+            lines = [g for g in geom.geoms if isinstance(g, (LineString, MultiLineString))]
+            if lines:
+                new_row = row.copy()
+                new_row.geometry = MultiLineString(lines) if len(lines) > 1 else lines[0]
+                rows.append(new_row)
+    if not rows:
+        return gpd.GeoDataFrame(columns=gdf.columns, crs=gdf.crs)
+    out = gpd.GeoDataFrame(rows, crs=gdf.crs)
+    out["calc_length"] = out.geometry.apply(_length_m)
+    return out
+
+
+def _clip_vector_to_watershed(gdf, watershed_geom: dict, layer_cfg: LayerConfig | None = None):
+    geometry_kind = "polygon"
+    if layer_cfg:
+        geometry_kind = layer_cfg.geometry_kind or (
+            "line" if layer_cfg.render_type == "line" else "polygon"
+        )
+    if geometry_kind == "line" or (layer_cfg and layer_cfg.render_type == "line"):
+        return _clip_lines_to_watershed(gdf, watershed_geom)
+    return _clip_to_watershed(gdf, watershed_geom)
+
+
 def _area_m2(geom) -> float:
     """Approximate geodesic area via equal-area projection (EPSG:6933)."""
     try:
@@ -203,7 +328,13 @@ def _clip_to_watershed(gdf, watershed_geom: dict):
     return clipped
 
 
-def clip_vector_geojson(s3_key: str, vector_url: str, watershed_geom: dict) -> dict:
+def clip_vector_geojson(
+    s3_key: str,
+    vector_url: str,
+    watershed_geom: dict,
+    *,
+    layer_cfg: LayerConfig | None = None,
+) -> dict:
     """Return watershed-clipped GeoJSON FeatureCollection for map rendering.
 
     Reads only the watershed bbox from S3 via /vsis3/ range requests — never the
@@ -212,10 +343,12 @@ def clip_vector_geojson(s3_key: str, vector_url: str, watershed_geom: dict) -> d
     del vector_url  # unused; vsis3 uses IAM/env credentials
     bbox = _watershed_bbox(watershed_geom)
     gdf = _read_vector_gdf_bbox(s3_key, bbox)
-    clipped = _clip_to_watershed(gdf, watershed_geom)
+    clipped = _clip_vector_to_watershed(gdf, watershed_geom, layer_cfg)
     if clipped.empty:
         return {"type": "FeatureCollection", "features": []}
-    drop_cols = [c for c in ("calc_area",) if c in clipped.columns]
+    if layer_cfg:
+        clipped = enrich_vector_gdf(clipped, layer_cfg)
+    drop_cols = [c for c in ("calc_area", "calc_length") if c in clipped.columns]
     if drop_cols:
         clipped = clipped.drop(columns=drop_cols)
     return json.loads(clipped.to_json())
@@ -225,16 +358,23 @@ _CLIP_MEM: dict[tuple[str, str], dict] = {}
 
 
 def clipped_vector_geojson_for_watershed(
-    s3_key: str, vector_url: str, watershed_geom: dict
+    s3_key: str,
+    vector_url: str,
+    watershed_geom: dict,
+    layer_cfg: LayerConfig | None = None,
 ) -> dict:
-    key = (s3_key, json.dumps(watershed_geom, sort_keys=True))
-    cached = _CLIP_MEM.get(key)
+    cache_key = (
+        s3_key,
+        json.dumps(watershed_geom, sort_keys=True),
+        layer_cfg.id if layer_cfg else "",
+    )
+    cached = _CLIP_MEM.get(cache_key)
     if cached is not None:
         return cached
-    result = clip_vector_geojson(s3_key, vector_url, watershed_geom)
+    result = clip_vector_geojson(s3_key, vector_url, watershed_geom, layer_cfg=layer_cfg)
     if len(_CLIP_MEM) > 64:
         _CLIP_MEM.clear()
-    _CLIP_MEM[key] = result
+    _CLIP_MEM[cache_key] = result
     return result
 
 
@@ -398,6 +538,111 @@ def analyze_demographics(clipped, marginalized: bool = False) -> dict[str, str]:
     return stats
 
 
+def analyze_demographics_literacy(clipped) -> dict[str, str]:
+    stats: dict[str, str] = {}
+    if clipped.empty:
+        return {"Status": "No features in watershed"}
+    id_col = _find_column(clipped, "Village ID", "vlcode", "village")
+    unique = clipped.drop_duplicates(subset=[id_col]) if id_col else clipped
+    stats["Intersecting Villages"] = str(len(unique))
+    literate_col = _find_column(unique, "pct_literate")
+    if not literate_col:
+        literate = _find_column(unique, "Total_Lite", "total_lite")
+        pop = _find_column(unique, "Total_Popu", "total_popu", "Population")
+        if literate and pop:
+            pop_v = unique[pop].replace(0, np.nan)
+            unique = unique.assign(pct_literate=(unique[literate].fillna(0) / pop_v) * 100)
+            literate_col = "pct_literate"
+    if literate_col:
+        try:
+            import pandas as pd
+
+            vals = pd.to_numeric(unique[literate_col], errors="coerce")
+            stats["Mean literacy (%)"] = f"{float(vals.mean()):.1f}"
+            stats["Min literacy (%)"] = f"{float(vals.min()):.1f}"
+            stats["Max literacy (%)"] = f"{float(vals.max()):.1f}"
+        except Exception as exc:
+            stats["Data Warning"] = f"Could not aggregate literacy: {exc}"
+    else:
+        stats["Data Warning"] = "Literacy field was not found."
+    return stats
+
+
+def analyze_vector_length(clipped) -> dict[str, str]:
+    if clipped.empty:
+        return {"Status": "No features in watershed"}
+    if "calc_length" not in clipped.columns:
+        clipped = clipped.copy()
+        clipped["calc_length"] = clipped.geometry.apply(_length_m)
+    total_m = float(clipped["calc_length"].sum())
+    return {
+        "Total length (km)": f"{total_m / 1000:.1f}",
+        "Segment count": str(len(clipped)),
+    }
+
+
+def analyze_vector_categorical(clipped, style_column: str | None = None) -> dict[str, str]:
+    stats: dict[str, str] = {}
+    if clipped.empty:
+        return {"Status": "No features in watershed"}
+    col = style_column or _find_column(clipped, search_terms=("class", "type", "category"))
+    if not col:
+        return {"Count": str(len(clipped))}
+    if "calc_length" in clipped.columns and clipped["calc_length"].sum() > 0:
+        total = float(clipped["calc_length"].sum()) or 1.0
+        grouped = clipped.groupby(col)["calc_length"].sum()
+        metric = "length"
+    elif "calc_area" in clipped.columns and clipped["calc_area"].sum() > 0:
+        total = float(clipped["calc_area"].sum()) or 1.0
+        grouped = clipped.groupby(col)["calc_area"].sum()
+        metric = "area"
+    else:
+        grouped = clipped[col].value_counts()
+        total = float(grouped.sum()) or 1.0
+        metric = "count"
+    dominant_label, dominant_val = None, 0.0
+    for label, val in grouped.items():
+        pct = (float(val) / total) * 100
+        if float(val) > dominant_val:
+            dominant_label, dominant_val = label, float(val)
+        if pct >= 0.1:
+            suffix = "%" if metric != "count" else ""
+            stats[f"{label} {metric}"] = f"{pct:.1f}{suffix}" if suffix else str(int(val))
+    if dominant_label is not None:
+        stats["Dominant class"] = str(dominant_label)
+    stats["Count"] = str(len(clipped))
+    return stats
+
+
+def analyze_continuous_raster(
+    cog_url: str, watershed_geom: dict, nodata: float | int | None = None
+) -> dict[str, str]:
+    """Sample continuous raster values inside the watershed bbox."""
+    try:
+        from rio_tiler.io import Reader
+
+        ws = shape(watershed_geom)
+        minx, miny, maxx, maxy = ws.bounds
+        with Reader(cog_url) as src:
+            img = src.part([minx, miny, maxx, maxy], indexes=[1], max_size=512)
+        arr = img.array[0].astype(float)
+        if nodata is not None:
+            arr = np.where(arr == nodata, np.nan, arr)
+        if img.alpha_mask is not None:
+            arr = np.where(img.alpha_mask > 0, arr, np.nan)
+        valid = arr[~np.isnan(arr)]
+        if valid.size == 0:
+            return {"Status": "No valid raster pixels in watershed"}
+        return {
+            "Min": f"{float(np.nanmin(valid)):.2f}",
+            "Max": f"{float(np.nanmax(valid)):.2f}",
+            "Mean": f"{float(np.nanmean(valid)):.2f}",
+            "Median": f"{float(np.nanmedian(valid)):.2f}",
+        }
+    except Exception as exc:
+        return {"Status": f"Continuous raster analysis error: {exc}"}
+
+
 def analyze_dem(cog_url: str, watershed_geom: dict, nodata: float | int | None = -9999) -> dict[str, str]:
     """Read only the watershed bbox from the COG via HTTP range reads (no full download)."""
     try:
@@ -555,6 +800,12 @@ def analyze_layer(
             stats = analyze_jrc_transitions(cog_url, watershed_geom)
             return AnalysisResult(stats=stats)
 
+        if atype == "continuous_raster":
+            if not cog_url:
+                return AnalysisResult(stats={}, status="error", error="Missing COG URL for raster analysis")
+            stats = analyze_continuous_raster(cog_url, watershed_geom, nodata=layer_cfg.nodata)
+            return AnalysisResult(stats=stats)
+
         if not vector_url and layer_cfg.source == "vector_fgb":
             # Analysis can proceed with vsis3 even without a presigned URL
             vector_url = "vsis3"
@@ -564,7 +815,9 @@ def analyze_layer(
 
         bbox = _watershed_bbox(watershed_geom)
         gdf = _read_vector_gdf_bbox(layer_cfg.s3_key, bbox)
-        clipped = _clip_to_watershed(gdf, watershed_geom)
+        clipped = _clip_vector_to_watershed(gdf, watershed_geom, layer_cfg)
+        if layer_cfg.source == "vector_fgb":
+            clipped = enrich_vector_gdf(clipped, layer_cfg)
 
         if atype == "wiser_gw_stress":
             stats = analyze_wiser_gw_stress(clipped)
@@ -576,6 +829,14 @@ def analyze_layer(
             stats = analyze_demographics(clipped, marginalized=False)
         elif atype == "demographics_marginalized":
             stats = analyze_demographics(clipped, marginalized=True)
+        elif atype == "demographics_literacy":
+            stats = analyze_demographics_literacy(clipped)
+        elif atype == "vector_length":
+            stats = analyze_vector_length(clipped)
+        elif atype == "vector_categorical":
+            stats = analyze_vector_categorical(clipped, style_column=layer_cfg.style_column)
+        elif atype == "vector_soil":
+            stats = analyze_vector_categorical(clipped, style_column=layer_cfg.style_column)
         elif atype == "categorical_area":
             stats = {"Status": "Raster class-area analysis not yet enabled for live sidebar"}
         else:

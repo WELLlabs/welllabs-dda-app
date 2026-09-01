@@ -31,6 +31,15 @@ class ChoroplethStop:
 
 
 @dataclass(frozen=True)
+class LayerCompanion:
+    """Vector layer drawn automatically when a primary layer is selected (PDF report pairing)."""
+
+    id: str
+    line_color: str | None = None
+    line_width: float | None = None
+
+
+@dataclass(frozen=True)
 class LayerAnalysis:
     id: str
     type: str
@@ -44,7 +53,7 @@ class LayerConfig:
     s3_key: str
     name: str
     source: str  # cog | vector_fgb
-    render_type: str  # categorical | continuous | choropleth | outline
+    render_type: str  # categorical | continuous | choropleth | outline | line
     nodata: int | float | None
     classes: tuple[LegendEntry, ...]
     analysis: tuple[LayerAnalysis, ...]
@@ -52,13 +61,21 @@ class LayerConfig:
     style_column: str | None = None
     label_column: str | None = None  # outline / label layers (e.g. village name)
     choropleth_stops: tuple[ChoroplethStop, ...] = ()
+    line_color: str | None = None
+    line_width: float = 1.5
+    fill_opacity: float = 0.65
+    geometry_kind: str = "polygon"  # polygon | line
     interpretation: str = ""
     meaning: str = ""
     uncertainty: str = ""
     field_check: str = ""
     analysis_type: str | None = None
     map_render: bool = True  # False → analysis-only, FGB not streamed to browser
+    overlay: bool = False  # True → sidebar overlay toggles (villages, canals, streams)
     category: str | None = None  # Sidebar group (Clinton report categories)
+    tile_strategy: str = "tiles"  # tiles | watershed_image (non-COG national rasters)
+    analysis_batch: bool = True  # False → skip slow layers in batch preload
+    companions: tuple[LayerCompanion, ...] = ()
 
     def titiler_colormap(self) -> dict[str, str]:
         """String-keyed colormap for Titiler / rio-tiler (nodata → transparent)."""
@@ -92,6 +109,10 @@ class LayerConfig:
                 for s in self.choropleth_stops
             ]
         if self.render_type == "continuous":
+            return []
+        if self.render_type == "line" and not self.classes:
+            if self.line_color:
+                return [LegendEntry(label=self.name, color=self.line_color, value=self.name)]
             return []
         out: list[LegendEntry] = []
         for entry in self.classes:
@@ -217,13 +238,25 @@ def _parse_layer(raw: dict[str, Any], palette: dict[str, str]) -> LayerConfig:
             )
         )
 
-    source = str(raw.get("source") or ("vector_fgb" if str(raw.get("s3_key", "")).endswith(".fgb") else "cog"))
+    source = str(raw.get("source") or "")
+    if not source:
+        s3_key = str(raw.get("s3_key") or "")
+        if s3_key.endswith((".fgb", ".gpkg")):
+            source = "vector_fgb"
+        else:
+            source = "cog"
     style_column = render.get("column")
     if style_column is not None:
         style_column = str(style_column)
     label_column = render.get("label_column")
     if label_column is not None:
         label_column = str(label_column)
+
+    line_color_raw = render.get("line_color")
+    line_color = _resolve_color(str(line_color_raw), palette) if line_color_raw else None
+    line_width = float(render.get("line_width") or 1.5)
+    fill_opacity = float(render.get("fill_opacity") or render.get("opacity") or 0.65)
+    geometry_kind = str(render.get("geometry") or ("line" if render_type == "line" else "polygon"))
 
     map_render_raw = raw.get("map_render")
     # strip any inline YAML comment before evaluating
@@ -234,6 +267,36 @@ def _parse_layer(raw: dict[str, Any], palette: dict[str, str]) -> LayerConfig:
         map_render = True
     else:
         map_render = bool(map_render_raw)
+
+    overlay_raw = raw.get("overlay")
+    if isinstance(overlay_raw, str):
+        overlay_raw = overlay_raw.split("#")[0].strip().lower()
+        overlay = overlay_raw in ("true", "1", "yes")
+    elif overlay_raw is None:
+        overlay = render_type == "outline"
+    else:
+        overlay = bool(overlay_raw)
+
+    tile_strategy = str(raw.get("tile_strategy") or render.get("tile_strategy") or "tiles")
+    analysis_batch_raw = raw.get("analysis_batch")
+    if isinstance(analysis_batch_raw, str):
+        analysis_batch_raw = analysis_batch_raw.split("#")[0].strip().lower()
+        analysis_batch = analysis_batch_raw not in ("false", "0", "no")
+    elif analysis_batch_raw is None:
+        analysis_batch = True
+    else:
+        analysis_batch = bool(analysis_batch_raw)
+
+    companions: list[LayerCompanion] = []
+    for item in raw.get("companions") or []:
+        comp_color_raw = item.get("line_color")
+        companions.append(
+            LayerCompanion(
+                id=str(item["id"]),
+                line_color=_resolve_color(str(comp_color_raw), palette) if comp_color_raw else None,
+                line_width=float(item["line_width"]) if item.get("line_width") is not None else None,
+            )
+        )
 
     return LayerConfig(
         id=str(raw["id"]),
@@ -248,13 +311,21 @@ def _parse_layer(raw: dict[str, Any], palette: dict[str, str]) -> LayerConfig:
         style_column=style_column,
         label_column=label_column,
         choropleth_stops=choropleth_stops,
+        line_color=line_color,
+        line_width=line_width,
+        fill_opacity=fill_opacity,
+        geometry_kind=geometry_kind,
         interpretation=str(raw.get("interpretation") or raw.get("meaning") or "").strip(),
         meaning=str(raw.get("meaning") or raw.get("interpretation") or "").strip(),
         uncertainty=str(raw.get("uncertainty") or "").strip(),
         field_check=str(raw.get("field_check") or "").strip(),
         analysis_type=(str(raw["analysis_type"]) if raw.get("analysis_type") else None),
         map_render=map_render,
+        overlay=overlay,
         category=(str(raw["category"]).strip() if raw.get("category") else None),
+        tile_strategy=tile_strategy,
+        analysis_batch=analysis_batch,
+        companions=tuple(companions),
     )
 
 

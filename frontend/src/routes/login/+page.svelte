@@ -20,10 +20,11 @@ import { onMount } from 'svelte';
 	onMount(() => {
 		if (page.url.searchParams.get('oauth_error') === '1') {
 			const detail = page.url.searchParams.get('oauth_detail') || '';
+			const localCallback = `${window.location.origin}${appPath('/backend/accounts/auth/google/callback')}`;
 			error =
-				'Google sign-in failed. Open login in a new incognito window and try again.' +
+				'Google sign-in failed. Try again in a private window.' +
 				(detail ? ` (${detail})` : '') +
-				' Ensure Google Cloud Console has redirect URI: https://beta.welllabs.org/wst/backend/accounts/auth/google/callback';
+				` Add this redirect URI in Google Cloud Console: ${localCallback}`;
 			return;
 		}
 		const next = page.url.searchParams.get('next');

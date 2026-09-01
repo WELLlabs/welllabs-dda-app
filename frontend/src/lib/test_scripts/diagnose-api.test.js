@@ -8,9 +8,15 @@ import {
 	fetchProject,
 	fetchProjects,
 	fetchUserAccess,
+	fetchVillageDistricts,
+	fetchVillageStates,
+	fetchVillagesByDistrict,
 	lookupWatershed,
 	removeOrgAccess,
-	removeUserAccess
+	removeUserAccess,
+	searchVillages,
+	watershedsFromGeometry,
+	watershedsFromVillage
 } from '../modules/diagnose/api.js';
 
 describe('diagnose api', () => {
@@ -110,6 +116,84 @@ describe('diagnose api', () => {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({ lng: 77.1, lat: 12.2 })
+		});
+	});
+
+	it('searchVillages queries typeahead endpoint', async () => {
+		mockJson({ villages: [{ id: 'v1', name: 'Demo' }] });
+		await expect(searchVillages('Demo')).resolves.toEqual([{ id: 'v1', name: 'Demo' }]);
+		expect(fetch).toHaveBeenCalledWith(
+			'/wst/backend/diagnose/watersheds/villages/search?q=Demo&limit=20',
+			{ credentials: 'include' }
+		);
+	});
+
+	it('village cascade helpers hit states/districts/by-district', async () => {
+		mockJson({ states: ['karnataka'] });
+		await expect(fetchVillageStates()).resolves.toEqual(['karnataka']);
+		expect(fetch).toHaveBeenCalledWith('/wst/backend/diagnose/watersheds/villages/states', {
+			credentials: 'include'
+		});
+
+		mockJson({ districts: ['mandya'] });
+		await expect(fetchVillageDistricts('karnataka')).resolves.toEqual(['mandya']);
+		expect(fetch).toHaveBeenCalledWith(
+			'/wst/backend/diagnose/watersheds/villages/districts?state=karnataka',
+			{ credentials: 'include' }
+		);
+
+		mockJson({ villages: [{ id: '1', name: 'maraliga' }] });
+		await expect(fetchVillagesByDistrict('karnataka', 'mandya')).resolves.toEqual([
+			{ id: '1', name: 'maraliga' }
+		]);
+		expect(fetch).toHaveBeenCalledWith(
+			'/wst/backend/diagnose/watersheds/villages/by-district?state=karnataka&district=mandya&limit=500',
+			{ credentials: 'include' }
+		);
+	});
+
+	it('watershedsFromVillage and watershedsFromGeometry post payloads', async () => {
+		mockJson({ watershed_id: 'union:2' });
+		await watershedsFromVillage({ villageId: 'v1' });
+		expect(fetch).toHaveBeenCalledWith('/wst/backend/diagnose/watersheds/from-village', {
+			credentials: 'include',
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ village_id: 'v1', geometry: null })
+		});
+
+		const geometry = { type: 'Polygon', coordinates: [[[0, 0], [1, 0], [1, 1], [0, 0]]] };
+		mockJson({ watershed_id: 'custom' });
+		await watershedsFromGeometry(geometry, 'AOI');
+		expect(fetch).toHaveBeenCalledWith('/wst/backend/diagnose/watersheds/from-geometry', {
+			credentials: 'include',
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ geometry, name: 'AOI' })
+		});
+	});
+
+	it('createProject accepts geometry payload object', async () => {
+		mockJson({ id: 'p2' });
+		const geometry = { type: 'Polygon', coordinates: [[[0, 0], [1, 0], [1, 1], [0, 0]]] };
+		await createProject({
+			name: 'Custom',
+			source: 'custom',
+			geometry,
+			watershed_id: 'custom',
+			watershed_name: 'Custom AOI'
+		});
+		expect(fetch).toHaveBeenCalledWith('/wst/backend/diagnose/projects', {
+			credentials: 'include',
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				name: 'Custom',
+				source: 'custom',
+				geometry,
+				watershed_id: 'custom',
+				watershed_name: 'Custom AOI'
+			})
 		});
 	});
 });

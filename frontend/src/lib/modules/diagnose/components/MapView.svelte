@@ -55,8 +55,14 @@
 		'Social & Demographic Profile'
 	];
 
+	const OVERLAY_LAYER_IDS = new Set(['village_boundaries', 'canals', 'drainage']);
+
 	function isOverlayLayer(layer) {
-		return layer?.render_type === 'outline' || layer?.category === 'Reference';
+		return (
+			layer?.overlay === true ||
+			OVERLAY_LAYER_IDS.has(layer?.id) ||
+			layer?.render_type === 'outline'
+		);
 	}
 
 	const UUID_RE =
@@ -98,15 +104,16 @@
 		showSelectedHypothesisMenu = false;
 	}
 
-	function showOnlySecondaryLayer(layerId) {
+	async function showOnlySecondaryLayer(layerId) {
 		for (const l of secondaryLayers) {
-			// Overlay layers (village boundaries) keep their own eye-toggle state
+			// Overlays (village boundaries, canals, streams) keep their own eye-toggle state
 			if (isOverlayLayer(l)) continue;
 			const visible = l.id === layerId && l.map_render !== false;
 			cogVisibility = { ...cogVisibility, [l.id]: visible };
 			if (l.kind === 'vector') {
 				setLayerVisibility(`vec-${l.id}-fill`, visible);
 				setLayerVisibility(`vec-${l.id}-line`, visible);
+				setLayerVisibility(`vec-${l.id}-line-halo`, visible);
 				setLayerVisibility(`vec-${l.id}-label`, visible);
 			} else {
 				setLayerVisibility(`cog-${l.id}`, visible);
@@ -119,9 +126,9 @@
 		if (layer?.kind === 'primary') {
 			activePrimaryTab = layer.id;
 			closeSelectedZone();
-			closeSelectedFieldNote();
+		closeSelectedFieldNote();
 			closeSelectedHypothesis();
-			cancelPendingForms();
+		cancelPendingForms();
 			if (layer.id === 'hypotheses') {
 				void reloadHypotheses();
 			}
@@ -135,7 +142,10 @@
 					// Overlays are visibility-toggled only; selecting opens the right panel
 					return;
 				}
-				showOnlySecondaryLayer(layer.id);
+				if (meta?.tile_strategy === 'watershed_image') {
+					status = `Loading ${meta.name}…`;
+				}
+				await showOnlySecondaryLayer(layer.id);
 				void ensureLayerAnalysis(layer.id);
 			}
 		}
@@ -334,6 +344,27 @@
 		return apiPath(`/diagnose/layers/cog/${layerId}/tiles/WebMercatorQuad/{z}/{x}/{y}?${params.toString()}`);
 	}
 
+	function cogWatershedImageUrl(layer) {
+		if (layer.watershed_image_url) {
+			return resolveApiUrl(layer.watershed_image_url);
+		}
+		const params = new URLSearchParams();
+		params.set('project_id', project.id);
+		return resolveApiUrl(
+			apiPath(`/diagnose/layers/cog/${layer.id}/watershed-image?${params.toString()}`)
+		);
+	}
+
+	function watershedImageCoordinates(bounds) {
+		const [west, south, east, north] = bounds;
+		return [
+			[west, north],
+			[east, north],
+			[east, south],
+			[west, south]
+		];
+	}
+
 	function removeCogLayers() {
 		if (!map) return;
 		for (const layer of cogLayers) {
@@ -356,6 +387,8 @@
 			const labelId = `vec-${layer.id}-label`;
 			const sourceId = `vec-${layer.id}`;
 			if (map.getLayer(labelId)) map.removeLayer(labelId);
+			const haloId = `${lineId}-halo`;
+			if (map.getLayer(haloId)) map.removeLayer(haloId);
 			if (map.getLayer(lineId)) map.removeLayer(lineId);
 			if (map.getLayer(fillId)) map.removeLayer(fillId);
 			if (map.getSource(sourceId)) map.removeSource(sourceId);
@@ -368,6 +401,74 @@
 			...cogs.map((l) => ({ ...l, kind: 'cog' })),
 			...vectors.map((l) => ({ ...l, kind: 'vector' }))
 		];
+	}
+
+	/** Matplotlib-style CSS gradients for continuous rasters (matches notebook colorbars). */
+	const CONTINUOUS_GRADIENTS = {
+		viridis:
+			'linear-gradient(90deg, #440154, #31688e, #35b779, #6ece58, #fde725)',
+		gist_earth:
+			'linear-gradient(90deg, #153878, #5da04b, #8b6914, #dab69f, #ffffff)',
+		terrain:
+			'linear-gradient(90deg, #333399, #79b3d9, #a3c68a, #d2b48c, #ffffff)'
+	};
+
+	function continuousLegendGradient(layer) {
+		const cmap =
+			layer?.colormap ||
+			(layer?.id === 'cropping_intensity'
+				? 'viridis'
+				: layer?.id === 'dem'
+					? 'gist_earth'
+					: 'terrain');
+		return CONTINUOUS_GRADIENTS[cmap] || CONTINUOUS_GRADIENTS.viridis;
+	}
+
+	function continuousLegendLabels(layer) {
+		if (layer?.id === 'cropping_intensity') {
+			return { low: 'Low intensity', high: 'High intensity' };
+		}
+		if (layer?.id === 'dem') {
+			return { low: 'Lower elevation', high: 'Higher elevation' };
+		}
+		return { low: 'Low', high: 'High' };
+	}
+
+	function applyLineOverlayStyle(layer) {
+		if (!layer || layer.render_type !== 'line') return;
+		const lineId = `vec-${layer.id}-line`;
+		const haloId = `${lineId}-halo`;
+		if (!map?.getLayer(lineId)) return;
+		const color = layer.line_color || '#1c75e9';
+		const width = layer.line_width ?? 2;
+		applyCanalLineStyle(lineId, haloId, {
+			color,
+			width,
+			halo: layer.id === 'canals'
+		});
+	}
+
+	async function setOverlayVisibility(layer, visible) {
+		if (!layer?.id) return;
+		if (visible && layer.kind === 'vector' && layer.map_render !== false) {
+			await ensureVectorLayerOnMap(layer);
+			applyLineOverlayStyle(layer);
+		}
+		toggleCog(layer.id, visible);
+	}
+
+	function applyCanalLineStyle(lineId, haloId, { color, width, halo = true }) {
+		if (!map?.getLayer(lineId)) return;
+		map.setPaintProperty(lineId, 'line-color', color);
+		map.setPaintProperty(lineId, 'line-width', width);
+		map.setPaintProperty(lineId, 'line-opacity', 1);
+		if (halo && map.getLayer(haloId)) {
+			map.setPaintProperty(haloId, 'line-color', '#ffffff');
+			map.setPaintProperty(haloId, 'line-width', width + 2.5);
+			map.setPaintProperty(haloId, 'line-opacity', 0.92);
+		} else if (map.getLayer(haloId)) {
+			map.setPaintProperty(haloId, 'line-width', 0);
+		}
 	}
 
 	function matchColorExpression(column, classes, fallback = '#e6e9eb') {
@@ -399,16 +500,24 @@
 		return matchColorExpression(column, layer.legend);
 	}
 
+	function vectorLineColor(layer) {
+		const column = layer.style_column;
+		if (!column) return layer.line_color || '#1c75e9';
+		return matchColorExpression(column, layer.legend, layer.line_color || '#e6e9eb');
+	}
+
 	/** Legend entries actually present in watershed features (or full for COG). */
 	function legendFromFeatures(layer, features) {
 		if (!layer) return [];
 		if (layer.render_type === 'continuous') {
-			// Match rio-tiler gist_earth used by DEM tiles + QField packaging
-			return [
-				{ label: 'Lower elevation', color: '#153878', continuous: true },
-				{ label: 'Mid elevation', color: '#5da04b', continuous: true },
-				{ label: 'Higher elevation', color: '#dab69f', continuous: true }
-			];
+			const cmap =
+				layer.colormap ||
+				(layer.id === 'cropping_intensity'
+					? 'viridis'
+					: layer.id === 'dem'
+						? 'gist_earth'
+						: 'terrain');
+			return [{ label: cmap, color: continuousLegendGradient(layer), continuous: true }];
 		}
 		if (layer.kind === 'cog' || !features?.length) {
 			return layer.legend || [];
@@ -434,7 +543,7 @@
 	const mapLegendItems = $derived.by(() => {
 		if (selectedLayer?.kind !== 'secondary') return [];
 		const layer = secondaryLayers.find((l) => l.id === selectedLayer.id);
-		if (!layer) return [];
+		if (!layer || isOverlayLayer(layer)) return [];
 		return layerActiveLegend[layer.id] || layer.legend || [];
 	});
 
@@ -464,7 +573,15 @@
 	let cogLayers = $state([]);
 	let vectorLayers = $state([]);
 	let secondaryLayers = $state([]);
-	const overlayLayers = $derived(secondaryLayers.filter((l) => isOverlayLayer(l)));
+	const overlayLayers = $derived.by(() => {
+		const order = ['village_boundaries', 'canals', 'drainage'];
+		const overlays = secondaryLayers.filter((l) => isOverlayLayer(l));
+		return overlays.sort((a, b) => {
+			const ai = order.indexOf(a.id);
+			const bi = order.indexOf(b.id);
+			return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+		});
+	});
 	const thematicLayers = $derived(secondaryLayers.filter((l) => !isOverlayLayer(l)));
 	const thematicCategoryGroups = $derived.by(() => {
 		const byCat = new Map();
@@ -621,7 +738,7 @@
 			updateDrawSizes();
 			ensureDrawPreviewOnTop();
 			try {
-				await loadCogLayers();
+			await loadCogLayers();
 				await loadVectorLayers();
 				await preloadAllSecondaryData();
 			} catch (err) {
@@ -634,7 +751,7 @@
 				status = `Could not load observation zones: ${err instanceof Error ? err.message : String(err)}`;
 			}
 			try {
-				await reloadFieldNotes();
+			await reloadFieldNotes();
 			} catch (err) {
 				console.error('Failed to load field notes', err);
 				status = `Could not load field notes: ${err instanceof Error ? err.message : String(err)}`;
@@ -880,27 +997,27 @@
 		const drawing = zoneDraw;
 		const cursor = drawing ? cursorLngLat : null;
 
-		const ring = cursor && drawing ? [...coords, cursor] : [...coords];
-		if (ring.length >= 2) {
-			features.push({
-				type: 'Feature',
-				properties: { kind: 'line' },
-				geometry: { type: 'LineString', coordinates: [...ring, ring[0]] }
-			});
-		}
-		if (ring.length >= 3) {
-			features.push({
-				type: 'Feature',
-				properties: { kind: 'fill' },
-				geometry: { type: 'Polygon', coordinates: [[...ring, ring[0]]] }
-			});
-		}
-		if (drawing && cursor && coords.length >= 1) {
-			features.push({
-				type: 'Feature',
-				properties: { kind: 'dash' },
-				geometry: { type: 'LineString', coordinates: [coords[coords.length - 1], cursor] }
-			});
+			const ring = cursor && drawing ? [...coords, cursor] : [...coords];
+			if (ring.length >= 2) {
+				features.push({
+					type: 'Feature',
+					properties: { kind: 'line' },
+					geometry: { type: 'LineString', coordinates: [...ring, ring[0]] }
+				});
+			}
+			if (ring.length >= 3) {
+				features.push({
+					type: 'Feature',
+					properties: { kind: 'fill' },
+					geometry: { type: 'Polygon', coordinates: [[...ring, ring[0]]] }
+				});
+			}
+			if (drawing && cursor && coords.length >= 1) {
+				features.push({
+					type: 'Feature',
+					properties: { kind: 'dash' },
+					geometry: { type: 'LineString', coordinates: [coords[coords.length - 1], cursor] }
+				});
 		}
 
 		if (pendingPoint) {
@@ -1001,7 +1118,7 @@
 							created_at: f.properties?.created_at ?? ''
 						};
 					closeSelectedZone();
-					status = 'Field note selected';
+						status = 'Field note selected';
 						return;
 					}
 				}
@@ -1134,13 +1251,15 @@
 		if (!mapReady) return;
 		for (const layer of secondaryLayers) {
 			if (layer.kind === 'cog') {
-				const id = `cog-${layer.id}`;
-				if (map.getLayer(id)) map.moveLayer(id);
+			const id = `cog-${layer.id}`;
+			if (map.getLayer(id)) map.moveLayer(id);
 			} else {
 				const fillId = `vec-${layer.id}-fill`;
 				const lineId = `vec-${layer.id}-line`;
+				const haloId = `${lineId}-halo`;
 				const labelId = `vec-${layer.id}-label`;
 				if (map.getLayer(fillId)) map.moveLayer(fillId);
+				if (map.getLayer(haloId)) map.moveLayer(haloId);
 				if (map.getLayer(lineId)) map.moveLayer(lineId);
 				if (map.getLayer(labelId)) map.moveLayer(labelId);
 			}
@@ -1305,52 +1424,79 @@
 				status = 'No secondary layers configured (set COG_LAYERS / VECTOR_LAYERS in .env)';
 				return;
 			}
-		for (const layer of cog_layers) {
-			if (layer.status === 'error') {
+			for (const layer of cog_layers) {
+				if (layer.status === 'error') {
 				status = `${layer.name} error: ${layer.error ?? 'unknown'}`;
 				cogVisibility = { ...cogVisibility, [layer.id]: false };
-				continue;
-			}
+					continue;
+				}
 			cogVisibility = { ...cogVisibility, [layer.id]: false };
-			const sourceId = `cog-${layer.id}`;
-			const tileUrl = cogTileUrl(layer.id);
-			map.addSource(sourceId, {
-				type: 'raster',
-				tiles: [tileUrl],
-				tileSize: 256,
-				minzoom: 7,
-				maxzoom: 14,
-				...(watershedBounds ? { bounds: watershedBounds } : {})
-			});
-			const beforeId = map.getLayer('watershed-fill') ? 'watershed-fill' : undefined;
-			map.addLayer(
-				{
-					id: sourceId,
-					type: 'raster',
-					source: sourceId,
-					layout: { visibility: 'none' },
-					paint: { 'raster-opacity': 0.85 }
-				},
-				beforeId
-			);
+				const sourceId = `cog-${layer.id}`;
+				const beforeId = map.getLayer('watershed-fill') ? 'watershed-fill' : undefined;
+				if (layer.tile_strategy === 'watershed_image' && watershedBounds) {
+					map.addSource(sourceId, {
+						type: 'image',
+						url: cogWatershedImageUrl(layer),
+						coordinates: watershedImageCoordinates(watershedBounds)
+					});
+					map.addLayer(
+						{
+							id: sourceId,
+							type: 'raster',
+							source: sourceId,
+							layout: { visibility: 'none' },
+							paint: { 'raster-opacity': 0.85 }
+						},
+						beforeId
+					);
+				} else {
+					const tileUrl = cogTileUrl(layer.id);
+					map.addSource(sourceId, {
+						type: 'raster',
+						tiles: [tileUrl],
+						tileSize: 256,
+						minzoom: 7,
+						maxzoom: 14,
+						...(watershedBounds ? { bounds: watershedBounds } : {})
+					});
+					map.addLayer(
+						{
+							id: sourceId,
+							type: 'raster',
+							source: sourceId,
+							layout: { visibility: 'none' },
+							paint: { 'raster-opacity': 0.85 }
+						},
+						beforeId
+					);
+				}
 		}
-			ensureCogAboveBasemaps();
-			ensureDrawPreviewOnTop();
+				ensureCogAboveBasemaps();
+				ensureDrawPreviewOnTop();
 			fitToWatershed();
 		} catch (err) {
 			status = `Raster layers unavailable: ${err instanceof Error ? err.message : String(err)}`;
 		}
 	}
 
-	function enrichVillageProperties(features, needPctScst) {
-		if (!needPctScst) return features;
+	function enrichVillageProperties(features, layer) {
+		const needPctScst =
+			layer?.analysis_type === 'demographics_marginalized' || layer?.style_column === 'pct_scst';
+		const needPctLiterate =
+			layer?.analysis_type === 'demographics_literacy' || layer?.style_column === 'pct_literate';
+		if (!needPctScst && !needPctLiterate) return features;
 		return features.map((f) => {
 			const p = { ...(f.properties || {}) };
-			if (p.pct_scst == null || p.pct_scst === '') {
+			if (needPctScst && (p.pct_scst == null || p.pct_scst === '')) {
 				const pop = Number(p.Total_Popu ?? p.total_popu ?? 0);
 				const sc = Number(p.Total_SC_P ?? p.total_sc_p ?? 0);
 				const st = Number(p.Total_ST_P ?? p.total_st_p ?? 0);
 				p.pct_scst = pop > 0 ? ((sc + st) / pop) * 100 : 0;
+			}
+			if (needPctLiterate && (p.pct_literate == null || p.pct_literate === '')) {
+				const pop = Number(p.Total_Popu ?? p.total_popu ?? 0);
+				const literate = Number(p.Total_Lite ?? p.total_lite ?? 0);
+				p.pct_literate = pop > 0 ? (literate / pop) * 100 : 0;
 			}
 			return { ...f, properties: p };
 		});
@@ -1440,6 +1586,15 @@
 			} else if (atype === 'aquifers') {
 				const raw = pickProp(p, ['aquifer', 'Major_Aqui', 'aquifers']);
 				p[column] = raw != null ? String(raw) : 'Other';
+			} else if (atype === 'demographics_literacy' || column === 'pct_literate') {
+				const raw = pickProp(p, ['pct_literate', 'Total_Lite', 'total_lite']);
+				if (raw != null && raw !== '') {
+					p[column] = Number(raw);
+				} else {
+					const pop = Number(pickProp(p, ['Total_Popu', 'total_popu']) ?? 0);
+					const literate = Number(pickProp(p, ['Total_Lite', 'total_lite']) ?? 0);
+					p[column] = pop > 0 ? (literate / pop) * 100 : 0;
+				}
 			}
 
 			return { ...f, properties: p };
@@ -1484,9 +1639,8 @@
 
 		status = `Loading ${layer.name}…`;
 		let data;
-		// Reuse watershed-clipped GeoJSON already fetched for the same S3 key
-		// (e.g. village_boundaries / baseline_population / marginalized_scst).
-		const cacheKey = layer.s3_key || layer.url;
+		// Cache by layer-specific clip URL (shared s3_keys may have different derived columns).
+		const cacheKey = layer.url || layer.id;
 		if (cacheKey && vectorGeoJsonByKey[cacheKey]) {
 			data = vectorGeoJsonByKey[cacheKey];
 		} else {
@@ -1502,10 +1656,7 @@
 			}
 		}
 
-		let features = enrichVillageProperties(
-			data.features ?? [],
-			layer.analysis_type === 'demographics_marginalized' || layer.style_column === 'pct_scst'
-		);
+		let features = enrichVillageProperties(data.features ?? [], layer);
 		features = normalizeVectorFeatures(features, layer);
 		data = { type: 'FeatureCollection', features };
 		layerActiveLegend = {
@@ -1518,32 +1669,60 @@
 		const labelId = `${sourceId}-label`;
 		const beforeId = map.getLayer('watershed-fill') ? 'watershed-fill' : undefined;
 		const isOutline = layer.render_type === 'outline';
+		const isLine = layer.render_type === 'line' || layer.geometry_kind === 'line';
 		const fillColor = isOutline ? '#000000' : vectorFillColor(layer);
 		const labelColumn = layer.label_column || 'Village Na';
+		const fillOpacity = layer.fill_opacity ?? 0.65;
 
 		map.addSource(sourceId, { type: 'geojson', data });
-		map.addLayer(
-			{
-				id: fillId,
-				type: 'fill',
-				source: sourceId,
-				layout: { visibility: 'none' },
-				paint: {
-					'fill-color': fillColor,
-					'fill-opacity': isOutline ? 0 : 0.65
-				}
-			},
-			beforeId
-		);
+		if (!isLine) {
+			map.addLayer(
+				{
+					id: fillId,
+					type: 'fill',
+					source: sourceId,
+					layout: { visibility: 'none' },
+					paint: {
+						'fill-color': fillColor,
+						'fill-opacity': isOutline ? 0 : fillOpacity
+					}
+				},
+				beforeId
+			);
+		}
+		if (isLine && layer.id === 'canals') {
+			map.addLayer(
+				{
+					id: `${lineId}-halo`,
+					type: 'line',
+					source: sourceId,
+					layout: { visibility: 'none' },
+					paint: {
+						'line-color': '#ffffff',
+						'line-width': (layer.line_width ?? 2) + 2.5,
+						'line-opacity': 0.92
+					}
+				},
+				beforeId
+			);
+		}
 		map.addLayer(
 			{
 				id: lineId,
 				type: 'line',
 				source: sourceId,
 				layout: { visibility: 'none' },
-				paint: isOutline
-					? { 'line-color': '#0f172a', 'line-width': 1.25, 'line-opacity': 0.9 }
-					: { 'line-color': '#334155', 'line-width': 0.6, 'line-opacity': 0.5 }
+				paint: isLine
+					? {
+							'line-color': layer.style_column
+								? vectorLineColor(layer)
+								: layer.line_color || '#1c75e9',
+							'line-width': layer.line_width ?? 1.5,
+							'line-opacity': 0.9
+						}
+					: isOutline
+						? { 'line-color': '#0f172a', 'line-width': 1.25, 'line-opacity': 0.9 }
+						: { 'line-color': '#334155', 'line-width': 0.6, 'line-opacity': 0.5 }
 			},
 			beforeId
 		);
@@ -1762,41 +1941,41 @@
 			};
 		});
 		const zoneLayers = [
-			{
+				{
 				id: 'zones-fill',
-				type: 'fill',
+					type: 'fill',
 				source: 'zones',
-				paint: {
+					paint: {
 					'fill-color': ['coalesce', ['get', 'color'], OBSERVATION_ZONE_COLOR],
-					'fill-opacity': 0.4
-				}
-			},
-			{
-				id: 'zones-line',
-				type: 'line',
-				source: 'zones',
-				paint: {
-					'line-color': ['coalesce', ['get', 'color'], OBSERVATION_ZONE_COLOR],
-					'line-width': LINE_WIDTH
-				}
-			},
-			{
-				id: 'zones-label',
-				type: 'symbol',
-				source: 'zones',
-				layout: {
-					'text-field': ['get', 'text'],
-					'text-size': 11,
-					'text-anchor': 'center',
-					'text-allow-overlap': true
+						'fill-opacity': 0.4
+					}
 				},
-				paint: {
-					'text-color': '#ffffff',
+				{
+				id: 'zones-line',
+					type: 'line',
+				source: 'zones',
+					paint: {
+					'line-color': ['coalesce', ['get', 'color'], OBSERVATION_ZONE_COLOR],
+						'line-width': LINE_WIDTH
+					}
+				},
+				{
+				id: 'zones-label',
+					type: 'symbol',
+				source: 'zones',
+					layout: {
+						'text-field': ['get', 'text'],
+						'text-size': 11,
+						'text-anchor': 'center',
+						'text-allow-overlap': true
+					},
+					paint: {
+						'text-color': '#ffffff',
 					'text-halo-color': ['coalesce', ['get', 'color'], OBSERVATION_ZONE_COLOR],
-					'text-halo-width': 8,
-					'text-halo-blur': 0
+						'text-halo-width': 8,
+						'text-halo-blur': 0
+					}
 				}
-			}
 		];
 		removeGeoJsonSource('zones', ['zones-label', 'zones-line', 'zones-fill']);
 		addGeoJsonSource('zones', { type: 'FeatureCollection', features }, zoneLayers, 'id');
@@ -2208,10 +2387,11 @@
 		const meta = secondaryLayers.find((l) => l.id === id);
 		if (meta?.kind === 'vector') {
 			setLayerVisibility(`vec-${id}-fill`, visible);
+			setLayerVisibility(`vec-${id}-line-halo`, visible);
 			setLayerVisibility(`vec-${id}-line`, visible);
 			setLayerVisibility(`vec-${id}-label`, visible);
 		} else {
-			setLayerVisibility(`cog-${id}`, visible);
+		setLayerVisibility(`cog-${id}`, visible);
 		}
 	}
 
@@ -2253,52 +2433,49 @@
 		<div class="min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-4">
 			{#if overlayLayers.length > 0}
 				<h3 class="sidebar-section-title font-headline text-[11px] font-semibold tracking-[0.08em] text-brand-navy/55 uppercase">
-					Village boundaries
-				</h3>
+					Overlays
+			</h3>
 				<div class="layer-list mb-5 flex flex-col gap-1.5">
 					{#each overlayLayers as layer (layer.id)}
-						<div
+				<div
 							class="layer-row"
-							class:layer-row-selected={selectedLayer?.kind === 'secondary' && selectedLayer.id === layer.id}
+					class:layer-row-selected={selectedLayer?.kind === 'secondary' && selectedLayer.id === layer.id}
 							role="listitem"
-						>
-							<button
-								type="button"
+				>
+					<button
+						type="button"
 								class="layer-eye"
 								disabled={layer.status === 'error' || layer.map_render === false}
 								title={layer.map_render === false ? 'Map rendering disabled — dataset too large' : undefined}
-								aria-label={(cogVisibility[layer.id] ?? false) ? 'Hide village boundaries' : 'Show village boundaries'}
+								aria-label={(cogVisibility[layer.id] ?? false) ? `Hide ${layer.name}` : `Show ${layer.name}`}
 								onclick={async (e) => {
 									e.stopPropagation();
 									const next = !(cogVisibility[layer.id] ?? false);
-									if (next && layer.kind === 'vector' && layer.map_render !== false) {
-										await ensureVectorLayerOnMap(layer);
-									}
-									toggleCog(layer.id, next);
+									await setOverlayVisibility(layer, next);
 								}}
 							>
 								{#if cogVisibility[layer.id] ?? false}
-									<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
-										<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-										<circle cx="12" cy="12" r="3" />
-									</svg>
-								{:else}
-									<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
-										<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
-										<path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
-										<path d="M1 1l22 22" />
-										<path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
-									</svg>
-								{/if}
-							</button>
-							<button
-								type="button"
+							<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
+								<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+								<circle cx="12" cy="12" r="3" />
+							</svg>
+						{:else}
+							<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
+								<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+								<path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+								<path d="M1 1l22 22" />
+								<path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
+							</svg>
+						{/if}
+					</button>
+					<button
+						type="button"
 								class="layer-label"
-								title={layer.name}
-								onclick={() => selectLayer({ kind: 'secondary', id: layer.id })}
-							>
-								{layer.name}
-							</button>
+						title={layer.name}
+						onclick={() => selectLayer({ kind: 'secondary', id: layer.id })}
+					>
+						{layer.name}
+					</button>
 						</div>
 						{#if layer.error}
 							<p class="m-0 mb-1 truncate px-2 text-xs text-red-600" title={layer.error}>{layer.error}</p>
@@ -2331,11 +2508,11 @@
 										>
 											{layer.name}
 										</button>
-									</div>
-									{#if layer.error}
+				</div>
+				{#if layer.error}
 										<p class="m-0 mb-1 truncate px-2 text-xs text-red-600" title={layer.error}>{layer.error}</p>
-									{/if}
-								{/each}
+				{/if}
+			{/each}
 							</div>
 						</div>
 					{/each}
@@ -2346,23 +2523,23 @@
 				Primary layers
 			</h3>
 			<div class="layer-list flex flex-col gap-1.5">
-				{#each primaryLayerOrder as layerId, index (layerId)}
-					<div
+			{#each primaryLayerOrder as layerId, index (layerId)}
+				<div
 						class="layer-row"
 						class:layer-row-selected={activePrimaryTab === layerId && selectedLayer?.kind === 'primary'}
-						class:layer-row-dragging={dragReorder.category === 'primary' && dragReorder.index === index}
+					class:layer-row-dragging={dragReorder.category === 'primary' && dragReorder.index === index}
 						class:layer-row-over={dragReorder.category === 'primary' && dragOverIndex === index && dragReorder.index !== index}
 						draggable="true"
 						role="listitem"
 						ondragstart={(e) => onRowDragStart('primary', index, e)}
 						ondragend={endLayerDrag}
-						ondragover={onLayerDragOver}
+					ondragover={onLayerDragOver}
 						ondragenter={(e) => onLayerDragEnter('primary', index, e)}
-						ondrop={(e) => onLayerDrop('primary', index, e)}
-					>
-						{#if layerId === 'observation-zones'}
-							<button
-								type="button"
+					ondrop={(e) => onLayerDrop('primary', index, e)}
+				>
+					{#if layerId === 'observation-zones'}
+						<button
+							type="button"
 								data-no-drag
 								class="layer-eye"
 								aria-label={showZonesLayer ? 'Hide zones on map' : 'Show zones on map'}
@@ -2372,30 +2549,30 @@
 								}}
 							>
 								{#if showZonesLayer}
-									<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
-										<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-										<circle cx="12" cy="12" r="3" />
-									</svg>
-								{:else}
-									<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
-										<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
-										<path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
-										<path d="M1 1l22 22" />
-										<path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
-									</svg>
-								{/if}
-							</button>
-							<button
-								type="button"
+								<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
+									<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+									<circle cx="12" cy="12" r="3" />
+								</svg>
+							{:else}
+								<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
+									<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+									<path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+									<path d="M1 1l22 22" />
+									<path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
+								</svg>
+							{/if}
+						</button>
+						<button
+							type="button"
 								class="layer-label layer-label-icon"
 								onclick={() => selectPrimaryTab('observation-zones')}
-							>
-								<ObservationZoneIcon size="sm" />
-								<span class="truncate">{PRIMARY_LAYER_LABELS[layerId]}</span>
-							</button>
+						>
+							<ObservationZoneIcon size="sm" />
+							<span class="truncate">{PRIMARY_LAYER_LABELS[layerId]}</span>
+						</button>
 						{:else if layerId === 'field-notes'}
-							<button
-								type="button"
+						<button
+							type="button"
 								data-no-drag
 								class="layer-eye"
 								aria-label={showFieldNotesLayer ? 'Hide notes on map' : 'Show notes on map'}
@@ -2403,29 +2580,29 @@
 									e.stopPropagation();
 									toggleFieldNotesLayer(!showFieldNotesLayer);
 								}}
-							>
-								{#if showFieldNotesLayer}
-									<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
-										<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-										<circle cx="12" cy="12" r="3" />
-									</svg>
-								{:else}
-									<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
-										<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
-										<path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
-										<path d="M1 1l22 22" />
-										<path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
-									</svg>
-								{/if}
-							</button>
-							<button
-								type="button"
+						>
+							{#if showFieldNotesLayer}
+								<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
+									<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+									<circle cx="12" cy="12" r="3" />
+								</svg>
+							{:else}
+								<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
+									<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+									<path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+									<path d="M1 1l22 22" />
+									<path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
+								</svg>
+							{/if}
+						</button>
+						<button
+							type="button"
 								class="layer-label layer-label-icon"
 								onclick={() => selectPrimaryTab('field-notes')}
-							>
-								<FieldNoteIcon size="sm" />
-								<span class="truncate">{PRIMARY_LAYER_LABELS[layerId]}</span>
-							</button>
+						>
+							<FieldNoteIcon size="sm" />
+							<span class="truncate">{PRIMARY_LAYER_LABELS[layerId]}</span>
+						</button>
 						{:else if layerId === 'hypotheses'}
 							<span class="layer-eye-spacer" aria-hidden="true"></span>
 							<button
@@ -2439,16 +2616,16 @@
 						{/if}
 						<span class="layer-drag-handle" aria-hidden="true" title="Drag to reorder">
 							<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="h-4 w-4">
-								<circle cx="9" cy="6" r="1.4" fill="currentColor" />
-								<circle cx="15" cy="6" r="1.4" fill="currentColor" />
-								<circle cx="9" cy="12" r="1.4" fill="currentColor" />
-								<circle cx="15" cy="12" r="1.4" fill="currentColor" />
-								<circle cx="9" cy="18" r="1.4" fill="currentColor" />
-								<circle cx="15" cy="18" r="1.4" fill="currentColor" />
-							</svg>
+							<circle cx="9" cy="6" r="1.4" fill="currentColor" />
+							<circle cx="15" cy="6" r="1.4" fill="currentColor" />
+							<circle cx="9" cy="12" r="1.4" fill="currentColor" />
+							<circle cx="15" cy="12" r="1.4" fill="currentColor" />
+							<circle cx="9" cy="18" r="1.4" fill="currentColor" />
+							<circle cx="15" cy="18" r="1.4" fill="currentColor" />
+						</svg>
 						</span>
-					</div>
-				{/each}
+				</div>
+			{/each}
 			</div>
 		</div>
 	</aside>
@@ -2520,11 +2697,11 @@
 				{#if layer?.render_type === 'continuous' || mapLegendItems[0]?.continuous}
 					<div
 						class="mb-1 h-2.5 w-full rounded border border-gray-200"
-						style="background: linear-gradient(90deg, #2c7bb6, #abd9e9, #ffffbf, #fdae61, #d7191c)"
+						style="background: {continuousLegendGradient(layer)}"
 					></div>
-					<div class="flex justify-between text-[10px] text-gray-500">
-						<span>Low</span>
-						<span>High</span>
+					<div class="mb-2 flex justify-between text-[10px] text-gray-500">
+						<span>{continuousLegendLabels(layer).low}</span>
+						<span>{continuousLegendLabels(layer).high}</span>
 					</div>
 				{:else}
 					<ul class="m-0 list-none space-y-1.5 p-0">
@@ -2539,7 +2716,7 @@
 						{/each}
 					</ul>
 				{/if}
-			</div>
+				</div>
 		{/if}
 
 		{#if mapMode === 'flat'}
@@ -2844,7 +3021,7 @@
 						<div class="p-4">
 							<div class="mb-3">
 								<span class="mb-0.5 block text-xs font-semibold text-gray-500 uppercase">Observations</span>
-								<p class="m-0 text-sm leading-relaxed whitespace-pre-wrap text-brand-navy">
+							<p class="m-0 text-sm leading-relaxed whitespace-pre-wrap text-brand-navy">
 									{selectedZone.observations || '—'}
 								</p>
 							</div>
@@ -3287,54 +3464,54 @@
 									<h3 class="m-0 text-base font-semibold">
 										{selectedFieldNote.title?.trim() || 'Field note'}
 									</h3>
-									<div class="flex shrink-0 items-center gap-1">
-										<div class="relative">
+							<div class="flex shrink-0 items-center gap-1">
+								<div class="relative">
+									<button
+										type="button"
+										class="flex h-8 w-8 cursor-pointer items-center justify-center rounded border-0 bg-transparent text-gray-600 hover:bg-gray-100"
+										aria-label="More actions"
+										onclick={() => (showSelectedFieldNoteMenu = !showSelectedFieldNoteMenu)}
+									>
+										<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="h-5 w-5">
+											<circle cx="12" cy="5" r="1.5" />
+											<circle cx="12" cy="12" r="1.5" />
+											<circle cx="12" cy="19" r="1.5" />
+										</svg>
+									</button>
+									{#if showSelectedFieldNoteMenu}
+										<div
+											class="absolute right-0 z-20 mt-1 min-w-28 overflow-hidden rounded border border-gray-200 bg-white shadow-lg"
+										>
 											<button
 												type="button"
-												class="flex h-8 w-8 cursor-pointer items-center justify-center rounded border-0 bg-transparent text-gray-600 hover:bg-gray-100"
-												aria-label="More actions"
-												onclick={() => (showSelectedFieldNoteMenu = !showSelectedFieldNoteMenu)}
+												class="block w-full cursor-pointer border-0 bg-white px-3 py-2 text-left text-sm hover:bg-gray-50"
+												onclick={startEditSelectedFieldNote}
 											>
-												<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="h-5 w-5">
-													<circle cx="12" cy="5" r="1.5" />
-													<circle cx="12" cy="12" r="1.5" />
-													<circle cx="12" cy="19" r="1.5" />
-												</svg>
+												Edit
 											</button>
-											{#if showSelectedFieldNoteMenu}
-												<div
-													class="absolute right-0 z-20 mt-1 min-w-28 overflow-hidden rounded border border-gray-200 bg-white shadow-lg"
-												>
-													<button
-														type="button"
-														class="block w-full cursor-pointer border-0 bg-white px-3 py-2 text-left text-sm hover:bg-gray-50"
-														onclick={startEditSelectedFieldNote}
-													>
-														Edit
-													</button>
-													<button
-														type="button"
-														class="block w-full cursor-pointer border-0 bg-white px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
-														onclick={deleteSelectedFieldNote}
-													>
-														Delete
-													</button>
-												</div>
-											{/if}
+											<button
+												type="button"
+												class="block w-full cursor-pointer border-0 bg-white px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+												onclick={deleteSelectedFieldNote}
+											>
+												Delete
+											</button>
 										</div>
-										<button
-											type="button"
-											class="cursor-pointer rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-600 hover:bg-gray-50"
-											onclick={closeSelectedFieldNote}
-										>
-											Close
-										</button>
-									</div>
+									{/if}
 								</div>
-								<div class="mb-3">
+								<button
+									type="button"
+									class="cursor-pointer rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-600 hover:bg-gray-50"
+									onclick={closeSelectedFieldNote}
+								>
+									Close
+								</button>
+							</div>
+						</div>
+						<div class="mb-3">
 									<span class="mb-0.5 block text-xs font-semibold text-gray-500 uppercase">Notes</span>
-									<p class="m-0 text-sm whitespace-pre-wrap">{selectedFieldNote.text || '—'}</p>
-								</div>
+							<p class="m-0 text-sm whitespace-pre-wrap">{selectedFieldNote.text || '—'}</p>
+						</div>
 								{#if selectedFieldNote.hypothesis_id}
 									<div class="mb-3">
 										<span class="mb-0.5 block text-xs font-semibold text-gray-500 uppercase"
@@ -3346,14 +3523,14 @@
 											)}
 										</p>
 									</div>
-								{/if}
-								{#if selectedFieldNote.audio_path}
-									{@const audioUrl = fieldNoteMediaUrl(selectedFieldNote.audio_path)}
-									{#if audioUrl}
-										<audio controls src={audioUrl} class="w-full"></audio>
-									{/if}
-								{/if}
-							</div>
+						{/if}
+						{#if selectedFieldNote.audio_path}
+							{@const audioUrl = fieldNoteMediaUrl(selectedFieldNote.audio_path)}
+							{#if audioUrl}
+								<audio controls src={audioUrl} class="w-full"></audio>
+							{/if}
+						{/if}
+					</div>
 							{#if thumbUrl}
 								<button
 									type="button"

@@ -1,8 +1,18 @@
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Any, Literal
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.shared.auth import get_current_user
-from app.shared.watersheds import lookup_watershed
+from app.shared.watersheds import (
+    custom_aoi_from_geometry,
+    list_village_districts,
+    list_village_states,
+    list_villages_for_district,
+    lookup_watershed,
+    resolve_village_watersheds,
+    search_villages,
+)
 
 router = APIRouter()
 
@@ -12,12 +22,114 @@ class WatershedLookup(BaseModel):
     lat: float = Field(..., ge=-90, le=90)
 
 
+class FromVillageBody(BaseModel):
+    village_id: str | None = None
+    geometry: dict[str, Any] | None = None
+
+
+class FromGeometryBody(BaseModel):
+    geometry: dict[str, Any]
+    name: str | None = Field(default=None, max_length=200)
+
+
 @router.post("/lookup")
 def watershed_lookup(body: WatershedLookup, user: dict = Depends(get_current_user)):
     """Return the watershed polygon containing the given coordinate."""
     try:
-        return lookup_watershed(body.lng, body.lat)
+        result = lookup_watershed(body.lng, body.lat)
+        result.setdefault("parts", [])
+        result.setdefault("source", "point")
+        result.setdefault("seed_lng", body.lng)
+        result.setdefault("seed_lat", body.lat)
+        return result
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
     except Exception as exc:
         raise HTTPException(502, f"Watershed lookup failed: {exc}") from exc
+
+
+@router.get("/villages/search")
+def villages_search(
+    q: str = Query(..., min_length=4, max_length=100),
+    limit: int = Query(20, ge=1, le=50),
+    bbox: str | None = Query(
+        None,
+        description="Ignored (kept for clients); search uses a national name index",
+    ),
+    user: dict = Depends(get_current_user),
+):
+    """National village typeahead (cached name index from vector/villages.fgb). Min 4 chars."""
+    del bbox
+    try:
+        hits = search_villages(q, limit=limit)
+        return {"villages": hits}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, f"Village search failed: {exc}") from exc
+
+
+@router.get("/villages/states")
+def villages_states(user: dict = Depends(get_current_user)):
+    """List distinct states from the village name index."""
+    try:
+        return {"states": list_village_states()}
+    except Exception as exc:
+        raise HTTPException(502, f"Failed to list states: {exc}") from exc
+
+
+@router.get("/villages/districts")
+def villages_districts(
+    state: str = Query(..., min_length=1, max_length=120),
+    user: dict = Depends(get_current_user),
+):
+    """List districts for a state."""
+    try:
+        return {"districts": list_village_districts(state)}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, f"Failed to list districts: {exc}") from exc
+
+
+@router.get("/villages/by-district")
+def villages_by_district(
+    state: str = Query(..., min_length=1, max_length=120),
+    district: str = Query(..., min_length=1, max_length=120),
+    q: str = Query("", max_length=100),
+    limit: int = Query(500, ge=1, le=2000),
+    user: dict = Depends(get_current_user),
+):
+    """List villages in a state + district (optional name filter)."""
+    try:
+        return {
+            "villages": list_villages_for_district(state, district, q=q, limit=limit)
+        }
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, f"Failed to list villages: {exc}") from exc
+
+
+@router.post("/from-village")
+def watersheds_from_village(body: FromVillageBody, user: dict = Depends(get_current_user)):
+    """Union all Level-12 basins intersecting a village polygon."""
+    if not body.village_id and not body.geometry:
+        raise HTTPException(400, "Provide village_id or geometry")
+    try:
+        return resolve_village_watersheds(village_id=body.village_id, geometry=body.geometry)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, f"Village watershed resolve failed: {exc}") from exc
+
+
+@router.post("/from-geometry")
+def watersheds_from_geometry(body: FromGeometryBody, user: dict = Depends(get_current_user)):
+    """Treat an uploaded polygon as the clip AOI (custom watershed)."""
+    try:
+        return custom_aoi_from_geometry(body.geometry, name=body.name)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, f"Custom AOI validation failed: {exc}") from exc

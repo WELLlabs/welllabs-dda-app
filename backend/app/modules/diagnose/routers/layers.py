@@ -65,6 +65,12 @@ class ChoroplethStopItem(BaseModel):
     color: str
 
 
+class CompanionItem(BaseModel):
+    id: str
+    line_color: str | None = None
+    line_width: float | None = None
+
+
 class CogLayer(BaseModel):
     id: str
     name: str
@@ -73,6 +79,7 @@ class CogLayer(BaseModel):
     tiles_url: str
     info_url: str
     render_type: str | None = None
+    colormap: str | None = None
     legend: list[LegendItem] = []
     bounds: list[float] | None = None
     status: str = "unknown"
@@ -83,6 +90,9 @@ class CogLayer(BaseModel):
     field_check: str = ""
     analysis_type: str | None = None
     category: str | None = None
+    tile_strategy: str = "tiles"
+    watershed_image_url: str | None = None
+    companions: list[CompanionItem] = []
 
 
 class LayersResponse(BaseModel):
@@ -98,6 +108,10 @@ class VectorLayer(BaseModel):
     render_type: str
     style_column: str | None = None
     label_column: str | None = None
+    line_color: str | None = None
+    line_width: float | None = None
+    fill_opacity: float | None = None
+    geometry_kind: str | None = None
     legend: list[LegendItem] = []
     choropleth_stops: list[ChoroplethStopItem] = []
     interpretation: str = ""
@@ -106,6 +120,7 @@ class VectorLayer(BaseModel):
     field_check: str = ""
     analysis_type: str | None = None
     map_render: bool = True
+    overlay: bool = False
     category: str | None = None
     status: str = "ok"
     error: str | None = None
@@ -400,6 +415,100 @@ def _render_clipped_tile(
     return masked.render(img_format="PNG", add_mask=True)
 
 
+_WATERSHED_IMAGE_CACHE: OrderedDict[tuple[str, str], bytes] = OrderedDict()
+_WATERSHED_IMAGE_CACHE_MAX = 32
+
+
+def _watershed_image_cache_get(key: tuple[str, str]) -> bytes | None:
+    if key in _WATERSHED_IMAGE_CACHE:
+        _WATERSHED_IMAGE_CACHE.move_to_end(key)
+        return _WATERSHED_IMAGE_CACHE[key]
+    return None
+
+
+def _watershed_image_cache_set(key: tuple[str, str], data: bytes) -> None:
+    _WATERSHED_IMAGE_CACHE[key] = data
+    _WATERSHED_IMAGE_CACHE.move_to_end(key)
+    while len(_WATERSHED_IMAGE_CACHE) > _WATERSHED_IMAGE_CACHE_MAX:
+        _WATERSHED_IMAGE_CACHE.popitem(last=False)
+
+
+def _render_watershed_image(
+    http_url: str,
+    feature: dict,
+    layer_cfg: LayerConfig | None,
+) -> bytes:
+    """Single PNG for the project watershed bbox — used for large non-COG national rasters."""
+    from rio_tiler.colormap import cmap as rio_cmaps
+
+    geom = feature.get("geometry", feature)
+    ws = shp_shape(geom)
+    minx, miny, maxx, maxy = ws.bounds
+
+    with Reader(http_url) as src:
+        img = src.part([minx, miny, maxx, maxy], indexes=[1], max_size=512)
+
+    if img.array.size == 0:
+        return _TRANSPARENT_TILE
+
+    nodata = layer_cfg.nodata if layer_cfg else None
+    if img.alpha_mask is not None:
+        base = img.alpha_mask > 0
+    else:
+        base = np.ones(img.array[0].shape, dtype=bool)
+        if nodata is not None:
+            base &= img.array[0] != nodata
+
+    ws_mask = geometry_mask(
+        [geom],
+        out_shape=(img.height, img.width),
+        transform=img.transform,
+        invert=True,
+        all_touched=True,
+    )
+    valid = base & ws_mask
+    if not valid.any():
+        return _TRANSPARENT_TILE
+
+    rio_cmap = layer_cfg.rio_colormap() if layer_cfg and layer_cfg.render_type == "categorical" else None
+    continuous_cmap = None
+    if layer_cfg and layer_cfg.render_type == "continuous":
+        try:
+            continuous_cmap = rio_cmaps.get(str(layer_cfg.continuous.get("colormap") or "viridis"))
+        except Exception:
+            continuous_cmap = None
+
+    if continuous_cmap is not None:
+        arr = np.asarray(img.array[0], dtype=np.float64)
+        if nodata is not None:
+            arr = np.where(arr == nodata, np.nan, arr)
+        valid_px = arr[valid]
+        valid_px = valid_px[np.isfinite(valid_px)]
+        if valid_px.size == 0:
+            return _TRANSPARENT_TILE
+        lo = float(np.percentile(valid_px, 2))
+        hi = float(np.percentile(valid_px, 98))
+        if hi <= lo:
+            hi = lo + 1.0
+        scaled = np.clip((arr - lo) / (hi - lo) * 255.0, 0, 255)
+        scaled = np.where(np.isfinite(scaled), scaled, 0).astype(np.uint8)
+        img = ImageData(
+            scaled[np.newaxis, :, :],
+            alpha_mask=img.alpha_mask,
+            crs=img.crs,
+            bounds=img.bounds,
+        )
+        base = np.ones(scaled.shape, dtype=bool)
+
+    alpha = np.where(valid, 255, 0).astype(np.uint8)
+    masked = ImageData(img.array, alpha_mask=alpha, crs=img.crs, bounds=img.bounds)
+    if rio_cmap:
+        return masked.render(img_format="PNG", colormap=rio_cmap, add_mask=True)
+    if continuous_cmap:
+        return masked.render(img_format="PNG", colormap=continuous_cmap, add_mask=True)
+    return masked.render(img_format="PNG", add_mask=True)
+
+
 def _intersect_bounds(cog_bounds: list[float] | None, clip: list[float] | None) -> list[float] | None:
     if not clip or len(clip) != 4:
         return cog_bounds
@@ -470,11 +579,25 @@ def _build_layer(
     cog_url = f"s3://{settings.aws_s3_bucket}/{key}"
     legend = _legend_items(layer_cfg)
     render_type = layer_cfg.render_type if layer_cfg else None
+    colormap = None
+    if layer_cfg and layer_cfg.render_type == "continuous":
+        colormap = str(layer_cfg.continuous.get("colormap") or "terrain")
     meaning = (layer_cfg.meaning or layer_cfg.interpretation) if layer_cfg else ""
     uncertainty = layer_cfg.uncertainty if layer_cfg else ""
     field_check = layer_cfg.field_check if layer_cfg else ""
     analysis_type = layer_cfg.analysis_type if layer_cfg else None
     category = layer_cfg.category if layer_cfg else None
+    tile_strategy = layer_cfg.tile_strategy if layer_cfg else "tiles"
+    companions = [
+        CompanionItem(id=c.id, line_color=c.line_color, line_width=c.line_width)
+        for c in (layer_cfg.companions if layer_cfg else ())
+    ]
+    watershed_image_url = None
+    if tile_strategy == "watershed_image" and project_id:
+        watershed_image_url = (
+            f"{settings.api_public_prefix}/diagnose/layers/cog/{layer_id}/watershed-image"
+            f"?project_id={quote(project_id, safe='')}"
+        )
 
     try:
         _presigned_url_cached(key)
@@ -488,6 +611,7 @@ def _build_layer(
             tiles_url="",
             info_url="",
             render_type=render_type,
+            colormap=colormap,
             legend=legend,
             status="error",
             error=f"{err.get('Code', 'S3Error')}: {err.get('Message', str(exc))}",
@@ -497,6 +621,9 @@ def _build_layer(
             field_check=field_check,
             analysis_type=analysis_type,
             category=category,
+            tile_strategy=tile_strategy,
+            watershed_image_url=watershed_image_url,
+            companions=companions,
         )
 
     tiles_url = f"{settings.api_public_prefix}/diagnose/layers/cog/{layer_id}/tiles/WebMercatorQuad/{{z}}/{{x}}/{{y}}{_tile_query(bbox, project_id)}"
@@ -508,6 +635,7 @@ def _build_layer(
         tiles_url=tiles_url,
         info_url="",
         render_type=render_type,
+        colormap=colormap,
         legend=legend,
         interpretation=meaning,
         meaning=meaning,
@@ -515,6 +643,9 @@ def _build_layer(
         field_check=field_check,
         analysis_type=analysis_type,
         category=category,
+        tile_strategy=tile_strategy,
+        watershed_image_url=watershed_image_url,
+        companions=companions,
     )
 
 
@@ -799,6 +930,49 @@ async def list_cog_layers(
     return LayersResponse(cog_layers=layers, titiler_url=settings.titiler_public_url)
 
 
+@router.get("/cog/{layer_id}/watershed-image")
+async def cog_watershed_image(
+    layer_id: str,
+    project_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """Return one colormap PNG clipped to the project watershed (for large non-COG rasters)."""
+    key = _key_from_id(layer_id)
+    if not key:
+        raise HTTPException(404, "Layer not found")
+    layer_cfg = get_layer_for_key(key)
+    if not layer_cfg or layer_cfg.tile_strategy != "watershed_image":
+        raise HTTPException(400, "Layer does not use watershed image rendering")
+
+    assert_diagnosis_access(user["id"], project_id)
+    feature = _watershed_feature(project_id)
+
+    cache_key = (key, project_id)
+    cached = _watershed_image_cache_get(cache_key)
+    if cached is not None:
+        return Response(
+            content=cached,
+            media_type="image/png",
+            headers={"Cache-Control": "private, max-age=3600"},
+        )
+
+    try:
+        http_url = _presigned_url_cached(key)
+        content = await asyncio.to_thread(_render_watershed_image, http_url, feature, layer_cfg)
+    except ClientError as exc:
+        err = exc.response.get("Error", {})
+        raise HTTPException(403, f"S3 error: {err.get('Message')}") from exc
+    except Exception as exc:
+        raise HTTPException(500, f"Watershed image failed: {exc}") from exc
+
+    _watershed_image_cache_set(cache_key, content)
+    return Response(
+        content=content,
+        media_type="image/png",
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
+
+
 def _parse_bbox_param(bbox: str | None) -> list[float] | None:
     if not bbox:
         return None
@@ -915,6 +1089,10 @@ def _build_vector_layer(cfg: LayerConfig) -> VectorLayer:
             render_type=cfg.render_type,
             style_column=cfg.style_column,
             label_column=cfg.label_column,
+            line_color=cfg.line_color,
+            line_width=cfg.line_width,
+            fill_opacity=cfg.fill_opacity,
+            geometry_kind=cfg.geometry_kind,
             legend=legend,
             choropleth_stops=stops,
             interpretation=meaning,
@@ -923,6 +1101,7 @@ def _build_vector_layer(cfg: LayerConfig) -> VectorLayer:
             field_check=cfg.field_check,
             analysis_type=cfg.analysis_type,
             map_render=cfg.map_render,
+            overlay=cfg.overlay,
             category=cfg.category,
         )
     except ClientError as exc:
@@ -935,6 +1114,10 @@ def _build_vector_layer(cfg: LayerConfig) -> VectorLayer:
             render_type=cfg.render_type,
             style_column=cfg.style_column,
             label_column=cfg.label_column,
+            line_color=cfg.line_color,
+            line_width=cfg.line_width,
+            fill_opacity=cfg.fill_opacity,
+            geometry_kind=cfg.geometry_kind,
             legend=legend,
             choropleth_stops=stops,
             interpretation=meaning,
@@ -943,6 +1126,7 @@ def _build_vector_layer(cfg: LayerConfig) -> VectorLayer:
             field_check=cfg.field_check,
             analysis_type=cfg.analysis_type,
             map_render=cfg.map_render,
+            overlay=cfg.overlay,
             category=cfg.category,
             status="error",
             error=f"{err.get('Code', 'S3Error')}: {err.get('Message', str(exc))}",
@@ -994,7 +1178,7 @@ async def clipped_vector_layer_data(
 
     try:
         geojson = await asyncio.to_thread(
-            clipped_vector_geojson_for_watershed, cfg.s3_key, vector_url, geom
+            clipped_vector_geojson_for_watershed, cfg.s3_key, vector_url, geom, cfg
         )
     except Exception as exc:
         raise HTTPException(500, f"Clip failed: {exc}") from exc
@@ -1027,7 +1211,7 @@ def _run_layer_analysis_sync(cfg: LayerConfig, geom: dict):
         return AnalysisResult(stats={}, status="ok")
 
     # COG layers with implemented raster analysis
-    raster_analysis = {"dem", "jrc_occurrence", "jrc_transitions"}
+    raster_analysis = {"dem", "jrc_occurrence", "jrc_transitions", "continuous_raster"}
     if cfg.source == "cog" and cfg.analysis_type not in raster_analysis:
         # LULC etc. — catalog text until zonal class-area exists
         return AnalysisResult(stats={"Status": "See map classes in the watershed"}, status="ok")
@@ -1063,6 +1247,8 @@ async def batch_layer_analysis(
     for cfg in get_catalog().layers:
         # Skip outline overlays (e.g. village boundaries) — no thematic evidence
         if cfg.render_type == "outline" or not cfg.analysis_type:
+            continue
+        if not cfg.analysis_batch:
             continue
         if cfg.source == "cog" and cfg.s3_key in enabled_cog:
             configs.append(cfg)
