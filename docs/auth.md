@@ -30,7 +30,7 @@ Set these in `backend/.env` (see `.env.example`):
 | Variable | Purpose |
 |----------|---------|
 | `AUTH_JWT_SECRET` | JWT signing secret (≥32 characters recommended) |
-| `FRONTEND_ORIGIN` | Primary CORS / email-link origin (`http://localhost:5173`) |
+| `FRONTEND_ORIGIN` | Primary CORS / email-link origin; **also sets Google OAuth redirect URI** on deployed servers (`{origin}/wst/backend/accounts/auth/google/callback`) |
 | `SESSION_COOKIE_SECURE` | `true` behind HTTPS in production |
 | `BREVO_API_KEY` / `BREVO_SENDER_EMAIL` / `BREVO_SENDER_NAME` | Transactional email (verify / reset / welcome) |
 | `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` | Optional Google button |
