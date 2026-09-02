@@ -145,7 +145,7 @@ if frontend_origin_host:
     cfg["FRONTEND_ORIGIN"] = frontend_origin_host
 
 defaults = {
-    "ORIGIN": frontend_origin_host or "https://ai.welllabs.org",
+    "ORIGIN": frontend_origin_host,
     "FRONTEND_BASE_PATH": "/wst",
     "API_URL": "http://127.0.0.1:8080",
     "API_PUBLIC_URL": "http://127.0.0.1:8080",
@@ -166,6 +166,7 @@ Path(str(shared_env) + ".frontend_origin_host").write_text(
 PY
 
 FRONTEND_ORIGIN_HOST=$(tr -d '\r\n' < "${SHARED_ENV}.frontend_origin_host")
+FRONTEND_HOST=$(echo "${FRONTEND_ORIGIN_HOST}" | sed -E 's#^https?://##; s#/.*$##')
 rm -f "${SHARED_ENV}.frontend_origin_host"
 # Secure: only root can read it
 chmod 600 "${SHARED_ENV}"
@@ -307,7 +308,7 @@ if [ ! -f /etc/ssl/welllabs/cert.pem ] || [ ! -f /etc/ssl/welllabs/key.pem ]; th
   openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
     -keyout /etc/ssl/welllabs/key.pem \
     -out    /etc/ssl/welllabs/cert.pem \
-    -subj   "/CN=ai.welllabs.org"
+    -subj "/CN=${FRONTEND_HOST}"
   if [ ! -f /etc/ssl/welllabs/cert.pem ]; then
     echo "ERROR: openssl failed to generate certificate — aborting"
     exit 1
