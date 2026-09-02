@@ -11,7 +11,7 @@ fi
 # ──────────────────────────────────────
 # Retry loop — hit FastAPI /health through nginx
 # ──────────────────────────────────────
-MAX_RETRIES=30
+MAX_RETRIES=45
 RETRY_INTERVAL=5
 HTTP_CODE=000
 HEALTH_BODY=""
