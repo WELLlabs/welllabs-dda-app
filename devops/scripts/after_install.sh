@@ -302,6 +302,7 @@ echo "Installing Nginx & systemd configs..."
 # Cloudflare connects to origin on port 443 (SSL mode = Full / Full Strict).
 # We need nginx to listen on 443; generate a long-lived self-signed cert if one
 # doesn't already exist.  Cloudflare "Full" mode accepts self-signed certs.
+# cp "$RELEASE_DIR/devops/nginx/welllabs.conf" /etc/nginx/conf.d/welllabs.conf
 mkdir -p /etc/ssl/welllabs
 if [ ! -f /etc/ssl/welllabs/cert.pem ] || [ ! -f /etc/ssl/welllabs/key.pem ]; then
   echo "Generating self-signed TLS certificate for origin port 443..."
@@ -319,25 +320,15 @@ else
   echo "  ✓ Existing TLS certificate found — skipping generation."
 fi
 
-# ── Comprehensive nginx clean-slate ──────────────────────────────────────────
-# Old deployments may have left server blocks in many places:
-#   • /etc/nginx/conf.d/*.conf
-#   • /etc/nginx/sites-enabled/*  (symlinks)
-#   • /etc/nginx/nginx.conf        (inline http{} server{} stanzas)
-#   • /etc/nginx/sites-available/* (conf files referenced by broken symlinks)
-#
-# We overwrite nginx.conf with a minimal skeleton that ONLY pulls in our single
-# welllabs.conf, then nuke every other server-block location.  This prevents
-# any stale "server_name ai.welllabs.org;" block from shadowing our rules.
+# ── Nginx nginx.conf skeleton (always rewritten — eliminates stale server blocks)
+# nginx.conf is a clean skeleton that ONLY includes welllabs.conf.
+# The welllabs.conf site config is PRESERVED across deploys (see below).
 
-cp /etc/nginx/conf.d/welllabs.conf /etc/nginx/conf.d/welllabs.conf.bak 2>/dev/null || true
-
-# Remove conf.d fragments and sites-enabled symlinks
-rm -f /etc/nginx/conf.d/*.conf
+# Remove stale conf.d fragments and sites-enabled symlinks (but NOT welllabs.conf)
+find /etc/nginx/conf.d/ -name '*.conf' ! -name 'welllabs.conf' -delete 2>/dev/null || true
 rm -f /etc/nginx/sites-enabled/*
 
-# Rewrite nginx.conf to a clean skeleton — eliminates any inline server{} blocks
-# that were baked in by the old deployment and survive the conf.d cleanup above.
+# Rewrite nginx.conf to a clean skeleton
 cat > /etc/nginx/nginx.conf << 'NGINX_MAIN'
 user www-data;
 worker_processes auto;
@@ -376,26 +367,49 @@ http {
 }
 NGINX_MAIN
 
-cp "$RELEASE_DIR/devops/nginx/welllabs.conf" /etc/nginx/conf.d/welllabs.conf
+# ── Nginx site config: PRESERVE across re-deploys ─────────────────────────────
+# Strategy:
+#   • First deploy (no welllabs.conf): install from template, patch LE cert.
+#   • Re-deploys: keep the existing config — it already has the correct cert
+#     paths (Let's Encrypt or self-signed) from the first deploy or manual fix.
+#     Only reload nginx to pick up new app code. No overwriting.
+#
+# Result: SSL cert config survives every pipeline run automatically.
+
+NGINX_CONF=/etc/nginx/conf.d/welllabs.conf
+
+if [ -f "${NGINX_CONF}" ] && nginx -t 2>/dev/null; then
+  echo "  ✓ Existing nginx config is valid — preserving it (not overwriting on redeploy)."
+else
+  echo "  ℹ Installing nginx site config from template (first deploy or broken config)."
+  cp "$RELEASE_DIR/devops/nginx/welllabs.conf" "${NGINX_CONF}"
+
+  # Apply Let's Encrypt cert if available (preferred over self-signed)
+  LE_CERT="/etc/letsencrypt/live/${FRONTEND_HOST}/fullchain.pem"
+  LE_KEY="/etc/letsencrypt/live/${FRONTEND_HOST}/privkey.pem"
+  if [ -f "${LE_CERT}" ] && [ -f "${LE_KEY}" ]; then
+    echo "  ✓ Let's Encrypt cert found for ${FRONTEND_HOST} — patching nginx config."
+    sed -i "s|ssl_certificate[[:space:]][^;]*;|ssl_certificate ${LE_CERT};|" "${NGINX_CONF}"
+    sed -i "s|ssl_certificate_key[[:space:]][^;]*;|ssl_certificate_key ${LE_KEY};|" "${NGINX_CONF}"
+  else
+    echo "  ℹ No Let's Encrypt cert — using self-signed (Cloudflare SSL must be Full, not Full Strict)."
+  fi
+fi
 
 if ! nginx -t; then
-  echo "ERROR: Nginx config invalid — restoring previous config..."
-  if [ -f /etc/nginx/conf.d/welllabs.conf.bak ]; then
-    mv /etc/nginx/conf.d/welllabs.conf.bak /etc/nginx/conf.d/welllabs.conf
-  fi
+  echo "ERROR: Nginx config test failed — aborting."
   exit 1
 fi
-rm -f /etc/nginx/conf.d/welllabs.conf.bak
-echo "Nginx config installed cleanly (nginx.conf rewritten, no legacy server blocks)."
+echo "  ✓ Nginx config OK."
 
-# Start nginx immediately so the origin stays reachable even if ApplicationStart fails.
+# Start/reload nginx
 systemctl enable nginx
 if systemctl is-active --quiet nginx; then
   systemctl reload nginx || systemctl restart nginx
 else
   systemctl start nginx
 fi
-echo "  ✓ Nginx is running after config install."
+echo "  ✓ Nginx is running."
 
 cp "$RELEASE_DIR/devops/systemd/welllabs-backend.service"  /etc/systemd/system/
 cp "$RELEASE_DIR/devops/systemd/welllabs-frontend.service" /etc/systemd/system/
