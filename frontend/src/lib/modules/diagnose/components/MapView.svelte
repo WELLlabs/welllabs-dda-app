@@ -17,6 +17,7 @@
 		fetchBatchLayerAnalysis,
 		fetchObservationZones,
 		fetchVectorLayers,
+		fetchWatershedHierarchy,
 		fieldNoteMediaUrl,
 		fieldNoteThumbnailUrl,
 		updateFieldNote,
@@ -56,6 +57,12 @@
 	];
 
 	const OVERLAY_LAYER_IDS = new Set(['village_boundaries', 'canals', 'drainage']);
+	const WATERSHED_LAYER_ID = 'watershed';
+	const HIERARCHY_DRAW_ORDER = ['basin', 'sub_basin', 'level7', 'micro', 'rivers'];
+	/** @type {string[]} */
+	let hierarchySourceIds = $state([]);
+	/** @type {{ title: string, items: Array<{ label: string, color: string, continuous?: boolean }> }} */
+	let retainedLegend = $state({ title: '', items: [] });
 
 	function isOverlayLayer(layer) {
 		return (
@@ -105,9 +112,13 @@
 	}
 
 	async function showOnlySecondaryLayer(layerId) {
+		const showHierarchy = layerId === WATERSHED_LAYER_ID;
+		setHierarchyVisible(showHierarchy);
+		setWatershedOutlineVisible(!showHierarchy);
 		for (const l of secondaryLayers) {
 			// Overlays (village boundaries, canals, streams) keep their own eye-toggle state
 			if (isOverlayLayer(l)) continue;
+			if (l.id === WATERSHED_LAYER_ID) continue;
 			const visible = l.id === layerId && l.map_render !== false;
 			cogVisibility = { ...cogVisibility, [l.id]: visible };
 			if (l.kind === 'vector') {
@@ -119,6 +130,7 @@
 				setLayerVisibility(`cog-${l.id}`, visible);
 			}
 		}
+		cogVisibility = { ...cogVisibility, [WATERSHED_LAYER_ID]: showHierarchy };
 	}
 
 	async function selectLayer(layer) {
@@ -135,6 +147,12 @@
 		} else if (layer?.kind === 'secondary') {
 			if (mapReady) {
 				const meta = secondaryLayers.find((l) => l.id === layer.id);
+				if (meta?.id === WATERSHED_LAYER_ID) {
+					await ensureWatershedHierarchyOnMap();
+					await showOnlySecondaryLayer(layer.id);
+					void ensureLayerAnalysis(layer.id);
+					return;
+				}
 				if (meta?.kind === 'vector' && meta.map_render !== false) {
 					await ensureVectorLayerOnMap(meta);
 				}
@@ -381,6 +399,7 @@
 
 	function removeVectorLayers() {
 		if (!map) return;
+		clearWatershedHierarchyLayers();
 		for (const layer of vectorLayers) {
 			const fillId = `vec-${layer.id}-fill`;
 			const lineId = `vec-${layer.id}-line`;
@@ -397,9 +416,16 @@
 	}
 
 	function rebuildSecondaryList(cogs, vectors) {
+		const hierarchy = [];
+		const otherVectors = [];
+		for (const l of vectors) {
+			if (l.id === WATERSHED_LAYER_ID) hierarchy.push({ ...l, kind: 'vector' });
+			else otherVectors.push({ ...l, kind: 'vector' });
+		}
 		return [
+			...hierarchy,
 			...cogs.map((l) => ({ ...l, kind: 'cog' })),
-			...vectors.map((l) => ({ ...l, kind: 'vector' }))
+			...otherVectors
 		];
 	}
 
@@ -544,7 +570,38 @@
 		if (selectedLayer?.kind !== 'secondary') return [];
 		const layer = secondaryLayers.find((l) => l.id === selectedLayer.id);
 		if (!layer || isOverlayLayer(layer)) return [];
+		if (layer.id === WATERSHED_LAYER_ID) {
+			return layer.legend || layerActiveLegend[layer.id] || [];
+		}
 		return layerActiveLegend[layer.id] || layer.legend || [];
+	});
+
+	const displayedMapLegend = $derived.by(() => {
+		if (mapMode !== 'flat') return null;
+		if (selectedLayer?.kind === 'secondary' && mapLegendItems.length) {
+			const layer = secondaryLayers.find((l) => l.id === selectedLayer.id);
+			return { title: layer?.name ?? 'Legend', items: mapLegendItems };
+		}
+		if (
+			selectedLayer?.kind === 'primary' &&
+			activePrimaryTab === 'observation-zones' &&
+			retainedLegend.items.length
+		) {
+			return retainedLegend;
+		}
+		return null;
+	});
+
+	$effect(() => {
+		if (selectedLayer?.kind === 'secondary' && mapLegendItems.length) {
+			const layer = secondaryLayers.find((l) => l.id === selectedLayer.id);
+			if (layer && !isOverlayLayer(layer)) {
+				retainedLegend = {
+					title: layer.name ?? 'Legend',
+					items: mapLegendItems.map((item) => ({ ...item }))
+				};
+			}
+		}
 	});
 
 	let container;
@@ -570,6 +627,10 @@
 	let showZonesLayer = $state(true);
 	let showFieldNotesLayer = $state(true);
 	let mapReady = $state(false);
+	/** @type {maplibregl.Popup | null} */
+	let villageHoverPopup = null;
+	/** @type {Set<string>} */
+	let villageHoverBound = new Set();
 	let cogLayers = $state([]);
 	let vectorLayers = $state([]);
 	let secondaryLayers = $state([]);
@@ -763,7 +824,9 @@
 				status = `Could not load hypotheses: ${err instanceof Error ? err.message : String(err)}`;
 			}
 			if (thematicLayers.length > 0) {
-				await selectLayer({ kind: 'secondary', id: thematicLayers[0].id });
+				const prefer =
+					thematicLayers.find((l) => l.id === WATERSHED_LAYER_ID)?.id ?? thematicLayers[0].id;
+				await selectLayer({ kind: 'secondary', id: prefer });
 			} else if (secondaryLayers.length > 0) {
 				await selectLayer({ kind: 'secondary', id: secondaryLayers[0].id });
 			} else {
@@ -811,6 +874,7 @@
 
 	onDestroy(() => {
 		fieldNotePinReady = false;
+		villageHoverPopup?.remove();
 		map?.remove();
 	});
 
@@ -1226,8 +1290,101 @@
 		if (visible) setBaseLayer('esri');
 	}
 
+	function setWatershedOutlineVisible(visible) {
+		setLayerVisibility('watershed-fill', visible);
+		setLayerVisibility('watershed-line', visible);
+	}
+
+	function setHierarchyVisible(visible) {
+		for (const id of hierarchySourceIds) {
+			setLayerVisibility(`ws-h-${id}-fill`, visible);
+			setLayerVisibility(`ws-h-${id}-line`, visible);
+		}
+	}
+
+	function clearWatershedHierarchyLayers() {
+		for (const id of hierarchySourceIds) {
+			const fillId = `ws-h-${id}-fill`;
+			const lineId = `ws-h-${id}-line`;
+			if (map?.getLayer(fillId)) map.removeLayer(fillId);
+			if (map?.getLayer(lineId)) map.removeLayer(lineId);
+			if (map?.getSource(`ws-h-${id}`)) map.removeSource(`ws-h-${id}`);
+		}
+		hierarchySourceIds = [];
+	}
+
+	async function ensureWatershedHierarchyOnMap() {
+		if (!map || !project?.id) return;
+		const meta = secondaryLayers.find((l) => l.id === WATERSHED_LAYER_ID);
+		if (meta?.legend?.length) {
+			layerActiveLegend = { ...layerActiveLegend, [WATERSHED_LAYER_ID]: meta.legend };
+		}
+		const expected = HIERARCHY_DRAW_ORDER.join('|');
+		const loaded = hierarchySourceIds.join('|');
+		if (loaded === expected) {
+			setHierarchyVisible(true);
+			return;
+		}
+		clearWatershedHierarchyLayers();
+		status = 'Loading watershed hierarchy…';
+		try {
+			const result = await fetchWatershedHierarchy(project.id);
+			const layers = (result.layers || []).filter((l) => l && l.status !== 'error' && l.geojson);
+			const byId = new Map(layers.map((l) => [l.id, l]));
+			const beforeId = map.getLayer('watershed-fill') ? 'watershed-fill' : undefined;
+			const ids = [];
+			for (const id of HIERARCHY_DRAW_ORDER) {
+				const layer = byId.get(id);
+				if (!layer) continue;
+				const sourceId = `ws-h-${id}`;
+				const isLine = layer.geometry_kind === 'line' || layer.render_type === 'line';
+				if (map.getSource(sourceId)) {
+					map.getSource(sourceId).setData(layer.geojson);
+				} else {
+					map.addSource(sourceId, { type: 'geojson', data: layer.geojson });
+				}
+				if (!isLine && !map.getLayer(`${sourceId}-fill`)) {
+					map.addLayer(
+						{
+							id: `${sourceId}-fill`,
+							type: 'fill',
+							source: sourceId,
+							paint: {
+								'fill-color': layer.fill_color || layer.line_color || '#64748b',
+								'fill-opacity': layer.fill_opacity ?? 0.08
+							}
+						},
+						beforeId
+					);
+				}
+				if (!map.getLayer(`${sourceId}-line`)) {
+					map.addLayer(
+						{
+							id: `${sourceId}-line`,
+							type: 'line',
+							source: sourceId,
+							paint: {
+								'line-color': layer.line_color || '#334155',
+								'line-width': layer.line_width ?? 1.5,
+								'line-opacity': 0.92
+							}
+						},
+						beforeId
+					);
+				}
+				ids.push(id);
+			}
+			hierarchySourceIds = ids;
+			applyLayerStackOrder();
+			status = 'Ready';
+		} catch (err) {
+			console.error('Watershed hierarchy failed', err);
+			status = `Watershed hierarchy failed: ${err instanceof Error ? err.message : String(err)}`;
+		}
+	}
+
 	function setLayerVisibility(layerId, visible) {
-		if (!map.getLayer(layerId)) return;
+		if (!map?.getLayer(layerId)) return;
 		map.setLayoutProperty(layerId, 'visibility', visible ? 'visible' : 'none');
 	}
 
@@ -1266,6 +1423,12 @@
 		}
 		if (map.getLayer('watershed-fill')) map.moveLayer('watershed-fill');
 		if (map.getLayer('watershed-line')) map.moveLayer('watershed-line');
+		for (const id of hierarchySourceIds) {
+			const fillId = `ws-h-${id}-fill`;
+			const lineId = `ws-h-${id}-line`;
+			if (map.getLayer(fillId)) map.moveLayer(fillId);
+			if (map.getLayer(lineId)) map.moveLayer(lineId);
+		}
 		for (const key of primaryLayerOrder) {
 			if (key === 'hypotheses') continue;
 			const ids =
@@ -1552,7 +1715,13 @@
 
 		return features.map((f) => {
 			const p = { ...(f.properties || {}) };
-			if (p[column] != null && p[column] !== '') {
+			// WISER rank layers share village_resilience.fgb — always re-derive from the
+			// layer-specific source column so a wrong backend fill cannot make them identical.
+			if (
+				atype !== 'wiser_rank' &&
+				p[column] != null &&
+				p[column] !== ''
+			) {
 				return { ...f, properties: p };
 			}
 
@@ -1572,12 +1741,12 @@
 			} else if (atype === 'wiser_rank') {
 				const preferred =
 					column === '__wiser_irrigation_access_class'
-						? ['Irr_access', column]
+						? ['Irr_access']
 						: column === '__wiser_kharif_resilience_class'
-							? ['Kharif_res', column]
+							? ['Kharif_res']
 							: column === '__wiser_rabi_resilience_class'
-								? ['Rabi_res', column]
-								: [column, 'Irr_access', 'Kharif_res', 'Rabi_res'];
+								? ['Rabi_res']
+								: ['Irr_access', 'Kharif_res', 'Rabi_res'];
 				const raw = pickProp(p, preferred);
 				const key = String(raw ?? '')
 					.trim()
@@ -1609,6 +1778,76 @@
 		return response.json();
 	}
 
+	function villageLabelFromProps(props, labelColumn) {
+		if (!props) return '';
+		const keys = [
+			labelColumn,
+			'Village Na',
+			'Village Name',
+			'village_name',
+			'name',
+			'NAME'
+		].filter(Boolean);
+		for (const k of keys) {
+			const v = props[k];
+			if (v != null && String(v).trim()) return String(v).trim();
+		}
+		return '';
+	}
+
+	function escapeHtml(text) {
+		return String(text)
+			.replace(/&/g, '&amp;')
+			.replace(/</g, '&lt;')
+			.replace(/>/g, '&gt;')
+			.replace(/"/g, '&quot;');
+	}
+
+	function bindVillageHover(layer, fillId, lineId, labelColumn) {
+		if (!map || layer?.id !== 'village_boundaries') return;
+		const key = `${fillId}|${lineId}`;
+		if (villageHoverBound.has(key)) return;
+		villageHoverBound.add(key);
+
+		if (!villageHoverPopup) {
+			villageHoverPopup = new maplibregl.Popup({
+				closeButton: false,
+				closeOnClick: false,
+				offset: 10,
+				className: 'village-hover-popup'
+			});
+		}
+
+		const layers = [fillId, lineId].filter((id) => map.getLayer(id));
+		const onMove = (e) => {
+			if (!map.getLayer(fillId)) return;
+			const vis = map.getLayoutProperty(fillId, 'visibility');
+			if (vis === 'none') {
+				villageHoverPopup?.remove();
+				return;
+			}
+			const hit = map.queryRenderedFeatures(e.point, { layers });
+			const feat = hit[0];
+			const label = villageLabelFromProps(feat?.properties, labelColumn);
+			if (!label) {
+				villageHoverPopup?.remove();
+				return;
+			}
+			map.getCanvas().style.cursor = 'pointer';
+			villageHoverPopup
+				.setLngLat(e.lngLat)
+				.setHTML(`<strong>${escapeHtml(label)}</strong>`)
+				.addTo(map);
+		};
+		const onLeave = () => {
+			villageHoverPopup?.remove();
+		};
+		for (const id of layers) {
+			map.on('mousemove', id, onMove);
+			map.on('mouseleave', id, onLeave);
+		}
+	}
+
 	/** Metadata only — geometries load on demand when the user selects a layer. */
 	async function loadVectorLayers() {
 		try {
@@ -1633,6 +1872,10 @@
 
 	async function ensureVectorLayerOnMap(layer) {
 		if (!map || !layer?.id) return;
+		if (layer.id === WATERSHED_LAYER_ID) {
+			await ensureWatershedHierarchyOnMap();
+			return;
+		}
 		const sourceId = `vec-${layer.id}`;
 		if (map.getSource(sourceId)) return;
 		if (!layer.url || layer.map_render === false) return;
@@ -1670,7 +1913,7 @@
 		const beforeId = map.getLayer('watershed-fill') ? 'watershed-fill' : undefined;
 		const isOutline = layer.render_type === 'outline';
 		const isLine = layer.render_type === 'line' || layer.geometry_kind === 'line';
-		const fillColor = isOutline ? '#000000' : vectorFillColor(layer);
+		const fillColor = isOutline ? '#1f2937' : vectorFillColor(layer);
 		const labelColumn = layer.label_column || 'Village Na';
 		const fillOpacity = layer.fill_opacity ?? 0.65;
 
@@ -1684,7 +1927,8 @@
 					layout: { visibility: 'none' },
 					paint: {
 						'fill-color': fillColor,
-						'fill-opacity': isOutline ? 0 : fillOpacity
+						// Slight opacity so hover hit-testing works on village polygons.
+						'fill-opacity': isOutline ? 0.04 : fillOpacity
 					}
 				},
 				beforeId
@@ -1721,7 +1965,14 @@
 							'line-opacity': 0.9
 						}
 					: isOutline
-						? { 'line-color': '#0f172a', 'line-width': 1.25, 'line-opacity': 0.9 }
+						? {
+								'line-color': layer.line_color || '#1f2937',
+								'line-width': layer.line_width ?? 2.75,
+								'line-opacity': 1,
+								...(Array.isArray(layer.line_dasharray) && layer.line_dasharray.length
+									? { 'line-dasharray': layer.line_dasharray }
+									: { 'line-dasharray': [2, 1.5] })
+							}
 						: { 'line-color': '#334155', 'line-width': 0.6, 'line-opacity': 0.5 }
 			},
 			beforeId
@@ -1741,7 +1992,7 @@
 							['to-string', ['get', 'Village Na']],
 							''
 						],
-						'text-size': 11,
+						'text-size': 12,
 						'text-font': ['Open Sans Regular', 'Arial Unicode MS Regular'],
 						'text-max-width': 10,
 						'text-anchor': 'center',
@@ -1750,13 +2001,14 @@
 						'text-padding': 2
 					},
 					paint: {
-						'text-color': '#0f172a',
+						'text-color': '#111827',
 						'text-halo-color': '#ffffff',
-						'text-halo-width': 1.75
+						'text-halo-width': 2.25
 					}
 				},
 				beforeId
 			);
+			// Village name hover is create-flow only; not used after project creation.
 		}
 		applyLayerStackOrder();
 		ensureDrawPreviewOnTop();
@@ -1767,8 +2019,10 @@
 		if (!project?.id) return;
 		status = 'Loading watershed analysis…';
 
-		// Seed COG legends (full catalog; class filter needs raster sampling later)
-		for (const layer of secondaryLayers.filter((l) => l.kind === 'cog')) {
+		// Seed COG + Watershed hierarchy legends (full catalog)
+		for (const layer of secondaryLayers.filter(
+			(l) => l.kind === 'cog' || l.id === WATERSHED_LAYER_ID
+		)) {
 			layerActiveLegend = {
 				...layerActiveLegend,
 				[layer.id]: legendFromFeatures(layer, null)
@@ -2686,15 +2940,15 @@
 			</button>
 		</div>
 
-		{#if selectedLayer?.kind === 'secondary' && mapLegendItems.length && mapMode === 'flat'}
-			{@const layer = secondaryLayers.find((l) => l.id === selectedLayer.id)}
+		{#if displayedMapLegend}
 			<div
 				class="pointer-events-none absolute top-3 right-3 z-10 max-h-[70%] max-w-[220px] overflow-y-auto rounded-lg border border-brand-navy/10 bg-white/95 p-3 shadow-md backdrop-blur-sm"
 			>
 				<p class="m-0 mb-2 text-[10px] font-semibold tracking-wide text-brand-navy/55 uppercase">
-					{layer?.name ?? 'Legend'}
+					{displayedMapLegend.title}
 				</p>
-				{#if layer?.render_type === 'continuous' || mapLegendItems[0]?.continuous}
+				{#if displayedMapLegend.items[0]?.continuous}
+					{@const layer = secondaryLayers.find((l) => l.id === selectedLayer?.id)}
 					<div
 						class="mb-1 h-2.5 w-full rounded border border-gray-200"
 						style="background: {continuousLegendGradient(layer)}"
@@ -2705,7 +2959,7 @@
 					</div>
 				{:else}
 					<ul class="m-0 list-none space-y-1.5 p-0">
-						{#each mapLegendItems as item}
+						{#each displayedMapLegend.items as item}
 							<li class="flex items-center gap-2 text-xs">
 								<span
 									class="inline-block h-3.5 w-3.5 shrink-0 rounded border border-gray-300"

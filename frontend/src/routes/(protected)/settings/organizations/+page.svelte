@@ -166,12 +166,12 @@
 </script>
 
 <svelte:head>
-	<title>Organizations · Settings</title>
+	<title>Organisations · Settings</title>
 </svelte:head>
 
 <div class="max-w-2xl">
 	<div class="mb-5 flex items-center justify-between">
-		<h2 class="m-0 font-headline text-lg font-semibold text-brand-navy">Organizations</h2>
+		<h2 class="m-0 font-headline text-lg font-semibold text-brand-navy">Organisations</h2>
 		<button
 			type="button"
 			class="cursor-pointer rounded-lg bg-brand-blue px-3 py-1.5 font-body text-sm font-medium text-white hover:bg-brand-deep"
@@ -186,7 +186,7 @@
 			<input
 				type="text"
 				required
-				placeholder="Organization name"
+				placeholder="Organisation name"
 				class="flex-1 rounded-lg border border-brand-navy/15 px-3 py-2 font-body text-sm outline-none focus:border-brand-blue"
 				bind:value={newOrgName}
 			/>
@@ -208,11 +208,11 @@
 	{/if}
 
 	{#if loading}
-		<p class="m-0 text-center text-sm text-brand-steel">Loading organizations…</p>
+		<p class="m-0 text-center text-sm text-brand-steel">Loading organisations…</p>
 	{:else if orgs.length === 0}
 		<div class="rounded-2xl border border-brand-navy/10 bg-white p-8 text-center shadow-sm">
 			<p class="m-0 text-sm text-brand-steel">
-				You're not part of any organization yet. Create one to share diagnoses with your team.
+				You're not part of any organisation yet. Create one to share diagnoses with your team.
 			</p>
 		</div>
 	{:else}
@@ -360,7 +360,7 @@
 									<div class="px-5 py-4 text-center text-sm text-brand-steel">Loading projects…</div>
 								{:else if (projects[org.id] ?? []).length === 0}
 									<div class="px-5 py-6 text-center text-sm text-brand-steel">
-										No projects shared with this organization yet.
+										No projects shared with this organisation yet.
 									</div>
 								{:else}
 									<div class="divide-y divide-brand-navy/6">
@@ -389,7 +389,7 @@
 									class="cursor-pointer rounded-lg border border-brand-navy/15 bg-white px-3 py-1.5 font-body text-xs font-medium text-brand-navy hover:bg-gray-50"
 									onclick={() => handleLeaveOrg(org)}
 								>
-									Leave organization
+									Leave organisation
 								</button>
 								{#if org.role === 'admin'}
 									<button
@@ -397,7 +397,7 @@
 										class="cursor-pointer rounded-lg border border-red-200 bg-white px-3 py-1.5 font-body text-xs font-medium text-red-600 hover:bg-red-50"
 										onclick={() => handleDeleteOrg(org)}
 									>
-										Delete organization
+										Delete organisation
 									</button>
 								{/if}
 							</div>

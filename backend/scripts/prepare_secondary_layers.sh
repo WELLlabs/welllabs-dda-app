@@ -125,6 +125,6 @@ fi
 echo
 echo "Done. Ensure backend/.env has:"
 echo "  COG_LAYERS=rasters/lulc250k_2023_24_classed_cog.tif,rasters/dem_india.tif,rasters/jrc_occurrence_india_2024.tif,rasters/jrc_transition_india_2024.tif,rasters/Cropping Intensity of India.tif"
-echo "  VECTOR_LAYERS=vector/aquifers.fgb,vector/gw_stress.fgb,vector/village_resilience.fgb,vector/villages.fgb,vector/Canals.gpkg,vector/Lineaments.gpkg,vector/india_rivers_level_12.gpkg"
+echo "  VECTOR_LAYERS=vector/aquifers.fgb,vector/gw_stress.fgb,vector/village_resilience.fgb,vector/villages.fgb,vector/Canals.gpkg,vector/india_rivers_level_12.gpkg"
 echo "  WATERSHEDS_FGB_KEY=vector/india_basins_level_12.gpkg"
 echo "Then recreate API: cd backend && docker compose up -d --build api"

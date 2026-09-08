@@ -341,11 +341,13 @@ def _prepare_style_column(gdf, layer_cfg: LayerConfig):
     gdf = gdf.copy()
     atype = layer_cfg.analysis_type or ""
 
-    if column in gdf.columns and gdf[column].notna().any():
+    if (
+        atype != "wiser_rank"
+        and column in gdf.columns
+        and gdf[column].notna().any()
+    ):
         if atype == "wiser_gw_stress":
             gdf[column] = gdf[column].apply(_normalize_gw)
-        elif atype == "wiser_rank":
-            gdf[column] = gdf[column].apply(_normalize_rank)
         return gdf, column
 
     if atype == "wiser_gw_stress":
@@ -358,18 +360,14 @@ def _prepare_style_column(gdf, layer_cfg: LayerConfig):
         if col:
             gdf[column] = gdf[col].apply(_normalize_gw)
     elif atype == "wiser_rank":
-        # Match frontend: each WISER rank layer has its own source column
-        if column == "__wiser_irrigation_access_class":
-            preferred = ("Irr_access", column)
-        elif column == "__wiser_kharif_resilience_class":
-            preferred = ("Kharif_res", column)
-        elif column == "__wiser_rabi_resilience_class":
-            preferred = ("Rabi_res", column)
-        else:
-            preferred = (column, "Irr_access", "Kharif_res", "Rabi_res")
-        col = _find_column(gdf, *preferred)
+        # Always prefer the layer-specific source field over a prefilled style_column.
+        from app.modules.diagnose.services.layer_analysis import wiser_rank_source_columns
+
+        col = _find_column(gdf, *wiser_rank_source_columns(column))
         if col:
             gdf[column] = gdf[col].apply(_normalize_rank)
+        elif column in gdf.columns:
+            gdf[column] = gdf[column].apply(_normalize_rank)
     elif atype == "aquifers":
         col = _find_column(gdf, "aquifer", "Major_Aqui", "aquifers")
         if col:

@@ -15,6 +15,35 @@ colors:
   black: "#000000"
 
 layers:
+  # ── Watershed hierarchy (default landing layer) ─────────────────────────
+  - id: watershed
+    category: Hydrology & Landscape Controls
+    s3_key: ""
+    name: Watershed
+    source: watershed_hierarchy
+    analysis_type: watershed_hierarchy
+    map_render: true
+    render:
+      type: hierarchy
+      classes:
+        - { value: basin, label: Basin, color: "#00306d" }
+        - { value: sub_basin, label: Sub basin, color: "#7c3aed" }
+        - { value: level7, label: Level-7 watershed, color: "#db2777" }
+        - { value: micro, label: Micro watershed (L12), color: "#1c75e9" }
+        - { value: rivers, label: Rivers, color: "#457b9d" }
+    meaning: >-
+      This view stacks the drainage hierarchy that contains the project AOI: basin,
+      sub basin, Level-7, and Level-12 micro watersheds, plus rivers that cross the area.
+      Use it to place field work in the correct hydrologic unit and to see how local
+      micros nest inside larger planning units.
+    uncertainty: >-
+      National basin products can lag administrative renames and local drainage edits.
+      Micro (L12) outlines are model-derived watersheds, not cadastral parcels.
+    field_check: >-
+      Confirm the basin / sub-basin name with facilitators, walk the main drain that
+      leaves the AOI, and note whether neighbouring micros share the same outlet or
+      diverge into a different Level-7 unit.
+
   # ── Raster COGs ──────────────────────────────────────────────────────────
   - id: lulc250k
     category: Hydrology & Landscape Controls
@@ -128,27 +157,6 @@ layers:
       Derived stream lines may not match seasonal nalas or local drainage modifications.
     field_check: >-
       Verify active flow paths, nala condition, seasonality, and local diversions or blockages.
-
-  - id: lineaments
-    category: Hydrology & Landscape Controls
-    s3_key: vector/Lineaments.gpkg
-    name: Lineaments
-    source: vector_fgb
-    analysis_type: vector_categorical
-    render:
-      type: categorical
-      geometry: line
-      column: structure_type
-      classes:
-        - { value: dyke, label: Dyke, color: "#377eb8" }
-        - { value: fault, label: Fault, color: "#e41a1c" }
-        - { value: fold, label: Fold, color: "#4daf4a" }
-    meaning: >-
-      Geological structures suggest possible groundwater pathways. Use as a structural clue alongside well behaviour and local hydrogeology.
-    uncertainty: >-
-      Regional lineament mapping is indicative only; local fracture or dyke influence requires field or well validation.
-    field_check: >-
-      Check well yields, seepage, fractures, and whether structure type matches local geology.
 
   - id: aquifers
     category: Hydrology & Landscape Controls
@@ -282,14 +290,20 @@ layers:
     s3_key: vector/villages.fgb
     name: Village Boundaries
     source: vector_fgb
+    # Keep full village polygons that touch the watershed (do not cut at the AOI edge).
+    clip_mode: intersect
     # Outline overlay — toggle independently of thematic choropleths
     map_render: true
     render:
       type: outline
+      line_color: "#1f2937"
+      line_width: 2.75
+      line_dasharray: [2, 1.5]
       # Truncated column name in villages.fgb ("Village Name")
       label_column: "Village Na"
     meaning: >-
       Village polygons for orientation: outlines and names only, no thematic fill.
+      Villages that intersect the watershed are shown in full, including area outside the AOI.
     uncertainty: >-
       Boundary geometry and names follow the census village layer; local hamlets may differ.
     field_check: >-

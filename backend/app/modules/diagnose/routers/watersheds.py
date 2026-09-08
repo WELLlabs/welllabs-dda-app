@@ -97,7 +97,12 @@ def villages_by_district(
     state: str = Query(..., min_length=1, max_length=120),
     district: str = Query(..., min_length=1, max_length=120),
     q: str = Query("", max_length=100),
-    limit: int = Query(500, ge=1, le=2000),
+    limit: int | None = Query(
+        None,
+        ge=1,
+        le=10000,
+        description="Optional cap; omit to return every village in the district.",
+    ),
     user: dict = Depends(get_current_user),
 ):
     """List villages in a state + district (optional name filter)."""
@@ -133,3 +138,21 @@ def watersheds_from_geometry(body: FromGeometryBody, user: dict = Depends(get_cu
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
         raise HTTPException(502, f"Custom AOI validation failed: {exc}") from exc
+
+
+class PreviewContextBody(BaseModel):
+    geometry: dict[str, Any]
+
+
+@router.post("/preview-context")
+def watershed_preview_context(body: PreviewContextBody, user: dict = Depends(get_current_user)):
+    """Return rivers / basin / sub-basin / L7 layers clipped to a preview AOI."""
+    del user
+    from app.modules.diagnose.services.preview_context import preview_context_layers
+
+    try:
+        return {"layers": preview_context_layers(body.geometry)}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, f"Preview context failed: {exc}") from exc

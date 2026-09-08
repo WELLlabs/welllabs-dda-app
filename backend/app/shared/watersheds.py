@@ -827,6 +827,7 @@ def resolve_village_watersheds(
     parts = watersheds_intersecting(village_geom)
     result = union_geometries(parts, village_name=village_name)
     result["village_geometry"] = village_geom_geojson
+    result["village_name"] = village_name
     return result
 
 
@@ -844,12 +845,46 @@ def list_village_districts(state: str) -> list[str]:
     return list(_village_districts_by_state.get(s, []))
 
 
+def _norm_place_token(value: str) -> str:
+    """Normalize state/district strings for fuzzy matching (Tiruvallur ↔ Thiruvallur)."""
+    s = (value or "").strip().lower()
+    s = re.sub(r"[^a-z0-9]+", "", s)
+    # Common Tamil Nadu / census spelling variants
+    s = s.replace("thiru", "tiru")
+    s = s.replace("kanchee", "kanchi")
+    s = s.replace("puducherry", "pondicherry")
+    return s
+
+
+def _resolve_district_bucket_key(state_key: str, district: str) -> tuple[str, str] | None:
+    """Return (state_key, district_key) for village lookup, with fuzzy district match."""
+    d_raw = (district or "").strip()
+    if not state_key or not d_raw:
+        return None
+    d_key = d_raw.lower()
+    if (state_key, d_key) in _village_by_state_district:
+        return state_key, d_key
+
+    target = _norm_place_token(d_raw)
+    if not target:
+        return None
+    for cand in _village_districts_by_state.get(state_key, []):
+        if _norm_place_token(cand) == target:
+            return state_key, str(cand).lower()
+    # Partial contains either way (e.g. "thiruvallur district")
+    for cand in _village_districts_by_state.get(state_key, []):
+        cn = _norm_place_token(cand)
+        if target in cn or cn in target:
+            return state_key, str(cand).lower()
+    return None
+
+
 def list_villages_for_district(
     state: str,
     district: str,
     *,
     q: str = "",
-    limit: int = 500,
+    limit: int | None = None,
 ) -> list[dict]:
     s = (state or "").strip().lower()
     d = (district or "").strip().lower()
@@ -857,9 +892,49 @@ def list_villages_for_district(
         raise ValueError("state and district are required")
     ensure_village_name_index()
     warm_state_village_centroids_async(state)
-    limit = max(1, min(int(limit), 2000))
     q_lower = (q or "").strip().lower()
-    rows = list(_village_by_state_district.get((s, d), []))
+
+    resolved = _resolve_district_bucket_key(s, d)
+    rows = list(_village_by_state_district.get(resolved, [])) if resolved else []
+    if not rows:
+        # Last resort: scan index for fuzzy state+district (handles odd casing/spacing).
+        target_state = _norm_place_token(s)
+        target_district = _norm_place_token(d)
+        index = _village_name_index or []
+        rows = []
+        seen: set[str] = set()
+        for row in index:
+            if _norm_place_token(str(row.get("state") or "")) != target_state:
+                continue
+            if _norm_place_token(str(row.get("district") or "")) != target_district:
+                continue
+            rid = str(row.get("id") or "")
+            if not rid or rid in seen:
+                continue
+            seen.add(rid)
+            rows.append(
+                {
+                    "id": row["id"],
+                    "name": row["name"],
+                    "district": row.get("district"),
+                    "state": row.get("state"),
+                }
+            )
+
+    # Deduplicate identical census ids while preserving order
+    deduped: list[dict] = []
+    seen_ids: set[str] = set()
+    for row in rows:
+        rid = str(row.get("id") or "")
+        if rid in seen_ids:
+            continue
+        seen_ids.add(rid)
+        deduped.append(row)
+    rows = deduped
+
     if q_lower:
-        rows = [r for r in rows if q_lower in r["name"].lower()]
-    return rows[:limit]
+        rows = [r for r in rows if q_lower in str(r.get("name") or "").lower()]
+    rows.sort(key=lambda r: str(r.get("name") or "").lower())
+    if limit is None:
+        return rows
+    return rows[: max(1, min(int(limit), 10_000))]

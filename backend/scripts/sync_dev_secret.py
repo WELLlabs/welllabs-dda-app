@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""Sync dev app-config secret from local backend/.env (beta + Google OAuth)."""
+"""Sync selected fields from local backend/.env into the dev app-config secret.
+
+Updates beta FRONTEND_ORIGIN, Google OAuth, and diagnose layer enablement
+(COG_LAYERS / VECTOR_LAYERS / WATERSHEDS_FGB_KEY) so beta matches local layer config.
+"""
 
 from __future__ import annotations
 
 import json
 import os
-import re
 import sys
 from pathlib import Path
 
@@ -18,6 +21,15 @@ DEV_SECRET_ARN = os.environ.get(
 BETA_ORIGIN = "https://beta.welllabs.org"
 REGION = os.environ.get("AWS_DEFAULT_REGION", "ap-south-1")
 ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
+
+# Layer / OAuth keys copied from local .env when present.
+SYNC_KEYS = (
+    "GOOGLE_OAUTH_CLIENT_ID",
+    "GOOGLE_OAUTH_CLIENT_SECRET",
+    "COG_LAYERS",
+    "VECTOR_LAYERS",
+    "WATERSHEDS_FGB_KEY",
+)
 
 
 def _parse_env(path: Path) -> dict[str, str]:
@@ -35,6 +47,10 @@ def _parse_env(path: Path) -> dict[str, str]:
     return values
 
 
+def _layer_filenames(csv_value: str) -> list[str]:
+    return [part.strip().rsplit("/", 1)[-1] for part in csv_value.split(",") if part.strip()]
+
+
 def main() -> int:
     client = boto3.client("secretsmanager", region_name=REGION)
     current = client.get_secret_value(SecretId=DEV_SECRET_ARN)
@@ -44,9 +60,11 @@ def main() -> int:
     config["FRONTEND_ORIGIN"] = BETA_ORIGIN
     config.setdefault("SESSION_COOKIE_SECURE", "true")
 
-    for key in ("GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET"):
+    updated: list[str] = []
+    for key in SYNC_KEYS:
         if local.get(key):
             config[key] = local[key]
+            updated.append(key)
 
     client.put_secret_value(
         SecretId=DEV_SECRET_ARN,
@@ -57,7 +75,11 @@ def main() -> int:
     masked = oauth_id[:20] + "..." if len(oauth_id) > 20 else oauth_id
     print(f"Updated dev secret FRONTEND_ORIGIN={BETA_ORIGIN!r}")
     print(f"GOOGLE_OAUTH_CLIENT_ID={masked}")
+    print(f"Synced from .env: {', '.join(updated) or '(none)'}")
+    print(f"COG layers: {_layer_filenames(str(config.get('COG_LAYERS') or ''))}")
+    print(f"VECTOR layers: {_layer_filenames(str(config.get('VECTOR_LAYERS') or ''))}")
     print(f"Keys preserved: {len(config)} total")
+    print("Note: API must restart / redeploy to load the new secret into the container.")
     return 0
 
 

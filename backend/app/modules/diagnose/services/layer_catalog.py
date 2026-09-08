@@ -75,6 +75,9 @@ class LayerConfig:
     category: str | None = None  # Sidebar group (Clinton report categories)
     tile_strategy: str = "tiles"  # tiles | watershed_image (non-COG national rasters)
     analysis_batch: bool = True  # False → skip slow layers in batch preload
+    # clip = cut geometries to watershed; intersect = keep full features that touch AOI
+    clip_mode: str = "clip"
+    line_dasharray: tuple[float, ...] | None = None
     companions: tuple[LayerCompanion, ...] = ()
 
     def titiler_colormap(self) -> dict[str, str]:
@@ -154,7 +157,7 @@ class LayerCatalog:
         return tuple(l for l in self.layers if l.source == "cog")
 
     def vector_layers(self) -> tuple[LayerConfig, ...]:
-        return tuple(l for l in self.layers if l.source == "vector_fgb")
+        return tuple(l for l in self.layers if l.source in ("vector_fgb", "watershed_hierarchy"))
 
 
 def _hex_to_rgba(hex_color: str) -> tuple[int, int, int, int]:
@@ -287,6 +290,18 @@ def _parse_layer(raw: dict[str, Any], palette: dict[str, str]) -> LayerConfig:
     else:
         analysis_batch = bool(analysis_batch_raw)
 
+    clip_mode = str(raw.get("clip_mode") or render.get("clip_mode") or "clip").strip().lower()
+    if clip_mode not in ("clip", "intersect"):
+        clip_mode = "clip"
+
+    dash_raw = render.get("line_dasharray")
+    line_dasharray: tuple[float, ...] | None = None
+    if isinstance(dash_raw, (list, tuple)) and dash_raw:
+        try:
+            line_dasharray = tuple(float(v) for v in dash_raw)
+        except (TypeError, ValueError):
+            line_dasharray = None
+
     companions: list[LayerCompanion] = []
     for item in raw.get("companions") or []:
         comp_color_raw = item.get("line_color")
@@ -300,7 +315,7 @@ def _parse_layer(raw: dict[str, Any], palette: dict[str, str]) -> LayerConfig:
 
     return LayerConfig(
         id=str(raw["id"]),
-        s3_key=str(raw["s3_key"]),
+        s3_key=str(raw.get("s3_key") or ""),
         name=str(raw.get("name") or raw["id"]),
         source=source,
         render_type=render_type,
@@ -325,6 +340,8 @@ def _parse_layer(raw: dict[str, Any], palette: dict[str, str]) -> LayerConfig:
         category=(str(raw["category"]).strip() if raw.get("category") else None),
         tile_strategy=tile_strategy,
         analysis_batch=analysis_batch,
+        clip_mode=clip_mode,
+        line_dasharray=line_dasharray,
         companions=tuple(companions),
     )
 

@@ -122,6 +122,7 @@ class VectorLayer(BaseModel):
     map_render: bool = True
     overlay: bool = False
     category: str | None = None
+    line_dasharray: list[float] | None = None
     status: str = "ok"
     error: str | None = None
 
@@ -1079,6 +1080,32 @@ def _build_vector_layer(cfg: LayerConfig) -> VectorLayer:
         for s in cfg.choropleth_stops
     ]
     meaning = cfg.meaning or cfg.interpretation
+    dash = list(cfg.line_dasharray) if cfg.line_dasharray else None
+    if cfg.source == "watershed_hierarchy":
+        return VectorLayer(
+            id=cfg.id,
+            name=cfg.name,
+            s3_key=cfg.s3_key or "",
+            url="",
+            render_type=cfg.render_type,
+            style_column=cfg.style_column,
+            label_column=cfg.label_column,
+            line_color=cfg.line_color,
+            line_width=cfg.line_width,
+            fill_opacity=cfg.fill_opacity,
+            geometry_kind=cfg.geometry_kind,
+            legend=legend,
+            choropleth_stops=stops,
+            interpretation=meaning,
+            meaning=meaning,
+            uncertainty=cfg.uncertainty,
+            field_check=cfg.field_check,
+            analysis_type=cfg.analysis_type,
+            map_render=cfg.map_render,
+            overlay=cfg.overlay,
+            category=cfg.category,
+            line_dasharray=dash,
+        )
     try:
         url = _presigned_url_cached(cfg.s3_key)
         return VectorLayer(
@@ -1103,6 +1130,7 @@ def _build_vector_layer(cfg: LayerConfig) -> VectorLayer:
             map_render=cfg.map_render,
             overlay=cfg.overlay,
             category=cfg.category,
+            line_dasharray=dash,
         )
     except ClientError as exc:
         err = exc.response.get("Error", {})
@@ -1128,6 +1156,7 @@ def _build_vector_layer(cfg: LayerConfig) -> VectorLayer:
             map_render=cfg.map_render,
             overlay=cfg.overlay,
             category=cfg.category,
+            line_dasharray=dash,
             status="error",
             error=f"{err.get('Code', 'S3Error')}: {err.get('Message', str(exc))}",
         )
@@ -1140,19 +1169,41 @@ async def list_vector_layers(
 ):
     """Return FlatGeobuf vector layer metadata. url is watershed-clipped GeoJSON endpoint."""
     enabled = set(_vector_keys())
-    if not enabled:
-        return VectorLayersResponse(vector_layers=[])
     if project_id:
         assert_diagnosis_access(user["id"], project_id)
     layers: list[VectorLayer] = []
     for cfg in get_catalog().vector_layers():
-        if cfg.s3_key not in enabled:
+        if cfg.source == "watershed_hierarchy":
+            entry = _build_vector_layer(cfg)
+            q = f"?project_id={quote(project_id, safe='')}" if project_id else ""
+            proxy_url = f"{settings.api_public_prefix}/diagnose/layers/watershed/hierarchy{q}"
+            layers.append(entry.model_copy(update={"url": proxy_url}))
+            continue
+        if not enabled or cfg.s3_key not in enabled:
             continue
         entry = _build_vector_layer(cfg)
         q = f"?project_id={quote(project_id, safe='')}" if project_id else ""
         proxy_url = f"{settings.api_public_prefix}/diagnose/layers/vector/{cfg.id}/data{q}"
         layers.append(entry.model_copy(update={"url": proxy_url}))
     return VectorLayersResponse(vector_layers=layers)
+
+
+@router.get("/watershed/hierarchy")
+async def watershed_hierarchy_layers(
+    project_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """Basin / sub-basin / L7 / L12 / rivers clipped to the project AOI."""
+    assert_diagnosis_access(user["id"], project_id)
+    feature = _watershed_feature(project_id)
+    geom = feature.get("geometry") or feature
+    from app.modules.diagnose.services.preview_context import project_hierarchy_map_layers
+
+    try:
+        layers = await asyncio.to_thread(project_hierarchy_map_layers, geom)
+    except Exception as exc:
+        raise HTTPException(502, f"Watershed hierarchy failed: {exc}") from exc
+    return {"layers": layers}
 
 
 @router.get("/vector/{layer_id}/data")
@@ -1210,6 +1261,9 @@ def _run_layer_analysis_sync(cfg: LayerConfig, geom: dict):
     if cfg.render_type == "outline" or not cfg.analysis_type:
         return AnalysisResult(stats={}, status="ok")
 
+    if cfg.source == "watershed_hierarchy" or cfg.analysis_type == "watershed_hierarchy":
+        return analyze_layer(cfg, geom, vector_url="hierarchy", cog_url=None)
+
     # COG layers with implemented raster analysis
     raster_analysis = {"dem", "jrc_occurrence", "jrc_transitions", "continuous_raster"}
     if cfg.source == "cog" and cfg.analysis_type not in raster_analysis:
@@ -1250,7 +1304,9 @@ async def batch_layer_analysis(
             continue
         if not cfg.analysis_batch:
             continue
-        if cfg.source == "cog" and cfg.s3_key in enabled_cog:
+        if cfg.source == "watershed_hierarchy":
+            configs.append(cfg)
+        elif cfg.source == "cog" and cfg.s3_key in enabled_cog:
             configs.append(cfg)
         elif cfg.source == "vector_fgb" and cfg.s3_key in enabled_vec:
             configs.append(cfg)

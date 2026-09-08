@@ -96,6 +96,17 @@ def normalize_soil_label(value: Any) -> str | None:
     return str(value).strip().title()
 
 
+def wiser_rank_source_columns(style_column: str | None) -> tuple[str, ...]:
+    """Map each WISER rank style_column to its village_resilience.fgb source field(s)."""
+    if style_column == "__wiser_irrigation_access_class":
+        return ("Irr_access",)
+    if style_column == "__wiser_kharif_resilience_class":
+        return ("Kharif_res",)
+    if style_column == "__wiser_rabi_resilience_class":
+        return ("Rabi_res",)
+    return ("Irr_access", "Kharif_res", "Rabi_res")
+
+
 def enrich_vector_gdf(gdf, layer_cfg: LayerConfig):
     """Derive style columns (soil texture, literacy) on clipped GeoDataFrame."""
     if gdf.empty:
@@ -128,11 +139,11 @@ def enrich_vector_gdf(gdf, layer_cfg: LayerConfig):
         elif column in gdf.columns:
             gdf[column] = gdf[column].apply(_normalize_gw)
     elif atype == "wiser_rank" and column:
-        col = _find_column(gdf, column, "Irr_access", "Kharif_res", "Rabi_res")
-        if col and column not in gdf.columns:
+        # Each WISER rank layer maps a different source field from village_resilience.fgb.
+        # Never fall through Irr_access → Kharif/Rabi or all three choropleths look identical.
+        col = _find_column(gdf, *wiser_rank_source_columns(column))
+        if col:
             gdf[column] = gdf[col].apply(_normalize_rank)
-        elif column in gdf.columns:
-            gdf[column] = gdf[column].apply(_normalize_rank)
     elif atype == "demographics_marginalized" or column == "pct_scst":
         target = column or "pct_scst"
         if target not in gdf.columns or gdf[target].isna().all():
@@ -180,12 +191,30 @@ def _clip_lines_to_watershed(gdf, watershed_geom: dict):
     return out
 
 
+def _filter_intersecting_watershed(gdf, watershed_geom: dict):
+    """Keep full feature geometries that touch the watershed (no cut)."""
+    import geopandas as gpd
+
+    ws = shape(watershed_geom)
+    if gdf.crs is None:
+        gdf = gdf.set_crs(4326)
+    else:
+        gdf = gdf.to_crs(4326)
+    out = gdf[gdf.geometry.intersects(ws)].copy()
+    out = out[~out.geometry.is_empty]
+    if out.empty:
+        return gpd.GeoDataFrame(columns=gdf.columns, crs=gdf.crs)
+    return out
+
+
 def _clip_vector_to_watershed(gdf, watershed_geom: dict, layer_cfg: LayerConfig | None = None):
     geometry_kind = "polygon"
     if layer_cfg:
         geometry_kind = layer_cfg.geometry_kind or (
             "line" if layer_cfg.render_type == "line" else "polygon"
         )
+    if layer_cfg and (layer_cfg.clip_mode or "").lower() == "intersect":
+        return _filter_intersecting_watershed(gdf, watershed_geom)
     if geometry_kind == "line" or (layer_cfg and layer_cfg.render_type == "line"):
         return _clip_lines_to_watershed(gdf, watershed_geom)
     return _clip_to_watershed(gdf, watershed_geom)
@@ -203,6 +232,11 @@ def _area_m2(geom) -> float:
 
 
 _FGB_CACHE_DIR = Path(tempfile.gettempdir()) / "dda_vector_fgb_cache"
+# Full-file local cache for mid-size GPKGs (Sub Basins ~77MB). Skip huge national files.
+_LOCAL_VECTOR_CACHE_MAX_BYTES = 120 * 1024 * 1024
+_LOCAL_VECTOR_SUFFIXES = {".gpkg"}
+_vector_cache_locks: dict[str, Any] = {}
+_vector_cache_guard = None
 
 
 def _download_bytes(url: str) -> bytes:
@@ -225,14 +259,69 @@ def _vsis3_path(s3_key: str) -> str:
     return f"/vsis3/{settings.aws_s3_bucket}/{s3_key.lstrip('/')}"
 
 
-def _read_vector_gdf_bbox(s3_key: str, bbox: tuple[float, float, float, float]):
-    """Read only features intersecting bbox via GDAL /vsis3/ HTTP range requests.
+def _cache_lock_for(s3_key: str):
+    import threading
 
-    Does NOT download the full national FGB (critical for villages.fgb ~600MB).
+    global _vector_cache_guard
+    if _vector_cache_guard is None:
+        _vector_cache_guard = threading.Lock()
+    with _vector_cache_guard:
+        lock = _vector_cache_locks.get(s3_key)
+        if lock is None:
+            lock = threading.Lock()
+            _vector_cache_locks[s3_key] = lock
+        return lock
+
+
+def _ensure_local_vector_cache(s3_key: str) -> Path | None:
+    """Download mid-size GPKG once for fast local bbox reads; None → use /vsis3/."""
+    suffix = Path(s3_key).suffix.lower()
+    if suffix not in _LOCAL_VECTOR_SUFFIXES:
+        return None
+
+    from app.shared.config import settings
+
+    try:
+        import boto3
+    except ImportError:
+        return None
+
+    safe = s3_key.replace("/", "_").replace("..", "_")
+    path = _FGB_CACHE_DIR / safe
+    with _cache_lock_for(s3_key):
+        try:
+            client = boto3.client("s3")
+            head = client.head_object(Bucket=settings.aws_s3_bucket, Key=s3_key.lstrip("/"))
+            size = int(head.get("ContentLength") or 0)
+        except Exception:
+            return None
+        if size <= 0 or size > _LOCAL_VECTOR_CACHE_MAX_BYTES:
+            return None
+        if path.exists() and path.stat().st_size == size:
+            return path
+        _FGB_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        try:
+            client.download_file(settings.aws_s3_bucket, s3_key.lstrip("/"), str(tmp))
+            tmp.replace(path)
+        except Exception:
+            tmp.unlink(missing_ok=True)
+            return None
+        if path.exists() and path.stat().st_size > 0:
+            return path
+        return None
+
+
+def _read_vector_gdf_bbox(s3_key: str, bbox: tuple[float, float, float, float]):
+    """Read only features intersecting bbox.
+
+    Mid-size GPKGs are cached locally (vsis3 range reads on GPKG are very slow).
+    Large FGB/GPKG stay on /vsis3/ HTTP range requests and are never fully downloaded.
     """
     import geopandas as gpd
 
-    path = _vsis3_path(s3_key)
+    local = _ensure_local_vector_cache(s3_key)
+    path = str(local) if local is not None else _vsis3_path(s3_key)
     return gpd.read_file(path, bbox=bbox)
 
 
@@ -334,6 +423,7 @@ def clip_vector_geojson(
     watershed_geom: dict,
     *,
     layer_cfg: LayerConfig | None = None,
+    pad_frac: float = 0.05,
 ) -> dict:
     """Return watershed-clipped GeoJSON FeatureCollection for map rendering.
 
@@ -341,7 +431,7 @@ def clip_vector_geojson(
     full national FGB.
     """
     del vector_url  # unused; vsis3 uses IAM/env credentials
-    bbox = _watershed_bbox(watershed_geom)
+    bbox = _watershed_bbox(watershed_geom, pad_frac=pad_frac)
     gdf = _read_vector_gdf_bbox(s3_key, bbox)
     clipped = _clip_vector_to_watershed(gdf, watershed_geom, layer_cfg)
     if clipped.empty:
@@ -427,14 +517,9 @@ def analyze_wiser_rank(clipped, style_column: str | None = None) -> dict[str, st
     total = float(clipped["calc_area"].sum()) or 1.0
     candidates = [
         style_column or "",
-        "__wiser_irrigation_access_class",
-        "__wiser_kharif_resilience_class",
-        "__wiser_rabi_resilience_class",
-        "Irr_access",
-        "Kharif_res",
-        "Rabi_res",
+        *wiser_rank_source_columns(style_column),
     ]
-    col = _find_column(clipped, *[c for c in candidates if c], search_terms=("class", "rank", "access", "resilien"))
+    col = _find_column(clipped, *[c for c in candidates if c])
     if not col:
         return {"Data Warning": "WISER class field was not found."}
     labels = clipped[col].apply(_normalize_rank)
@@ -804,6 +889,12 @@ def analyze_layer(
             if not cog_url:
                 return AnalysisResult(stats={}, status="error", error="Missing COG URL for raster analysis")
             stats = analyze_continuous_raster(cog_url, watershed_geom, nodata=layer_cfg.nodata)
+            return AnalysisResult(stats=stats)
+
+        if atype == "watershed_hierarchy" or layer_cfg.source == "watershed_hierarchy":
+            from app.modules.diagnose.services.preview_context import analyze_watershed_hierarchy
+
+            stats = analyze_watershed_hierarchy(watershed_geom)
             return AnalysisResult(stats=stats)
 
         if not vector_url and layer_cfg.source == "vector_fgb":

@@ -17,6 +17,7 @@
 		fetchVillageDistricts,
 		fetchVillageStates,
 		fetchVillagesByDistrict,
+		fetchWatershedPreviewContext,
 		lookupWatershed,
 		watershedsFromGeometry,
 		watershedsFromVillage
@@ -34,6 +35,9 @@
 	let selectMode = $state('point');
 	let watershedPreview = $state(null);
 	let previewLoading = $state(false);
+	/** @type {Array<object>} */
+	let previewContextLayers = $state([]);
+	let contextLoading = $state(false);
 	let creating = $state(false);
 	let deletingId = $state(null);
 	let mounted = $state(false);
@@ -47,6 +51,10 @@
 	let districtOptions = $state([]);
 	/** @type {Array<{ id: string, name: string }>} */
 	let villageOptions = $state([]);
+	/** @type {Map<string, string[]>} */
+	const districtCache = new Map();
+	/** @type {Map<string, Array<{ id: string, name: string }>>} */
+	const villageCache = new Map();
 	let cascadeLoading = $state('');
 	let cascadeError = $state('');
 	let uploadError = $state('');
@@ -61,7 +69,7 @@
 		districtOptions.map((d) => ({ value: d, label: titleCase(d) }))
 	);
 	const villageSelectOptions = $derived(
-		villageOptions.map((v) => ({ value: v.id, label: v.name }))
+		villageOptions.map((v) => ({ value: String(v.id), label: titleCase(v.name) }))
 	);
 
 	function titleCase(s) {
@@ -108,7 +116,9 @@
 	function setMode(mode) {
 		selectMode = mode;
 		watershedPreview = null;
+		previewContextLayers = [];
 		previewLoading = false;
+		contextLoading = false;
 		cascadeError = '';
 		uploadError = '';
 		uploadName = '';
@@ -120,6 +130,23 @@
 			ensureStatesLoaded();
 		} else {
 			resetVillageCascade();
+		}
+	}
+
+	async function loadPreviewContext(geometry) {
+		if (!geometry) {
+			previewContextLayers = [];
+			return;
+		}
+		contextLoading = true;
+		try {
+			const result = await fetchWatershedPreviewContext(geometry);
+			previewContextLayers = result.layers ?? [];
+		} catch (err) {
+			console.error('Preview context failed', err);
+			previewContextLayers = [];
+		} finally {
+			contextLoading = false;
 		}
 	}
 
@@ -153,10 +180,17 @@
 		villageOptions = [];
 		watershedPreview = null;
 		if (!state) return;
-		cascadeLoading = 'districts';
 		cascadeError = '';
+		const cached = districtCache.get(state);
+		if (cached) {
+			districtOptions = cached;
+			return;
+		}
+		cascadeLoading = 'districts';
 		try {
-			districtOptions = await fetchVillageDistricts(state);
+			const rows = await fetchVillageDistricts(state);
+			districtCache.set(state, rows);
+			if (villageState === state) districtOptions = rows;
 		} catch (err) {
 			cascadeError = String(err);
 		} finally {
@@ -170,10 +204,18 @@
 		villageOptions = [];
 		watershedPreview = null;
 		if (!district || !villageState) return;
-		cascadeLoading = 'villages';
 		cascadeError = '';
+		const cacheKey = `${villageState}::${district}`;
+		const cached = villageCache.get(cacheKey);
+		if (cached) {
+			villageOptions = cached;
+			return;
+		}
+		cascadeLoading = 'villages';
 		try {
-			villageOptions = await fetchVillagesByDistrict(villageState, district);
+			const rows = await fetchVillagesByDistrict(villageState, district);
+			villageCache.set(cacheKey, rows);
+			if (villageState && villageDistrict === district) villageOptions = rows;
 		} catch (err) {
 			cascadeError = String(err);
 		} finally {
@@ -185,11 +227,13 @@
 		villageId = id;
 		if (!id) {
 			watershedPreview = null;
+			previewContextLayers = [];
 			return;
 		}
 		const hit = villageOptions.find((v) => v.id === id);
 		previewLoading = true;
 		watershedPreview = null;
+		previewContextLayers = [];
 		cascadeError = '';
 		try {
 			const result = await watershedsFromVillage({ villageId: id });
@@ -197,6 +241,7 @@
 			if (result.seed_lng != null) lng = result.seed_lng;
 			if (result.seed_lat != null) lat = result.seed_lat;
 			if (!name.trim() && hit?.name) name = titleCase(hit.name);
+			if (result.geometry) void loadPreviewContext(result.geometry);
 		} catch (err) {
 			watershedPreview = { error: String(err) };
 		} finally {
@@ -241,9 +286,11 @@
 		coordInput = formatCoordInput(lat, lng);
 		previewLoading = true;
 		watershedPreview = null;
+		previewContextLayers = [];
 		try {
 			const result = await lookupWatershed(lng, lat);
 			watershedPreview = { ...result, source: 'point' };
+			if (result.geometry) void loadPreviewContext(result.geometry);
 		} catch (err) {
 			watershedPreview = { error: String(err) };
 		} finally {
@@ -278,6 +325,7 @@
 		if (!file) return;
 		previewLoading = true;
 		watershedPreview = null;
+		previewContextLayers = [];
 		try {
 			const { geometry, name: aoiName } = await parseAoiFile(file);
 			uploadName = aoiName;
@@ -285,6 +333,7 @@
 			watershedPreview = result;
 			if (result.seed_lng != null) lng = result.seed_lng;
 			if (result.seed_lat != null) lat = result.seed_lat;
+			if (result.geometry) void loadPreviewContext(result.geometry);
 		} catch (err) {
 			uploadError = String(err);
 			watershedPreview = { error: String(err) };
@@ -332,6 +381,7 @@
 		showCreate = true;
 		error = '';
 		watershedPreview = null;
+		previewContextLayers = [];
 		selectMode = 'point';
 		coordError = '';
 		coordInput = formatCoordInput(lat, lng);
@@ -390,7 +440,7 @@
 		selectMode === 'point'
 			? 'Click the map or enter coordinates (latitude, longitude) to detect the watershed.'
 			: selectMode === 'village'
-				? 'Choose state → district → village. Preview shows the village boundary (purple) and each intersecting Level-12 basin in its own colour.'
+				? 'Choose state → district → village. Preview shows the village boundary (grey dotted) and Level-12 micro watersheds in blue.'
 				: 'Upload a polygon AOI (GeoJSON, KML, or GPX polygon). That shape becomes the clip boundary.'
 	);
 </script>
@@ -402,180 +452,187 @@
 		{#if loading}
 			<p class="text-brand-steel">Loading projects…</p>
 		{:else if showCreate}
-			<div class="mx-auto max-w-3xl rounded-xl bg-white p-6 shadow-sm">
-				<h2 class="m-0 mb-4 font-headline text-lg font-semibold text-brand-navy">New project</h2>
+			<div class="create-shell mx-auto flex min-h-[calc(100vh-7.5rem)] w-full max-w-[1600px] flex-col overflow-hidden rounded-xl bg-white shadow-sm md:flex-row">
+				<aside class="create-side flex w-full flex-col gap-4 overflow-y-auto border-brand-navy/10 p-5 md:w-1/4 md:border-r">
+					<h2 class="m-0 font-headline text-lg font-semibold text-brand-navy">New project</h2>
 
-				<label class="mb-1 block font-body text-sm font-medium text-brand-navy" for="proj-name"
-					>Project name</label
-				>
-				<input
-					id="proj-name"
-					type="text"
-					class="mb-4 w-full rounded border border-brand-navy/20 px-3 py-2 font-body"
-					bind:value={name}
-					placeholder="e.g. North basin survey"
-				/>
+					<label class="block font-body text-sm font-medium text-brand-navy" for="proj-name"
+						>Project name</label
+					>
+					<input
+						id="proj-name"
+						type="text"
+						class="w-full rounded border border-brand-navy/20 px-3 py-2 font-body"
+						bind:value={name}
+						placeholder="e.g. North basin survey"
+					/>
 
-				<div class="mb-3 flex flex-wrap gap-2" role="tablist" aria-label="Watershed selection mode">
-					{#each [
-						{ id: 'point', label: 'Map click' },
-						{ id: 'village', label: 'Village' },
-						{ id: 'custom', label: 'Upload AOI' }
-					] as mode}
-						<button
-							type="button"
-							role="tab"
-							aria-selected={selectMode === mode.id}
-							class="mode-tab"
-							class:active={selectMode === mode.id}
-							onclick={() => setMode(mode.id)}
-						>
-							{mode.label}
-						</button>
-					{/each}
-				</div>
-
-				{#if selectMode === 'point'}
-					<div class="mb-3 grid gap-2 sm:grid-cols-[1fr_auto] sm:items-end">
-						<div>
-							<label class="mb-1 block font-body text-sm font-medium text-brand-navy" for="coord-input"
-								>Coordinates (lat, lng)</label
+					<div class="flex flex-wrap gap-2" role="tablist" aria-label="Watershed selection mode">
+						{#each [
+							{ id: 'point', label: 'Map click' },
+							{ id: 'village', label: 'Village' },
+							{ id: 'custom', label: 'Upload AOI' }
+						] as mode}
+							<button
+								type="button"
+								role="tab"
+								aria-selected={selectMode === mode.id}
+								class="mode-tab"
+								class:active={selectMode === mode.id}
+								onclick={() => setMode(mode.id)}
 							>
-							<input
-								id="coord-input"
-								type="text"
-								inputmode="decimal"
-								autocomplete="off"
-								class="w-full rounded border border-brand-navy/20 px-3 py-2 font-body"
-								bind:value={coordInput}
-								onkeydown={onCoordKeydown}
-								placeholder="e.g. 12.9716, 77.5946"
+								{mode.label}
+							</button>
+						{/each}
+					</div>
+
+					{#if selectMode === 'point'}
+						<div class="grid gap-2">
+							<div>
+								<label class="mb-1 block font-body text-sm font-medium text-brand-navy" for="coord-input"
+									>Coordinates (lat, lng)</label
+								>
+								<input
+									id="coord-input"
+									type="text"
+									inputmode="decimal"
+									autocomplete="off"
+									class="w-full rounded border border-brand-navy/20 px-3 py-2 font-body"
+									bind:value={coordInput}
+									onkeydown={onCoordKeydown}
+									placeholder="e.g. 12.9716, 77.5946"
+								/>
+							</div>
+							<button
+								type="button"
+								class="cursor-pointer rounded bg-brand-blue px-4 py-2 font-body text-sm text-white disabled:opacity-60"
+								disabled={previewLoading}
+								onclick={applyManualCoordinates}
+							>
+								{previewLoading ? 'Finding…' : 'Find watershed'}
+							</button>
+						</div>
+						{#if coordError}
+							<p class="m-0 text-xs text-red-600">{coordError}</p>
+						{/if}
+					{:else if selectMode === 'village'}
+						<div class="grid gap-3">
+							<SearchableSelect
+								id="village-state"
+								label="State"
+								placeholder="Select state…"
+								options={stateSelectOptions}
+								bind:value={villageState}
+								loading={cascadeLoading === 'states'}
+								disabled={cascadeLoading === 'states'}
+								onChange={onStateChange}
+							/>
+							<SearchableSelect
+								id="village-district"
+								label="District"
+								placeholder="Select district…"
+								options={districtSelectOptions}
+								bind:value={villageDistrict}
+								loading={cascadeLoading === 'districts'}
+								disabled={!villageState || cascadeLoading === 'districts'}
+								onChange={onDistrictChange}
+							/>
+							<SearchableSelect
+								id="village-name"
+								label="Village"
+								placeholder="Select village…"
+								options={villageSelectOptions}
+								bind:value={villageId}
+								loading={cascadeLoading === 'villages'}
+								disabled={!villageDistrict || cascadeLoading === 'villages'}
+								emptyText="No villages in this district"
+								onChange={onVillageChange}
 							/>
 						</div>
+						{#if cascadeError}
+							<p class="m-0 text-xs text-red-600">{cascadeError}</p>
+						{/if}
+					{:else if selectMode === 'custom'}
+						<div>
+							<label class="mb-1 block font-body text-sm font-medium text-brand-navy" for="aoi-file"
+								>AOI file</label
+							>
+							<input
+								id="aoi-file"
+								type="file"
+								accept=".geojson,.json,.kml,.gpx,application/geo+json,application/json,application/vnd.google-earth.kml+xml"
+								class="block w-full font-body text-sm"
+								onchange={onAoiFileChange}
+							/>
+							<p class="m-0 mt-1 text-xs text-brand-steel">
+								GeoJSON, KML, or GPX polygon. The uploaded shape is used as the clip boundary.
+							</p>
+							{#if uploadName}
+								<p class="m-0 mt-1 text-xs text-brand-navy">Loaded: {uploadName}</p>
+							{/if}
+							{#if uploadError}
+								<p class="m-0 mt-1 text-xs text-red-600">{uploadError}</p>
+							{/if}
+						</div>
+					{/if}
+
+					<div class="rounded-lg bg-brand-sky/20 p-3 font-body text-sm">
+						{#if previewLoading}
+							<p class="m-0 text-brand-steel">Resolving clip area…</p>
+						{:else if watershedPreview?.error}
+							<p class="m-0 text-red-600">{watershedPreview.error}</p>
+						{:else if watershedPreview}
+							<p class="m-0 font-medium text-brand-navy">{watershedPreview.watershed_name}</p>
+							<p class="m-0 mt-1 text-brand-steel">ID: {watershedPreview.watershed_id}</p>
+							{#if watershedPreview.parts?.length}
+								<p class="m-0 mt-1 text-brand-steel">
+								{watershedPreview.parts.length} micro watershed{watershedPreview.parts.length === 1 ? '' : 's'} (L12) in blue —
+								grey dotted outline is the village boundary.
+								</p>
+							{/if}
+							{#if contextLoading}
+								<p class="m-0 mt-1 text-brand-steel">Loading rivers / basin context…</p>
+							{/if}
+						{:else}
+							<p class="m-0 text-brand-steel">{mapHint}</p>
+						{/if}
+					</div>
+
+					{#if error}
+						<p class="m-0 text-sm text-red-600">{error}</p>
+					{/if}
+
+					<div class="mt-auto flex flex-wrap gap-2 pt-2">
 						<button
-							type="button"
-							class="cursor-pointer rounded bg-brand-blue px-4 py-2 font-body text-sm text-white disabled:opacity-60"
-							disabled={previewLoading}
-							onclick={applyManualCoordinates}
+							class="cursor-pointer rounded bg-brand-blue px-4 py-2 font-body text-white disabled:opacity-60"
+							disabled={creating || !name.trim() || !previewOk()}
+							onclick={handleCreate}
 						>
-							{previewLoading ? 'Finding…' : 'Find watershed'}
+							{creating ? 'Creating…' : 'Create project'}
+						</button>
+						<button
+							class="cursor-pointer rounded bg-brand-steel px-4 py-2 font-body text-white hover:bg-brand-navy"
+							onclick={() => (showCreate = false)}
+						>
+							Cancel
 						</button>
 					</div>
-					{#if coordError}
-						<p class="m-0 mb-3 text-xs text-red-600">{coordError}</p>
-					{/if}
-				{:else if selectMode === 'village'}
-					<div class="mb-3 grid gap-3 sm:grid-cols-3">
-						<SearchableSelect
-							id="village-state"
-							label="State"
-							placeholder="Search state…"
-							options={stateSelectOptions}
-							bind:value={villageState}
-							loading={cascadeLoading === 'states'}
-							disabled={cascadeLoading === 'states'}
-							onChange={onStateChange}
-						/>
-						<SearchableSelect
-							id="village-district"
-							label="District"
-							placeholder="Search district…"
-							options={districtSelectOptions}
-							bind:value={villageDistrict}
-							loading={cascadeLoading === 'districts'}
-							disabled={!villageState || cascadeLoading === 'districts'}
-							onChange={onDistrictChange}
-						/>
-						<SearchableSelect
-							id="village-name"
-							label="Village"
-							placeholder="Search village…"
-							options={villageSelectOptions}
-							bind:value={villageId}
-							loading={cascadeLoading === 'villages'}
-							disabled={!villageDistrict || cascadeLoading === 'villages'}
-							emptyText="No villages in this district"
-							onChange={onVillageChange}
-						/>
-					</div>
-					{#if cascadeError}
-						<p class="m-0 mb-3 text-xs text-red-600">{cascadeError}</p>
-					{/if}
-				{:else if selectMode === 'custom'}
-					<div class="mb-3">
-						<label class="mb-1 block font-body text-sm font-medium text-brand-navy" for="aoi-file"
-							>AOI file</label
-						>
-						<input
-							id="aoi-file"
-							type="file"
-							accept=".geojson,.json,.kml,.gpx,application/geo+json,application/json,application/vnd.google-earth.kml+xml"
-							class="block w-full font-body text-sm"
-							onchange={onAoiFileChange}
-						/>
-						<p class="m-0 mt-1 text-xs text-brand-steel">
-							GeoJSON, KML, or GPX polygon. The uploaded shape is used as the clip boundary.
-						</p>
-						{#if uploadName}
-							<p class="m-0 mt-1 text-xs text-brand-navy">Loaded: {uploadName}</p>
-						{/if}
-						{#if uploadError}
-							<p class="m-0 mt-1 text-xs text-red-600">{uploadError}</p>
-						{/if}
-					</div>
-				{/if}
+				</aside>
 
-				<div class="mb-4 h-80">
+				<section class="create-map flex min-h-[24rem] w-full flex-1 flex-col p-4 md:w-3/4 md:flex-none md:self-stretch">
 					<LocationPicker
 						bind:lng
 						bind:lat
 						onPick={previewWatershedFromPoint}
 						clipGeometry={watershedPreview?.geometry ?? null}
 						villageGeometry={watershedPreview?.village_geometry ?? null}
+						villageName={watershedPreview?.village_name ?? null}
 						parts={watershedPreview?.parts ?? null}
+						contextLayers={previewContextLayers}
 						interactiveClick={selectMode === 'point'}
 						hint={mapHint}
 					/>
-				</div>
-
-				<div class="mb-4 rounded-lg bg-brand-sky/20 p-3 font-body text-sm">
-					{#if previewLoading}
-						<p class="m-0 text-brand-steel">Resolving clip area…</p>
-					{:else if watershedPreview?.error}
-						<p class="m-0 text-red-600">{watershedPreview.error}</p>
-					{:else if watershedPreview}
-						<p class="m-0 font-medium text-brand-navy">{watershedPreview.watershed_name}</p>
-						<p class="m-0 mt-1 text-brand-steel">ID: {watershedPreview.watershed_id}</p>
-						{#if watershedPreview.parts?.length}
-							<p class="m-0 mt-1 text-brand-steel">
-								{watershedPreview.parts.length} basin{watershedPreview.parts.length === 1 ? '' : 's'} —
-								each colour is a Level-12 watershed; purple outline is the village boundary.
-							</p>
-						{/if}
-					{:else}
-						<p class="m-0 text-brand-steel">{mapHint}</p>
-					{/if}
-				</div>
-
-				{#if error}
-					<p class="mb-3 text-sm text-red-600">{error}</p>
-				{/if}
-
-				<div class="flex gap-2">
-					<button
-						class="cursor-pointer rounded bg-brand-blue px-4 py-2 font-body text-white disabled:opacity-60"
-						disabled={creating || !name.trim() || !previewOk()}
-						onclick={handleCreate}
-					>
-						{creating ? 'Creating…' : 'Create project'}
-					</button>
-					<button
-						class="cursor-pointer rounded bg-brand-steel px-4 py-2 font-body text-white hover:bg-brand-navy"
-						onclick={() => (showCreate = false)}
-					>
-						Cancel
-					</button>
-				</div>
+				</section>
 			</div>
 		{:else}
 			{#if error}
@@ -944,6 +1001,10 @@
 		background: color-mix(in srgb, #1b75e0 12%, white);
 		color: #00306d;
 		font-weight: 600;
+	}
+
+	.create-map :global(.maplibregl-map) {
+		min-height: 100%;
 	}
 
 	@media (prefers-reduced-motion: reduce) {

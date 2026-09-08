@@ -205,7 +205,7 @@
 			<button type="button" disabled={packaging || syncing} onclick={handlePackage}>
 				{packaging ? 'Packaging…' : 'Package to QField'}
 			</button>
-			<button type="button" class="primary" disabled={packaging || syncing} onclick={handleSync}>
+			<button type="button" disabled={packaging || syncing} onclick={handleSync}>
 				{syncing ? 'Syncing…' : 'Sync from QField'}
 			</button>
 		</ModuleHeader>

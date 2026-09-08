@@ -168,13 +168,13 @@ def test_notebook_gap_layers_resolve_by_s3_key():
     assert drainage.render_type == "line"
     assert drainage.line_color == "#00306d"
 
-    lineaments = catalog.by_id("lineaments")
-    assert lineaments is not None
-    assert lineaments.geometry_kind == "line"
-    assert lineaments.style_column == "structure_type"
-    legend = {e.value: e.color for e in lineaments.legend_entries()}
-    assert legend["dyke"] == "#377eb8"
-    assert legend["fault"] == "#e41a1c"
+    assert catalog.by_id("lineaments") is None
+
+    villages = catalog.by_id("village_boundaries")
+    assert villages is not None
+    assert villages.clip_mode == "intersect"
+    assert villages.line_dasharray == (2, 1.5)
+    assert villages.line_color == "#1f2937"
 
     literacy = catalog.by_id("literacy")
     assert literacy is not None

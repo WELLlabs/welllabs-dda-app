@@ -104,8 +104,8 @@ export async function fetchVillageDistricts(state) {
 	return data.districts ?? [];
 }
 
-export async function fetchVillagesByDistrict(state, district, q = '', limit = 500) {
-	const params = new URLSearchParams({ state, district, limit: String(limit) });
+export async function fetchVillagesByDistrict(state, district, q = '') {
+	const params = new URLSearchParams({ state, district });
 	if (q) params.set('q', q);
 	const data = await request(`/watersheds/villages/by-district?${params}`);
 	return data.villages ?? [];
@@ -128,6 +128,22 @@ export async function watershedsFromGeometry(geometry, name = null) {
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({ geometry, name })
 	});
+}
+
+/** Rivers / basin / sub-basin / L7 overlays for the create-project map preview. */
+export async function fetchWatershedPreviewContext(geometry) {
+	return request('/watersheds/preview-context', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ geometry })
+	});
+}
+
+/** Post-create Watershed layer: basin / sub-basin / L7 / L12 / rivers. */
+export async function fetchWatershedHierarchy(projectId) {
+	return request(
+		`/layers/watershed/hierarchy?project_id=${encodeURIComponent(projectId)}`
+	);
 }
 
 function layerQuery(bounds, projectId) {

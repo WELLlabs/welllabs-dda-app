@@ -3,27 +3,33 @@
 	 *   id?: string,
 	 *   label?: string,
 	 *   placeholder?: string,
+	 *   filterPlaceholder?: string,
 	 *   options?: Array<{ value: string, label: string }>,
 	 *   value?: string,
 	 *   disabled?: boolean,
 	 *   loading?: boolean,
 	 *   emptyText?: string,
+	 *   searchable?: boolean,
 	 *   onChange?: (value: string) => void
 	 * }} */
 	let {
 		id = 'searchable-select',
 		label = '',
-		placeholder = 'Search…',
+		placeholder = 'Select…',
+		filterPlaceholder = 'Type to filter…',
 		options = [],
 		value = $bindable(''),
 		disabled = false,
 		loading = false,
-		emptyText = 'No matches',
+		emptyText = 'No options',
+		searchable = true,
 		onChange
 	} = $props();
 
 	let open = $state(false);
 	let filter = $state('');
+	/** @type {HTMLInputElement | undefined} */
+	let filterEl = $state();
 	let rootEl;
 
 	const selectedLabel = $derived(
@@ -32,14 +38,17 @@
 
 	const filtered = $derived.by(() => {
 		const q = filter.trim().toLowerCase();
-		if (!q) return options.slice(0, 300);
-		return options.filter((o) => o.label.toLowerCase().includes(q)).slice(0, 300);
+		if (!searchable || !q) return options;
+		return options.filter((o) => o.label.toLowerCase().includes(q));
 	});
 
 	function toggle() {
 		if (disabled) return;
 		open = !open;
-		if (open) filter = '';
+		if (open) {
+			filter = '';
+			queueMicrotask(() => filterEl?.focus());
+		}
 	}
 
 	function pick(opt) {
@@ -86,18 +95,22 @@
 			class="absolute z-30 mt-1 w-full overflow-hidden rounded border border-brand-navy/15 bg-white shadow-md"
 			role="listbox"
 		>
-			<input
-				type="search"
-				class="w-full border-0 border-b border-brand-navy/10 px-3 py-2 font-body text-sm outline-none"
-				placeholder={placeholder}
-				bind:value={filter}
-				onclick={(e) => e.stopPropagation()}
-			/>
-			<ul class="m-0 max-h-52 list-none overflow-auto p-0">
+			{#if searchable}
+				<input
+					bind:this={filterEl}
+					type="search"
+					class="w-full border-0 border-b border-brand-navy/10 px-3 py-2 font-body text-sm outline-none"
+					placeholder={filterPlaceholder}
+					bind:value={filter}
+					onclick={(e) => e.stopPropagation()}
+					onkeydown={(e) => e.stopPropagation()}
+				/>
+			{/if}
+			<ul class="m-0 max-h-64 list-none overflow-auto p-0">
 				{#if filtered.length === 0}
 					<li class="px-3 py-2 text-sm text-brand-steel">{emptyText}</li>
 				{:else}
-					{#each filtered as opt (opt.value)}
+					{#each filtered as opt, i (opt.value + '::' + i)}
 						<li>
 							<button
 								type="button"
