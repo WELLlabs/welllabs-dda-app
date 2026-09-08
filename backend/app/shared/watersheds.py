@@ -23,6 +23,12 @@ logger = logging.getLogger(__name__)
 _NAME_KEYS = ("name", "watershed_name", "NAME", "WATERSHED", "ws_name", "basin_name", "uid", "DN")
 _ID_KEYS = ("id", "watershed_id", "FID", "fid", "OBJECTID", "objectid", "gid", "HYBAS_ID", "hybas_id", "uid")
 
+# ~25–30 m — enough for map preview / AOI clip without shipping dense census rings.
+_PREVIEW_SIMPLIFY_DEG = 0.00025
+_village_resolve_cache: dict[str, tuple[float, dict]] = {}
+_village_resolve_lock = threading.Lock()
+_VILLAGE_RESOLVE_TTL_S = 45 * 60
+
 _VILLAGE_NAME_KEYS = (
     "Village Na",
     "Village Name",
@@ -145,21 +151,42 @@ def _pick_prop(props: dict, keys: tuple[str, ...], fallback: str = "") -> str:
     return fallback
 
 
+def _simplify_for_preview(geom):
+    """Drop excess vertices for faster JSON + map paint; keep topology."""
+    if geom is None or geom.is_empty:
+        return geom
+    try:
+        simple = geom.simplify(_PREVIEW_SIMPLIFY_DEG, preserve_topology=True)
+        if simple is None or simple.is_empty:
+            return geom
+        if simple.geom_type not in ("Polygon", "MultiPolygon"):
+            return geom
+        if not simple.is_valid:
+            simple = make_valid(simple)
+        if simple.geom_type not in ("Polygon", "MultiPolygon") or simple.is_empty:
+            return geom
+        return simple
+    except Exception:
+        return geom
+
+
 def _geojson_geom(geom) -> dict:
-    return json.loads(json.dumps(mapping(geom)))
+    # mapping() is already JSON-serializable; avoid dumps/loads round-trip.
+    return mapping(geom)
 
 
-def _feature_payload(geom, props: dict | None = None) -> dict:
+def _feature_payload(geom, props: dict | None = None, *, simplify: bool = True) -> dict:
     props = props or {}
     name = _pick_prop(props, _NAME_KEYS)
     if not name:
         name = _pick_prop(props, _ID_KEYS, "Unknown watershed")
     wid = _pick_prop(props, _ID_KEYS, name)
+    out_geom = _simplify_for_preview(geom) if simplify else geom
     return {
         "watershed_id": wid,
         "watershed_name": name,
-        "geometry": _geojson_geom(geom),
-        "bounds": list(geom.bounds),
+        "geometry": _geojson_geom(out_geom),
+        "bounds": list(out_geom.bounds),
     }
 
 
@@ -268,6 +295,64 @@ def lookup_watershed(lng: float, lat: float) -> dict:
         raise ValueError(f"No watershed contains point ({lng}, {lat})")
 
     return _feature_payload(geom, props)
+
+
+def village_containing_point(lng: float, lat: float) -> tuple[Any, dict]:
+    """Return the village polygon containing (lng, lat), if any."""
+    _configure_gdal_aws()
+    path = _villages_vsis3_path()
+    point = Point(lng, lat)
+    for pad in (0.02, 0.08, 0.2, 0.5):
+        try:
+            table, geom_col = _read_bbox(path, lng, lat, pad)
+        except Exception as exc:
+            logger.warning("Village containing-point read failed pad=%s: %s", pad, exc)
+            continue
+        geom, props = _find_containing(table, geom_col, point)
+        if geom is None:
+            geom, props = _find_intersecting(table, geom_col, point.buffer(0.002))
+        if geom is not None and props is not None:
+            return geom, props
+    raise ValueError(f"No village contains point ({lng}, {lat})")
+
+
+def lookup_watershed_with_village_context(lng: float, lat: float) -> dict:
+    """Point L12 lookup, plus village micros when the point falls in a village.
+
+    Default clip geometry remains the L12 under the click. When the containing
+    village intersects multiple micros, ``parts`` lists them and ``all_*`` holds
+    the union clip for an optional "all intersecting" choice.
+    """
+    hit = lookup_watershed(lng, lat)
+    hit["parts"] = []
+    hit["source"] = "point"
+    hit["seed_lng"] = float(lng)
+    hit["seed_lat"] = float(lat)
+    hit["village_geometry"] = None
+    hit["village_name"] = None
+
+    try:
+        village_geom, village_props = village_containing_point(lng, lat)
+    except ValueError:
+        return hit
+
+    village_name = _pick_prop(village_props, _VILLAGE_NAME_KEYS) or None
+    hit["village_geometry"] = _geojson_geom(_simplify_for_preview(village_geom))
+    hit["village_name"] = village_name
+
+    try:
+        parts = watersheds_intersecting(village_geom)
+    except ValueError:
+        return hit
+
+    hit["parts"] = parts
+    if len(parts) > 1:
+        unioned = union_geometries(parts, village_name=village_name)
+        hit["all_geometry"] = unioned["geometry"]
+        hit["all_watershed_id"] = unioned["watershed_id"]
+        hit["all_watershed_name"] = unioned["watershed_name"]
+        hit["all_bounds"] = unioned["bounds"]
+    return hit
 
 
 def parse_geojson_polygon(geometry: dict) -> Polygon | MultiPolygon:
@@ -379,6 +464,7 @@ def union_geometries(
         merged = make_valid(merged)
     if merged.geom_type not in ("Polygon", "MultiPolygon"):
         raise ValueError("Union did not produce a polygon")
+    merged = _simplify_for_preview(merged)
 
     ids = [str(f.get("watershed_id") or "") for f in features if f.get("watershed_id")]
     ids = [i for i in ids if i]
@@ -812,15 +898,26 @@ def resolve_village_watersheds(
     geometry: dict | None = None,
 ) -> dict:
     """Village polygon → intersecting Level-12 basins → union clip preview."""
+    cache_key = (village_id or "").strip() or None
+    if cache_key and geometry is None:
+        with _village_resolve_lock:
+            hit = _village_resolve_cache.get(cache_key)
+        if hit is not None:
+            ts, payload = hit
+            if (time.monotonic() - ts) < _VILLAGE_RESOLVE_TTL_S:
+                logger.info("Village watershed resolve cache hit id=%s", cache_key)
+                return payload
+
+    t0 = time.monotonic()
     village_name = None
     village_geom_geojson = None
     if geometry is not None:
         village_geom = parse_geojson_polygon(geometry)
-        village_geom_geojson = _geojson_geom(village_geom)
+        village_geom_geojson = _geojson_geom(_simplify_for_preview(village_geom))
     elif village_id:
         village_geom, props = village_geometry_by_id(village_id)
         village_name = _pick_prop(props, _VILLAGE_NAME_KEYS) or None
-        village_geom_geojson = _geojson_geom(village_geom)
+        village_geom_geojson = _geojson_geom(_simplify_for_preview(village_geom))
     else:
         raise ValueError("Provide village_id or geometry")
 
@@ -828,6 +925,24 @@ def resolve_village_watersheds(
     result = union_geometries(parts, village_name=village_name)
     result["village_geometry"] = village_geom_geojson
     result["village_name"] = village_name
+    # Client snapshots geometry as the "all" choice — avoid duplicating large polygons
+    # in the JSON body (was doubling response size / parse time).
+    logger.info(
+        "Village watershed resolve id=%s parts=%s in %.2fs",
+        cache_key or "geometry",
+        len(parts),
+        time.monotonic() - t0,
+    )
+
+    if cache_key and geometry is None:
+        with _village_resolve_lock:
+            _village_resolve_cache[cache_key] = (time.monotonic(), result)
+            # Bound memory if many villages are probed in one process.
+            if len(_village_resolve_cache) > 256:
+                oldest = sorted(_village_resolve_cache.items(), key=lambda kv: kv[1][0])[:64]
+                for key, _ in oldest:
+                    _village_resolve_cache.pop(key, None)
+
     return result
 
 

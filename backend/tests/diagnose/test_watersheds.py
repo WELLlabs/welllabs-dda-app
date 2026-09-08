@@ -76,6 +76,45 @@ def test_union_geometries_merges_parts():
     assert mapping(merged)["type"] in ("Polygon", "MultiPolygon")
 
 
+def test_lookup_with_village_context_attaches_all_union(monkeypatch):
+    from app.shared import watersheds as ws
+    from shapely.geometry import box
+
+    point_hit = {
+        "watershed_id": "a",
+        "watershed_name": "A",
+        "geometry": SQUARE_A,
+        "bounds": [0, 0, 1, 1],
+    }
+    parts = [
+        point_hit,
+        {
+            "watershed_id": "b",
+            "watershed_name": "B",
+            "geometry": SQUARE_B,
+            "bounds": [0.5, 0.5, 1.5, 1.5],
+        },
+    ]
+    village = box(0, 0, 1.2, 1.2)
+
+    monkeypatch.setattr(ws, "lookup_watershed", lambda lng, lat: dict(point_hit))
+    monkeypatch.setattr(
+        ws,
+        "village_containing_point",
+        lambda lng, lat: (village, {"Village Na": "Demo Village"}),
+    )
+    monkeypatch.setattr(ws, "watersheds_intersecting", lambda geom: parts)
+
+    result = ws.lookup_watershed_with_village_context(0.2, 0.2)
+    assert result["watershed_id"] == "a"
+    assert result["village_name"] == "Demo Village"
+    assert result["village_geometry"] is not None
+    assert len(result["parts"]) == 2
+    assert result["all_watershed_id"]
+    assert "a" in result["all_watershed_id"] and "b" in result["all_watershed_id"]
+    assert shape(result["all_geometry"]).area > shape(result["geometry"]).area
+
+
 def test_union_geometries_requires_features():
     with pytest.raises(ValueError, match="No watershed"):
         union_geometries([])

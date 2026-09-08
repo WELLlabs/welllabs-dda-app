@@ -24,6 +24,7 @@
 	 *   villageGeometry?: object | null,
 	 *   villageName?: string | null,
 	 *   parts?: Array<{ geometry?: object, watershed_id?: string, watershed_name?: string }> | null,
+	 *   selectedPartId?: string | null,
 	 *   contextLayers?: Array<{
 	 *     id: string,
 	 *     name?: string,
@@ -49,6 +50,7 @@
 		villageGeometry = null,
 		villageName = null,
 		parts = null,
+		selectedPartId = null,
 		contextLayers = null,
 		interactiveClick = true,
 		showMarker = undefined,
@@ -56,6 +58,11 @@
 	} = $props();
 
 	const markerVisible = $derived(showMarker ?? interactiveClick);
+	/** Match legend “Micro watershed (L12)” */
+	const SELECTED_COLOR = MICRO_COLOR;
+	/** Same family, clearly secondary — listed as “Other micros” when multi-select */
+	const UNSELECTED_COLOR = '#7eb6f5';
+	const CLIP_ACCENT = '#ea580c';
 
 	const showLegend = $derived(
 		Boolean(
@@ -75,7 +82,31 @@
 			if (layer.status === 'error') item.error = true;
 		}
 		const order = ['basin', 'sub_basin', 'level7', 'micro', 'rivers', 'village'];
-		return order.map((id) => byId.get(id)).filter(Boolean);
+		const items = order.map((id) => byId.get(id)).filter(Boolean);
+		const multi = Array.isArray(parts) && parts.length > 1;
+		const choosingOne = multi && selectedPartId && selectedPartId !== 'all';
+		if (choosingOne) {
+			const micro = items.find((i) => i.id === 'micro');
+			if (micro) micro.name = 'Selected micro';
+			const microIdx = items.findIndex((i) => i.id === 'micro');
+			const other = {
+				id: 'micro_other',
+				name: 'Other micros',
+				color: UNSELECTED_COLOR,
+				style: 'solid'
+			};
+			if (microIdx >= 0) items.splice(microIdx + 1, 0, other);
+			else items.push(other);
+		}
+		if (clipGeometry) {
+			items.push({
+				id: 'selected_clip',
+				name: 'Selected clip',
+				color: CLIP_ACCENT,
+				style: 'dashed'
+			});
+		}
+		return items;
 	});
 
 	let container;
@@ -121,7 +152,9 @@
 		map.on('load', () => {
 			styleReady = true;
 			ensureOverlayLayers();
+			map.getCanvas().style.cursor = interactiveClick ? 'crosshair' : 'default';
 			if (interactiveClick) placeMarker(lng, lat);
+			else clearMarker();
 			syncOverlays();
 			emitBounds();
 		});
@@ -166,8 +199,18 @@
 				type: 'fill',
 				source: PARTS_SOURCE,
 				paint: {
-					'fill-color': MICRO_COLOR,
-					'fill-opacity': 0.32
+					'fill-color': [
+						'case',
+						['==', ['get', 'selected'], 1],
+						SELECTED_COLOR,
+						UNSELECTED_COLOR
+					],
+					'fill-opacity': [
+						'case',
+						['==', ['get', 'selected'], 1],
+						0.45,
+						0.28
+					]
 				}
 			});
 			map.addLayer({
@@ -175,9 +218,20 @@
 				type: 'line',
 				source: PARTS_SOURCE,
 				paint: {
-					'line-color': MICRO_COLOR,
-					'line-width': 1.8,
-					'line-opacity': 0.95
+					'line-color': [
+						'case',
+						['==', ['get', 'selected'], 1],
+						SELECTED_COLOR,
+						UNSELECTED_COLOR
+					],
+					// Selected outline comes from orange “Selected clip”; avoid dual-colour border.
+					'line-width': [
+						'case',
+						['==', ['get', 'selected'], 1],
+						0,
+						2.4
+					],
+					'line-opacity': 1
 				}
 			});
 		}
@@ -191,8 +245,8 @@
 				type: 'fill',
 				source: CLIP_SOURCE,
 				paint: {
-					'fill-color': '#1b75e0',
-					'fill-opacity': 0.12
+					'fill-color': CLIP_ACCENT,
+					'fill-opacity': 0.14
 				}
 			});
 			map.addLayer({
@@ -200,9 +254,9 @@
 				type: 'line',
 				source: CLIP_SOURCE,
 				paint: {
-					'line-color': '#00306d',
-					'line-width': 1.5,
-					'line-dasharray': [2, 2]
+					'line-color': CLIP_ACCENT,
+					'line-width': 2.75,
+					'line-dasharray': [2, 1.25]
 				}
 			});
 		}
@@ -346,11 +400,16 @@
 		syncContextLayers();
 
 		const partFeats = [];
+		const choice = selectedPartId == null ? null : String(selectedPartId);
 		(parts || []).forEach((part) => {
+			const wid = part?.watershed_id != null ? String(part.watershed_id) : '';
+			const selected =
+				!choice || choice === 'all' || (wid && wid === choice) ? 1 : 0;
 			const f = asFeature(part?.geometry, {
 				role: 'part',
-				color: MICRO_COLOR,
-				watershed_id: part?.watershed_id ?? '',
+				color: selected ? SELECTED_COLOR : UNSELECTED_COLOR,
+				selected,
+				watershed_id: wid,
 				watershed_name: part?.watershed_name ?? ''
 			});
 			if (f) partFeats.push(f);
@@ -359,15 +418,55 @@
 			type: 'FeatureCollection',
 			features: partFeats
 		});
+		if (map.getLayer('parts-fill')) {
+			map.setPaintProperty('parts-fill', 'fill-color', [
+				'case',
+				['==', ['get', 'selected'], 1],
+				SELECTED_COLOR,
+				UNSELECTED_COLOR
+			]);
+			map.setPaintProperty('parts-fill', 'fill-opacity', [
+				'case',
+				['==', ['get', 'selected'], 1],
+				0.45,
+				0.28
+			]);
+		}
+		if (map.getLayer('parts-line')) {
+			map.setPaintProperty('parts-line', 'line-color', [
+				'case',
+				['==', ['get', 'selected'], 1],
+				SELECTED_COLOR,
+				UNSELECTED_COLOR
+			]);
+			map.setPaintProperty('parts-line', 'line-width', [
+				'case',
+				['==', ['get', 'selected'], 1],
+				0,
+				2.4
+			]);
+			map.setPaintProperty('parts-line', 'line-opacity', 1);
+		}
 
 		const clipFeat = asFeature(clipGeometry, { role: 'clip' });
-		// Village mode: colored basins + village outline. Point/custom: clip polygon.
+		// Always show the active clip AOI; village outline stays separate (grey dashed).
 		map.getSource(CLIP_SOURCE).setData({
 			type: 'FeatureCollection',
-			features: !villageGeometry && clipFeat ? [clipFeat] : []
+			features: clipFeat ? [clipFeat] : []
 		});
+		// When micros are drawn, skip clip fill so it does not bury the blue parts
+		// (union clip often matches the same polygons). Keep orange outline only.
 		if (map.getLayer('clip-fill')) {
-			map.setPaintProperty('clip-fill', 'fill-opacity', partFeats.length ? 0.1 : 0.22);
+			map.setPaintProperty('clip-fill', 'fill-color', CLIP_ACCENT);
+			map.setPaintProperty(
+				'clip-fill',
+				'fill-opacity',
+				clipFeat && !partFeats.length ? 0.16 : 0
+			);
+		}
+		if (map.getLayer('clip-line')) {
+			map.setPaintProperty('clip-line', 'line-color', CLIP_ACCENT);
+			map.setPaintProperty('clip-line', 'line-width', 3);
 		}
 
 		const villageFeat = asFeature(villageGeometry, {
@@ -379,6 +478,8 @@
 			features: villageFeat ? [villageFeat] : []
 		});
 
+		raiseMicroLayers();
+
 		const bounds = boundsFromGeoms([
 			villageGeometry,
 			clipGeometry,
@@ -386,6 +487,22 @@
 		]);
 		if (bounds) {
 			map.fitBounds(bounds, { padding: 48, maxZoom: 12, duration: 500 });
+		}
+	}
+
+	/** Keep L12 micros above context / village / clip fills so they stay visible. */
+	function raiseMicroLayers() {
+		if (!map) return;
+		// Base stack: fills first, then lines. Micros near the top.
+		for (const id of [
+			'village-fill',
+			'clip-fill',
+			'parts-fill',
+			'parts-line',
+			'village-line',
+			'clip-line'
+		]) {
+			if (map.getLayer(id)) map.moveLayer(id);
 		}
 	}
 
@@ -427,6 +544,7 @@
 
 	$effect(() => {
 		if (!map?.isStyleLoaded()) return;
+		map.getCanvas().style.cursor = interactiveClick ? 'crosshair' : 'default';
 		if (markerVisible) {
 			placeMarker(lng, lat);
 			if (!interactiveClick) {
@@ -446,6 +564,7 @@
 		villageGeometry;
 		villageName;
 		parts;
+		selectedPartId;
 		contextLayers;
 		interactiveClick;
 		if (styleReady) syncOverlays();

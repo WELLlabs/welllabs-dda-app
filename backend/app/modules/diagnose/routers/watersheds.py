@@ -9,7 +9,7 @@ from app.shared.watersheds import (
     list_village_districts,
     list_village_states,
     list_villages_for_district,
-    lookup_watershed,
+    lookup_watershed_with_village_context,
     resolve_village_watersheds,
     search_villages,
 )
@@ -34,14 +34,9 @@ class FromGeometryBody(BaseModel):
 
 @router.post("/lookup")
 def watershed_lookup(body: WatershedLookup, user: dict = Depends(get_current_user)):
-    """Return the watershed polygon containing the given coordinate."""
+    """Return the L12 under the coordinate, with village multi-micro context when available."""
     try:
-        result = lookup_watershed(body.lng, body.lat)
-        result.setdefault("parts", [])
-        result.setdefault("source", "point")
-        result.setdefault("seed_lng", body.lng)
-        result.setdefault("seed_lat", body.lat)
-        return result
+        return lookup_watershed_with_village_context(body.lng, body.lat)
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
     except Exception as exc:

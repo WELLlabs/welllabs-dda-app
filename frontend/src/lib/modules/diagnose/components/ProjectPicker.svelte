@@ -35,6 +35,8 @@
 	let selectMode = $state('point');
 	let watershedPreview = $state(null);
 	let previewLoading = $state(false);
+	/** @type {'all' | string} — 'all' intersecting micros, or one L12 watershed_id */
+	let microChoice = $state('all');
 	/** @type {Array<object>} */
 	let previewContextLayers = $state([]);
 	let contextLoading = $state(false);
@@ -116,6 +118,7 @@
 	function setMode(mode) {
 		selectMode = mode;
 		watershedPreview = null;
+		microChoice = 'all';
 		previewContextLayers = [];
 		previewLoading = false;
 		contextLoading = false;
@@ -131,6 +134,80 @@
 		} else {
 			resetVillageCascade();
 		}
+	}
+
+	const multiMicroParts = $derived(
+		Array.isArray(watershedPreview?.parts) && watershedPreview.parts.length > 1
+			? watershedPreview.parts
+			: []
+	);
+
+	/**
+	 * Apply one-micro vs all-intersecting clip onto the preview payload.
+	 * @param {any} base
+	 * @param {'all' | string} choice
+	 */
+	function withMicroChoice(base, choice) {
+		if (!base || base.error) return base;
+		const parts = Array.isArray(base.parts) ? base.parts : [];
+		if (parts.length <= 1) return base;
+
+		if (choice === 'all' && base.all_geometry) {
+			return {
+				...base,
+				geometry: base.all_geometry,
+				watershed_id: base.all_watershed_id ?? base.watershed_id,
+				watershed_name: base.all_watershed_name ?? base.watershed_name,
+				bounds: base.all_bounds ?? base.bounds
+			};
+		}
+
+		const part = parts.find((p) => String(p.watershed_id) === String(choice));
+		if (!part?.geometry) return base;
+		return {
+			...base,
+			geometry: part.geometry,
+			watershed_id: part.watershed_id,
+			watershed_name: part.watershed_name,
+			bounds: part.bounds ?? base.bounds
+		};
+	}
+
+	/**
+	 * @param {any} result
+	 * @param {'all' | 'point'} defaultMode — village defaults to all; point defaults to clicked L12
+	 */
+	function setWatershedPreview(result, defaultMode = 'all') {
+		const parts = Array.isArray(result?.parts) ? result.parts : [];
+		let choice = 'all';
+		if (parts.length > 1) {
+			if (defaultMode === 'point' && result.watershed_id) {
+				choice = String(result.watershed_id);
+			} else {
+				choice = 'all';
+			}
+		} else if (parts.length === 1) {
+			choice = String(parts[0].watershed_id ?? 'all');
+		}
+		microChoice = choice;
+		const enriched =
+			parts.length > 1 && !result.all_geometry && result.geometry
+				? {
+						...result,
+						all_geometry: result.geometry,
+						all_watershed_id: result.watershed_id,
+						all_watershed_name: result.watershed_name,
+						all_bounds: result.bounds
+					}
+				: result;
+		watershedPreview = withMicroChoice(enriched, choice);
+	}
+
+	function onMicroChoiceChange(choice) {
+		microChoice = choice;
+		if (!watershedPreview || watershedPreview.error) return;
+		watershedPreview = withMicroChoice(watershedPreview, choice);
+		if (watershedPreview.geometry) void loadPreviewContext(watershedPreview.geometry);
 	}
 
 	async function loadPreviewContext(geometry) {
@@ -227,23 +304,32 @@
 		villageId = id;
 		if (!id) {
 			watershedPreview = null;
+			microChoice = 'all';
 			previewContextLayers = [];
 			return;
 		}
 		const hit = villageOptions.find((v) => v.id === id);
 		previewLoading = true;
-		watershedPreview = null;
-		previewContextLayers = [];
+		// Keep previous map while loading so the UI does not blank out.
+		microChoice = 'all';
 		cascadeError = '';
 		try {
 			const result = await watershedsFromVillage({ villageId: id });
-			watershedPreview = result;
+			setWatershedPreview(result, 'all');
 			if (result.seed_lng != null) lng = result.seed_lng;
 			if (result.seed_lat != null) lat = result.seed_lat;
 			if (!name.trim() && hit?.name) name = titleCase(hit.name);
-			if (result.geometry) void loadPreviewContext(result.geometry);
+			// Context layers are secondary — load after clip is on screen.
+			const geom = watershedPreview?.geometry;
+			if (geom) {
+				previewContextLayers = [];
+				queueMicrotask(() => {
+					void loadPreviewContext(geom);
+				});
+			}
 		} catch (err) {
 			watershedPreview = { error: String(err) };
+			previewContextLayers = [];
 		} finally {
 			previewLoading = false;
 		}
@@ -286,11 +372,12 @@
 		coordInput = formatCoordInput(lat, lng);
 		previewLoading = true;
 		watershedPreview = null;
+		microChoice = 'all';
 		previewContextLayers = [];
 		try {
 			const result = await lookupWatershed(lng, lat);
-			watershedPreview = { ...result, source: 'point' };
-			if (result.geometry) void loadPreviewContext(result.geometry);
+			setWatershedPreview({ ...result, source: 'point' }, 'point');
+			if (watershedPreview?.geometry) void loadPreviewContext(watershedPreview.geometry);
 		} catch (err) {
 			watershedPreview = { error: String(err) };
 		} finally {
@@ -381,6 +468,7 @@
 		showCreate = true;
 		error = '';
 		watershedPreview = null;
+		microChoice = 'all';
 		previewContextLayers = [];
 		selectMode = 'point';
 		coordError = '';
@@ -389,6 +477,14 @@
 		uploadError = '';
 		uploadName = '';
 	}
+
+	const mapHint = $derived(
+		selectMode === 'point'
+			? 'Click the map or enter coordinates (latitude, longitude). If the point sits in a village with several micro watersheds, choose one or all.'
+			: selectMode === 'village'
+				? 'Choose state → district → village. Use the options on the left to clip to one micro or all intersecting. Orange outline is the selected clip.'
+				: 'Upload a polygon AOI (GeoJSON, KML, or GPX polygon). That shape becomes the clip boundary.'
+	);
 
 	function formatProjectDate(iso) {
 		const d = new Date(iso);
@@ -435,14 +531,6 @@
 			deletingId = null;
 		}
 	}
-
-	const mapHint = $derived(
-		selectMode === 'point'
-			? 'Click the map or enter coordinates (latitude, longitude) to detect the watershed.'
-			: selectMode === 'village'
-				? 'Choose state → district → village. Preview shows the village boundary (grey dotted) and Level-12 micro watersheds in blue.'
-				: 'Upload a polygon AOI (GeoJSON, KML, or GPX polygon). That shape becomes the clip boundary.'
-	);
 </script>
 
 <div class="relative min-h-screen bg-transparent font-body">
@@ -584,10 +672,55 @@
 						{:else if watershedPreview}
 							<p class="m-0 font-medium text-brand-navy">{watershedPreview.watershed_name}</p>
 							<p class="m-0 mt-1 text-brand-steel">ID: {watershedPreview.watershed_id}</p>
-							{#if watershedPreview.parts?.length}
+							{#if watershedPreview.village_name}
 								<p class="m-0 mt-1 text-brand-steel">
-								{watershedPreview.parts.length} micro watershed{watershedPreview.parts.length === 1 ? '' : 's'} (L12) in blue —
-								grey dotted outline is the village boundary.
+									Village: {watershedPreview.village_name}
+								</p>
+							{/if}
+							{#if multiMicroParts.length}
+								<div class="mt-3 space-y-2 border-t border-brand-navy/10 pt-3">
+									<p class="m-0 text-xs font-medium uppercase tracking-wide text-brand-navy">
+										Clip area ({multiMicroParts.length} micro watersheds)
+									</p>
+									<label class="flex cursor-pointer items-start gap-2 text-sm text-brand-navy">
+										<input
+											type="radio"
+											name="micro-choice"
+											class="mt-1"
+											checked={microChoice === 'all'}
+											onchange={() => onMicroChoiceChange('all')}
+										/>
+										<span>
+											<span class="font-medium">All intersecting micros</span>
+											<span class="block text-xs text-brand-steel">
+												Union of every L12 that intersects the village (map clip).
+											</span>
+										</span>
+									</label>
+									{#each multiMicroParts as part (part.watershed_id)}
+										<label class="flex cursor-pointer items-start gap-2 text-sm text-brand-navy">
+											<input
+												type="radio"
+												name="micro-choice"
+												class="mt-1"
+												checked={String(microChoice) === String(part.watershed_id)}
+												onchange={() => onMicroChoiceChange(String(part.watershed_id))}
+											/>
+											<span>
+												<span class="font-medium">{part.watershed_name || 'Micro watershed'}</span>
+												<span class="block font-mono text-[11px] text-brand-steel">
+													{part.watershed_id}
+												</span>
+											</span>
+										</label>
+									{/each}
+								</div>
+							{:else if watershedPreview.parts?.length === 1}
+								<p class="m-0 mt-1 text-brand-steel">
+									1 micro watershed (L12)
+									{#if watershedPreview.village_geometry}
+										— grey dotted outline is the village boundary.
+									{/if}
 								</p>
 							{/if}
 							{#if contextLoading}
@@ -623,13 +756,15 @@
 					<LocationPicker
 						bind:lng
 						bind:lat
-						onPick={previewWatershedFromPoint}
+						onPick={selectMode === 'point' ? previewWatershedFromPoint : undefined}
 						clipGeometry={watershedPreview?.geometry ?? null}
 						villageGeometry={watershedPreview?.village_geometry ?? null}
 						villageName={watershedPreview?.village_name ?? null}
 						parts={watershedPreview?.parts ?? null}
+						selectedPartId={multiMicroParts.length ? microChoice : null}
 						contextLayers={previewContextLayers}
 						interactiveClick={selectMode === 'point'}
+						showMarker={selectMode === 'point'}
 						hint={mapHint}
 					/>
 				</section>
