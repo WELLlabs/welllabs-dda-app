@@ -1,9 +1,8 @@
 # Per-layer render + analysis catalog.
-# VECTOR_LAYERS / COG_LAYERS in .env are optional allowlists of s3_keys.
-# Empty or "all" → enable every matching key in this file.
-# Basin / Sub basin / L7 hierarchy stack is NOT a project map layer (slow FGB
-# clips). Project picker preview still uses preview_context FGBs separately.
-# Project AOI outline comes from the diagnosis watershed_geom, not this catalog.
+# VECTOR_LAYERS / COG_LAYERS in .env are allowlists of s3_keys (prod uses a slim
+# explicit list for fast project loads). "all" enables every matching key here.
+# Basin / Sub basin / L7 hierarchy is NOT a project map layer — picker preview
+# uses preview_context FGBs; project AOI outline comes from watershed_geom.
 
 colors:
   deep_blue: "#00306d"

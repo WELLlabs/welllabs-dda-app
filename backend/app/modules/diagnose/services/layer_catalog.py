@@ -415,26 +415,30 @@ def _parse_layer_key_csv(raw: str) -> list[str]:
 
 
 def resolve_enabled_vector_keys(raw: str | None = None) -> list[str]:
-    """VECTOR_LAYERS allowlist, or every layers.yaml vector key when empty/all/*.
+    """VECTOR_LAYERS allowlist. Explicit "all"/"*" → every layers.yaml vector key.
 
-    Basin / Sub basin / L7 hierarchy FGBs are not catalog vector entries — they are
-    used only by project-picker preview_context (and WATERSHEDS_FGB_KEY for L12 AOI).
+    Empty string disables all catalog vectors (matches prod). Basin / Sub basin /
+    L7 hierarchy FGBs are not catalog vector entries — picker uses preview_context
+    (and WATERSHEDS_FGB_KEY for L12 AOI).
     """
     from app.shared.config import settings
 
     value = settings.vector_layers if raw is None else raw
     text = (value or "").strip()
-    if not text or text.lower() in {"*", "all"}:
+    if text.lower() in {"*", "all"}:
         return catalog_vector_s3_keys()
     return _parse_layer_key_csv(text)
 
 
 def resolve_enabled_cog_keys(raw: str | None = None) -> list[str]:
-    """COG_LAYERS allowlist, or every layers.yaml COG key when empty/all/*."""
+    """COG_LAYERS allowlist. Explicit "all"/"*" → every layers.yaml COG key.
+
+    Empty string disables all catalog COGs (matches prod).
+    """
     from app.shared.config import settings
 
     value = settings.cog_layers if raw is None else raw
     text = (value or "").strip()
-    if not text or text.lower() in {"*", "all"}:
+    if text.lower() in {"*", "all"}:
         return catalog_cog_s3_keys()
     return _parse_layer_key_csv(text)

@@ -227,5 +227,7 @@ def test_resolve_enabled_vector_keys_defaults_to_catalog():
     # Hierarchy basin/sub-basin keys are not catalog vector_fgb entries.
     assert "vector/Basin.fgb" not in keys
     assert resolve_enabled_vector_keys("all") == keys
-    assert resolve_enabled_vector_keys("") == keys
+    assert resolve_enabled_vector_keys("*") == keys
+    # Empty matches prod: enable nothing until an allowlist is set.
+    assert resolve_enabled_vector_keys("") == []
     assert resolve_enabled_vector_keys("vector/Canals.gpkg") == ["vector/Canals.gpkg"]
