@@ -19,6 +19,11 @@ from rio_tiler.io import Reader
 from rio_tiler.models import ImageData
 from shapely.geometry import shape as shp_shape
 
+# Cap heavy clip/analysis work per worker so hierarchy + batch + vector /data
+# cannot stampede the 2 uvicorn workers (beta 502 / tab freeze on reload).
+_heavy_clip_sem = asyncio.Semaphore(1)
+_batch_inner_sem = asyncio.Semaphore(2)
+
 from app.modules.diagnose.services.layer_analysis import (
     analyze_layer,
     clipped_vector_geojson_for_watershed,
@@ -1200,10 +1205,11 @@ async def watershed_hierarchy_layers(
     from app.modules.diagnose.services.preview_context import project_hierarchy_map_layers
 
     try:
-        layers = await asyncio.wait_for(
-            asyncio.to_thread(project_hierarchy_map_layers, geom),
-            timeout=55.0,
-        )
+        async with _heavy_clip_sem:
+            layers = await asyncio.wait_for(
+                asyncio.to_thread(project_hierarchy_map_layers, geom),
+                timeout=55.0,
+            )
     except asyncio.TimeoutError as exc:
         raise HTTPException(
             504, "Watershed hierarchy timed out — retry; the server may still be warming GPKG caches."
@@ -1239,9 +1245,10 @@ async def clipped_vector_layer_data(
         raise HTTPException(404, f"S3 error: {err.get('Code')} – {err.get('Message')}") from exc
 
     try:
-        geojson = await asyncio.to_thread(
-            clipped_vector_geojson_for_watershed, cfg.s3_key, vector_url, geom, cfg
-        )
+        async with _heavy_clip_sem:
+            geojson = await asyncio.to_thread(
+                clipped_vector_geojson_for_watershed, cfg.s3_key, vector_url, geom, cfg
+            )
     except Exception as exc:
         raise HTTPException(500, f"Clip failed: {exc}") from exc
 
@@ -1324,7 +1331,8 @@ async def batch_layer_analysis(
 
     async def _one(cfg: LayerConfig) -> LayerAnalysisResponse:
         try:
-            result = await asyncio.to_thread(_run_layer_analysis_sync, cfg, geom)
+            async with _batch_inner_sem:
+                result = await asyncio.to_thread(_run_layer_analysis_sync, cfg, geom)
             return _analysis_response(cfg, result)
         except Exception as exc:
             meaning = cfg.meaning or cfg.interpretation
@@ -1340,7 +1348,9 @@ async def batch_layer_analysis(
                 error=str(exc),
             )
 
-    analyses = await asyncio.gather(*[_one(cfg) for cfg in configs])
+    # Hold the heavy lock for the whole batch so it cannot race hierarchy/vector clips.
+    async with _heavy_clip_sem:
+        analyses = await asyncio.gather(*[_one(cfg) for cfg in configs])
     return BatchAnalysisResponse(analyses=list(analyses))
 
 
@@ -1355,7 +1365,8 @@ async def analyze_vector_layer(
     cfg = _resolve_analysis_layer(layer_id)
     feature = _watershed_feature(project_id)
     geom = feature.get("geometry") or feature
-    result = await asyncio.to_thread(_run_layer_analysis_sync, cfg, geom)
+    async with _heavy_clip_sem:
+        result = await asyncio.to_thread(_run_layer_analysis_sync, cfg, geom)
     return _analysis_response(cfg, result)
 
 

@@ -179,8 +179,17 @@
 </svelte:head>
 
 {#if loading}
-	<div class="flex h-screen items-center justify-center bg-white font-body text-brand-steel">
-		Loading project…
+	<div
+		class="flex h-screen flex-col items-center justify-center gap-4 bg-white px-6 font-body"
+		role="status"
+		aria-live="polite"
+	>
+		<div
+			class="h-10 w-10 animate-spin rounded-full border-2 border-brand-navy/20 border-t-brand-blue"
+			aria-hidden="true"
+		></div>
+		<p class="m-0 font-headline text-lg font-semibold text-brand-navy">Loading project…</p>
+		<p class="m-0 text-sm text-brand-steel">Fetching project details</p>
 	</div>
 {:else if loadError || !currentProject}
 	<div class="flex h-screen flex-col items-center justify-center gap-4 bg-white font-body">

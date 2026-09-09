@@ -148,10 +148,11 @@ export async function fetchWatershedPreviewContext(geometry, { signal, includeRi
 }
 
 /** Post-create Watershed layer: basin / sub-basin / L7 / L12 / rivers. */
-export async function fetchWatershedHierarchy(projectId) {
+export async function fetchWatershedHierarchy(projectId, { signal } = {}) {
 	return request(
 		`/layers/watershed/hierarchy?project_id=${encodeURIComponent(projectId)}`,
-		{ retries: 2, retryDelayMs: 900 }
+		// One retry max — stacking retries during reload saturates the 2 API workers.
+		{ signal, retries: 1, retryDelayMs: 1200 }
 	);
 }
 
@@ -183,10 +184,11 @@ export async function fetchLayerAnalysis(layerId, projectId, { isCog = false } =
 	);
 }
 
-export async function fetchBatchLayerAnalysis(projectId) {
-	return request(
-		`/layers/analysis/batch?project_id=${encodeURIComponent(projectId)}`
-	);
+export async function fetchBatchLayerAnalysis(projectId, { signal } = {}) {
+	return request(`/layers/analysis/batch?project_id=${encodeURIComponent(projectId)}`, {
+		signal,
+		retries: 0
+	});
 }
 
 /** Downsampled watershed DEM elevation grid for the 3D terrain viewer. */

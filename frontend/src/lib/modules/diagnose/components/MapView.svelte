@@ -63,6 +63,36 @@
 	let hierarchySourceIds = $state([]);
 	/** @type {{ title: string, items: Array<{ label: string, color: string, continuous?: boolean }> }} */
 	let retainedLegend = $state({ title: '', items: [] });
+	/** Cancel in-flight hierarchy/batch when leaving the map (reload / navigate). */
+	let mapDataAbort = new AbortController();
+	/** Serialize post-open heavy loads so hierarchy and batch never stampede workers. */
+	let postOpenLoadGen = 0;
+	/** @type {Promise<void> | null} */
+	let hierarchyInFlight = null;
+	const BOOT_KEY = 'diagnose:project-boot';
+	/** @type {'creating' | 'opening'} */
+	let bootMode = $state('opening');
+	let projectBooting = $state(true);
+	let bootPercent = $state(0);
+	let bootStep = $state('Starting…');
+	let bootError = $state('');
+
+	function readBootMode() {
+		try {
+			const v = sessionStorage.getItem(BOOT_KEY);
+			sessionStorage.removeItem(BOOT_KEY);
+			if (v === 'creating') return 'creating';
+		} catch {
+			/* ignore */
+		}
+		return 'opening';
+	}
+
+	function setBoot(percent, step) {
+		bootPercent = Math.min(100, Math.max(0, Math.round(percent)));
+		bootStep = step;
+		status = step;
+	}
 
 	function isOverlayLayer(layer) {
 		return (
@@ -113,8 +143,10 @@
 
 	async function showOnlySecondaryLayer(layerId) {
 		const showHierarchy = layerId === WATERSHED_LAYER_ID;
-		setHierarchyVisible(showHierarchy);
-		setWatershedOutlineVisible(!showHierarchy);
+		const hasHierarchy = hierarchySourceIds.length > 0;
+		// Keep project AOI visible until hierarchy GeoJSON is actually on the map.
+		setHierarchyVisible(showHierarchy && hasHierarchy);
+		setWatershedOutlineVisible(showHierarchy ? !hasHierarchy : true);
 		for (const l of secondaryLayers) {
 			// Overlays (village boundaries, canals, streams) keep their own eye-toggle state
 			if (isOverlayLayer(l)) continue;
@@ -130,7 +162,10 @@
 				setLayerVisibility(`cog-${l.id}`, visible);
 			}
 		}
-		cogVisibility = { ...cogVisibility, [WATERSHED_LAYER_ID]: showHierarchy };
+		cogVisibility = {
+			...cogVisibility,
+			[WATERSHED_LAYER_ID]: showHierarchy && hasHierarchy
+		};
 	}
 
 	async function selectLayer(layer) {
@@ -148,14 +183,26 @@
 			if (mapReady) {
 				const meta = secondaryLayers.find((l) => l.id === layer.id);
 				if (meta?.id === WATERSHED_LAYER_ID) {
-					await ensureWatershedHierarchyOnMap();
+					// Paint AOI immediately; hierarchy loads in background (was blocking the UI).
 					await showOnlySecondaryLayer(layer.id);
-					// Hierarchy load may have fallen back to AOI outline — don't force-hide it.
 					if (hierarchySourceIds.length === 0) {
 						setWatershedOutlineVisible(true);
 						setHierarchyVisible(false);
 					}
-					void ensureLayerAnalysis(layer.id);
+					void (async () => {
+						await ensureWatershedHierarchyOnMap();
+						if (
+							selectedLayer?.kind === 'secondary' &&
+							selectedLayer.id === WATERSHED_LAYER_ID
+						) {
+							await showOnlySecondaryLayer(WATERSHED_LAYER_ID);
+							if (hierarchySourceIds.length === 0) {
+								setWatershedOutlineVisible(true);
+								setHierarchyVisible(false);
+							}
+						}
+						void ensureLayerAnalysis(layer.id);
+					})();
 					return;
 				}
 				if (meta?.kind === 'vector' && meta.map_render !== false) {
@@ -745,6 +792,14 @@
 	let didDrag = false;
 
 	onMount(async () => {
+		mapDataAbort = new AbortController();
+		postOpenLoadGen = 0;
+		hierarchyInFlight = null;
+		bootMode = readBootMode();
+		projectBooting = true;
+		bootPercent = 0;
+		bootStep = bootMode === 'creating' ? 'Saving project…' : 'Starting…';
+		bootError = '';
 		map = new maplibregl.Map({
 			container,
 			transformRequest: (url, resourceType) => {
@@ -794,61 +849,110 @@
 
 		map.on('load', async () => {
 			mapReady = true;
+			projectBooting = true;
+			bootError = '';
+			const loadGen = ++postOpenLoadGen;
 			map.setPitch(0);
 			map.setBearing(0);
 			map.setMaxBounds(null);
 			applyBasemapVisibility(BASE_LAYERS.osm.id, baseLayer === 'osm');
 			applyBasemapVisibility(BASE_LAYERS.esri.id, baseLayer === 'esri');
-			await ensureFieldNotePinIcon();
-			loadWatershedBoundary();
-			initDrawPreview();
-			updateDrawSizes();
-			ensureDrawPreviewOnTop();
+
 			try {
+				setBoot(4, 'Initializing map…');
+				await ensureFieldNotePinIcon();
+				if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
+
+				setBoot(10, 'Drawing project area…');
+				loadWatershedBoundary();
+				initDrawPreview();
+				updateDrawSizes();
+				ensureDrawPreviewOnTop();
+
+				setBoot(18, 'Loading raster layers…');
 				await loadCogLayers();
+				if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
+
+				setBoot(30, 'Loading vector catalog…');
 				await loadVectorLayers();
+				if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
+
+				setBoot(42, 'Loading watershed hierarchy…');
+				await ensureWatershedHierarchyOnMap();
+				if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
+
+				setBoot(55, 'Clipping map layers…');
+				await preloadRenderableVectors((done, total, name) => {
+					const pct = 55 + Math.round((22 * done) / Math.max(total, 1));
+					setBoot(pct, total ? `Clipping ${name} (${done}/${total})…` : 'Clipping map layers…');
+				});
+				if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
+
+				setBoot(80, 'Running layer analysis…');
+				await preloadAllSecondaryData();
+				if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
+
+				setBoot(90, 'Loading observation zones…');
+				try {
+					await reloadObservationZones();
+				} catch (err) {
+					console.error('Failed to load observation zones', err);
+				}
+				if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
+
+				setBoot(94, 'Loading field notes…');
+				try {
+					await reloadFieldNotes();
+				} catch (err) {
+					console.error('Failed to load field notes', err);
+				}
+				if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
+
+				setBoot(97, 'Loading hypotheses…');
+				try {
+					await reloadHypotheses();
+				} catch (err) {
+					console.error('Failed to load hypotheses', err);
+				}
+				if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
+
+				setBoot(99, 'Opening map…');
+				if (thematicLayers.length > 0) {
+					const prefer =
+						thematicLayers.find((l) => l.id === WATERSHED_LAYER_ID)?.id ??
+						thematicLayers[0].id;
+					selectedLayer = { kind: 'secondary', id: prefer };
+					await showOnlySecondaryLayer(prefer);
+					if (prefer === WATERSHED_LAYER_ID) {
+						if (hierarchySourceIds.length === 0) {
+							setWatershedOutlineVisible(true);
+							setHierarchyVisible(false);
+						} else {
+							setHierarchyVisible(true);
+							setWatershedOutlineVisible(false);
+						}
+					}
+					void ensureLayerAnalysis(prefer);
+				} else if (secondaryLayers.length > 0) {
+					selectedLayer = { kind: 'secondary', id: secondaryLayers[0].id };
+					await showOnlySecondaryLayer(secondaryLayers[0].id);
+				} else {
+					selectedLayer = { kind: 'primary', id: 'observation-zones' };
+					activePrimaryTab = 'observation-zones';
+				}
+
+				ensureDrawPreviewOnTop();
+				setBoot(100, 'Ready');
+				status = 'Ready';
+				projectBooting = false;
+				requestAnimationFrame(() => map?.resize());
 			} catch (err) {
-				status = `Layers unavailable: ${err instanceof Error ? err.message : String(err)}`;
+				if (err?.name === 'AbortError' || mapDataAbort.signal.aborted) return;
+				console.error('Project bootstrap failed', err);
+				bootError = err instanceof Error ? err.message : String(err);
+				status = `Load failed: ${bootError}`;
+				projectBooting = false;
 			}
-			// Show map layers immediately — do not wait on batch analysis (can hang on beta).
-			if (thematicLayers.length > 0) {
-				const prefer =
-					thematicLayers.find((l) => l.id === WATERSHED_LAYER_ID)?.id ?? thematicLayers[0].id;
-				await selectLayer({ kind: 'secondary', id: prefer });
-			} else if (secondaryLayers.length > 0) {
-				await selectLayer({ kind: 'secondary', id: secondaryLayers[0].id });
-			} else {
-				await selectLayer({ kind: 'primary', id: 'observation-zones' });
-			}
-			void preloadAllSecondaryData().catch((err) => {
-				console.error('Batch analysis preload failed', err);
-			});
-			try {
-				await reloadObservationZones();
-			} catch (err) {
-				console.error('Failed to load observation zones', err);
-				status = `Could not load observation zones: ${err instanceof Error ? err.message : String(err)}`;
-			}
-			try {
-				await reloadFieldNotes();
-			} catch (err) {
-				console.error('Failed to load field notes', err);
-				status = `Could not load field notes: ${err instanceof Error ? err.message : String(err)}`;
-			}
-			try {
-				await reloadHypotheses();
-			} catch (err) {
-				console.error('Failed to load hypotheses', err);
-				status = `Could not load hypotheses: ${err instanceof Error ? err.message : String(err)}`;
-			}
-			ensureDrawPreviewOnTop();
-			status =
-				status.startsWith('Layers unavailable') ||
-				status.startsWith('Could not load') ||
-				status.startsWith('Watershed hierarchy failed')
-					? status
-					: 'Ready';
-			requestAnimationFrame(() => map?.resize());
 		});
 
 		map.on('zoom', () => {
@@ -884,6 +988,8 @@
 	});
 
 	onDestroy(() => {
+		postOpenLoadGen += 1;
+		mapDataAbort.abort();
 		fieldNotePinReady = false;
 		villageHoverPopup?.remove();
 		map?.remove();
@@ -1344,71 +1450,93 @@
 			setWatershedOutlineVisible(false);
 			return;
 		}
-		clearWatershedHierarchyLayers();
-		status = 'Loading watershed hierarchy…';
-		try {
-			const result = await fetchWatershedHierarchy(project.id);
-			const layers = (result.layers || []).filter((l) => l && l.status !== 'error' && l.geojson);
-			if (!hierarchyHasDrawableFeatures(layers)) {
+		if (hierarchyInFlight) {
+			await hierarchyInFlight;
+			return;
+		}
+		hierarchyInFlight = (async () => {
+			clearWatershedHierarchyLayers();
+			// Keep AOI while hierarchy downloads — do not blank the map.
+			setWatershedOutlineVisible(true);
+			setHierarchyVisible(false);
+			status = 'Loading watershed hierarchy…';
+			try {
+				const result = await fetchWatershedHierarchy(project.id, {
+					signal: mapDataAbort.signal
+				});
+				if (mapDataAbort.signal.aborted) return;
+				const layers = (result.layers || []).filter(
+					(l) => l && l.status !== 'error' && l.geojson
+				);
+				if (!hierarchyHasDrawableFeatures(layers)) {
+					setHierarchyVisible(false);
+					setWatershedOutlineVisible(true);
+					status = 'Watershed hierarchy returned no features — showing project AOI';
+					return;
+				}
+				const byId = new Map(layers.map((l) => [l.id, l]));
+				const beforeId = map.getLayer('watershed-fill') ? 'watershed-fill' : undefined;
+				const ids = [];
+				for (const id of HIERARCHY_DRAW_ORDER) {
+					const layer = byId.get(id);
+					if (!layer) continue;
+					const sourceId = `ws-h-${id}`;
+					const isLine = layer.geometry_kind === 'line' || layer.render_type === 'line';
+					if (map.getSource(sourceId)) {
+						map.getSource(sourceId).setData(layer.geojson);
+					} else {
+						map.addSource(sourceId, { type: 'geojson', data: layer.geojson });
+					}
+					if (!isLine && !map.getLayer(`${sourceId}-fill`)) {
+						map.addLayer(
+							{
+								id: `${sourceId}-fill`,
+								type: 'fill',
+								source: sourceId,
+								paint: {
+									'fill-color': layer.fill_color || layer.line_color || '#64748b',
+									'fill-opacity': layer.fill_opacity ?? 0.08
+								}
+							},
+							beforeId
+						);
+					}
+					if (!map.getLayer(`${sourceId}-line`)) {
+						map.addLayer(
+							{
+								id: `${sourceId}-line`,
+								type: 'line',
+								source: sourceId,
+								paint: {
+									'line-color': layer.line_color || '#334155',
+									'line-width': layer.line_width ?? 1.5,
+									'line-opacity': 0.92
+								}
+							},
+							beforeId
+						);
+					}
+					ids.push(id);
+				}
+				hierarchySourceIds = ids;
+				applyLayerStackOrder();
+				if (selectedLayer?.id === WATERSHED_LAYER_ID) {
+					setHierarchyVisible(true);
+					setWatershedOutlineVisible(false);
+				}
+				status = 'Ready';
+			} catch (err) {
+				if (err?.name === 'AbortError' || mapDataAbort.signal.aborted) return;
+				console.error('Watershed hierarchy failed', err);
 				setHierarchyVisible(false);
 				setWatershedOutlineVisible(true);
-				status = 'Watershed hierarchy returned no features — showing project AOI';
-				return;
+				status = `Watershed hierarchy failed: ${err instanceof Error ? err.message : String(err)}`;
 			}
-			const byId = new Map(layers.map((l) => [l.id, l]));
-			const beforeId = map.getLayer('watershed-fill') ? 'watershed-fill' : undefined;
-			const ids = [];
-			for (const id of HIERARCHY_DRAW_ORDER) {
-				const layer = byId.get(id);
-				if (!layer) continue;
-				const sourceId = `ws-h-${id}`;
-				const isLine = layer.geometry_kind === 'line' || layer.render_type === 'line';
-				if (map.getSource(sourceId)) {
-					map.getSource(sourceId).setData(layer.geojson);
-				} else {
-					map.addSource(sourceId, { type: 'geojson', data: layer.geojson });
-				}
-				if (!isLine && !map.getLayer(`${sourceId}-fill`)) {
-					map.addLayer(
-						{
-							id: `${sourceId}-fill`,
-							type: 'fill',
-							source: sourceId,
-							paint: {
-								'fill-color': layer.fill_color || layer.line_color || '#64748b',
-								'fill-opacity': layer.fill_opacity ?? 0.08
-							}
-						},
-						beforeId
-					);
-				}
-				if (!map.getLayer(`${sourceId}-line`)) {
-					map.addLayer(
-						{
-							id: `${sourceId}-line`,
-							type: 'line',
-							source: sourceId,
-							paint: {
-								'line-color': layer.line_color || '#334155',
-								'line-width': layer.line_width ?? 1.5,
-								'line-opacity': 0.92
-							}
-						},
-						beforeId
-					);
-				}
-				ids.push(id);
-			}
-			hierarchySourceIds = ids;
-			applyLayerStackOrder();
-			setHierarchyVisible(true);
-			setWatershedOutlineVisible(false);
-			status = 'Ready';
-		} catch (err) {
-			console.error('Watershed hierarchy failed', err);
-			setHierarchyVisible(false);
-			setWatershedOutlineVisible(true);
-			status = `Watershed hierarchy failed: ${err instanceof Error ? err.message : String(err)}`;
+		})();
+		try {
+			await hierarchyInFlight;
+		} finally {
+			hierarchyInFlight = null;
 		}
 	}
 
@@ -1812,24 +1940,33 @@
 	async function fetchClippedGeoJSON(url) {
 		const resolved = resolveApiUrl(url);
 		let lastError = null;
-		for (let attempt = 0; attempt < 3; attempt++) {
+		// At most one retry — reload storms were freezing beta.
+		for (let attempt = 0; attempt < 2; attempt++) {
 			try {
-				const response = await fetch(resolved, { credentials: 'include' });
+				if (mapDataAbort.signal.aborted) {
+					throw new DOMException('Aborted', 'AbortError');
+				}
+				const response = await fetch(resolved, {
+					credentials: 'include',
+					signal: mapDataAbort.signal
+				});
 				if (!response.ok) {
-					const retryable = response.status === 502 || response.status === 503 || response.status === 504;
+					const retryable =
+						response.status === 502 || response.status === 503 || response.status === 504;
 					lastError = new Error(`Failed to fetch vector layer (${response.status})`);
-					if (retryable && attempt < 2) {
-						await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+					if (retryable && attempt < 1) {
+						await new Promise((r) => setTimeout(r, 1000));
 						continue;
 					}
 					throw lastError;
 				}
 				return response.json();
 			} catch (err) {
+				if (err?.name === 'AbortError') throw err;
 				lastError = err;
 				const msg = err instanceof Error ? err.message : String(err);
-				if (/502|503|504|Failed to fetch|NetworkError/i.test(msg) && attempt < 2) {
-					await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+				if (/502|503|504|Failed to fetch|NetworkError/i.test(msg) && attempt < 1) {
+					await new Promise((r) => setTimeout(r, 1000));
 					continue;
 				}
 				throw err;
@@ -2092,6 +2229,30 @@
 		status = 'Ready';
 	}
 
+	async function preloadRenderableVectors(onProgress) {
+		const layers = secondaryLayers.filter(
+			(l) =>
+				l.kind === 'vector' &&
+				l.map_render !== false &&
+				l.id !== WATERSHED_LAYER_ID &&
+				l.url &&
+				l.status !== 'error'
+		);
+		const total = layers.length;
+		for (let i = 0; i < layers.length; i++) {
+			if (mapDataAbort.signal.aborted) return;
+			const layer = layers[i];
+			onProgress?.(i, total, layer.name);
+			try {
+				await ensureVectorLayerOnMap(layer);
+			} catch (err) {
+				console.error(`Failed to preload ${layer.name}`, err);
+			}
+			onProgress?.(i + 1, total, layer.name);
+		}
+		if (total === 0) onProgress?.(0, 0, '');
+	}
+
 	async function preloadAllSecondaryData() {
 		if (!project?.id) return;
 		status = 'Loading watershed analysis…';
@@ -2113,7 +2274,10 @@
 			layerAnalysisLoading = Object.fromEntries(
 				thematicLayers.map((l) => [l.id, true])
 			);
-			const { analyses } = await fetchBatchLayerAnalysis(project.id);
+			const { analyses } = await fetchBatchLayerAnalysis(project.id, {
+				signal: mapDataAbort.signal
+			});
+			if (mapDataAbort.signal.aborted) return;
 			const next = { ...layerAnalysis };
 			for (const a of analyses || []) {
 				next[a.layer_id] = a;
@@ -2121,6 +2285,7 @@
 			layerAnalysis = next;
 			analysisPreloadDone = true;
 		} catch (err) {
+			if (err?.name === 'AbortError' || mapDataAbort.signal.aborted) return;
 			console.error('Batch analysis failed', err);
 			// Clear loading flags so on-demand fetch is not blocked
 			layerAnalysisLoading = Object.fromEntries(
@@ -2742,9 +2907,43 @@
 	}
 </script>
 
-<div class="flex h-full min-h-0 w-full">
+<div class="relative flex h-full min-h-0 w-full">
+	{#if projectBooting}
+		<div
+			class="absolute inset-0 z-[80] flex flex-col items-center justify-center gap-5 bg-white/95 px-6 backdrop-blur-sm"
+			role="status"
+			aria-live="polite"
+			aria-busy="true"
+		>
+			<div
+				class="h-11 w-11 animate-spin rounded-full border-2 border-brand-navy/20 border-t-brand-blue"
+				aria-hidden="true"
+			></div>
+			<div class="flex w-full max-w-md flex-col gap-2 text-center">
+				<p class="m-0 font-headline text-xl font-semibold text-brand-navy">
+					{bootMode === 'creating' ? 'Creating project' : 'Loading project'}
+				</p>
+				<p class="m-0 font-body text-sm text-brand-steel">{bootStep}</p>
+				<div
+					class="mt-2 h-2 w-full overflow-hidden rounded-full bg-brand-navy/10"
+					aria-hidden="true"
+				>
+					<div
+						class="h-full rounded-full bg-brand-blue transition-[width] duration-300 ease-out"
+						style:width="{bootPercent}%"
+					></div>
+				</div>
+				<p class="m-0 font-body text-xs tabular-nums text-brand-navy/55">{bootPercent}%</p>
+				{#if bootError}
+					<p class="m-0 mt-2 font-body text-sm text-red-600">{bootError}</p>
+				{/if}
+			</div>
+		</div>
+	{/if}
 	<aside
 		class="layer-sidebar flex shrink-0 flex-col overflow-hidden bg-white font-body"
+		class:pointer-events-none={projectBooting}
+		class:opacity-40={projectBooting}
 		style:width="{sidebarWidth}px"
 	>
 		<div class="border-b border-brand-navy/10 px-3 py-4">
@@ -3072,6 +3271,8 @@
 
 	<aside
 		class="flex shrink-0 flex-col overflow-hidden border-l border-brand-navy/10 bg-white font-body"
+		class:pointer-events-none={projectBooting}
+		class:opacity-40={projectBooting}
 		style:width="{rightSidebarWidth}px"
 	>
 		<div class="min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-3">

@@ -468,7 +468,12 @@
 		}
 	}
 
-	function openProject(project) {
+	function openProject(project, { boot = 'opening' } = {}) {
+		try {
+			sessionStorage.setItem('diagnose:project-boot', boot);
+		} catch {
+			/* ignore */
+		}
 		goto(itemPath('/diagnose', project, projects));
 	}
 
@@ -482,6 +487,11 @@
 		error = '';
 		// Free workers that may still be clipping preview layers.
 		abortInFlightLoads();
+		try {
+			sessionStorage.setItem('diagnose:project-boot', 'creating');
+		} catch {
+			/* ignore */
+		}
 		try {
 			const project = await createProject({
 				name: name.trim(),
@@ -497,12 +507,17 @@
 			watershedPreview = null;
 			selectMode = 'point';
 			await loadProjects();
-			openProject(project);
+			openProject(project, { boot: 'creating' });
 		} catch (err) {
 			error = String(err);
-		} finally {
 			creating = false;
+			try {
+				sessionStorage.removeItem('diagnose:project-boot');
+			} catch {
+				/* ignore */
+			}
 		}
+		// Keep creating=true until navigation unmounts this page.
 	}
 
 	function openCreate() {
@@ -589,6 +604,23 @@
 </script>
 
 <div class="relative min-h-screen bg-transparent font-body">
+	{#if creating}
+		<div
+			class="fixed inset-0 z-[100] flex flex-col items-center justify-center gap-4 bg-white/95 px-6 backdrop-blur-sm"
+			role="status"
+			aria-live="polite"
+			aria-busy="true"
+		>
+			<div
+				class="h-10 w-10 animate-spin rounded-full border-2 border-brand-navy/20 border-t-brand-blue"
+				aria-hidden="true"
+			></div>
+			<p class="m-0 font-headline text-lg font-semibold text-brand-navy">Creating project…</p>
+			<p class="m-0 max-w-sm text-center font-body text-sm text-brand-steel">
+				Saving your watershed, then preparing map layers.
+			</p>
+		</div>
+	{/if}
 	<ModuleHeader title="Diagnose" titleHref="/diagnose" subtitle="Select a project or create a new one to begin mapping." />
 
 	<main class="relative z-10 flex-1 overflow-auto p-6">
