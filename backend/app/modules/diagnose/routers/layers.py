@@ -19,9 +19,19 @@ from rio_tiler.io import Reader
 from rio_tiler.models import ImageData
 from shapely.geometry import shape as shp_shape
 
-# Cap heavy clip/analysis work per worker so hierarchy + batch + vector /data
-# cannot stampede the 2 uvicorn workers (beta 502 / tab freeze on reload).
-_heavy_clip_sem = asyncio.Semaphore(1)
+# Cap heavy clip/analysis work per worker.
+#
+# _heavy_clip_sem  — on-demand user requests: watershed hierarchy, single
+#                    vector /data clips, single-layer analysis.  Capacity 2
+#                    lets one background preload + one user click run in
+#                    parallel without blocking.
+# _batch_sem       — at most ONE concurrent /analysis/batch call per worker.
+#                    Kept separate so a running batch never blocks a user's
+#                    on-demand layer-click analysis (the 502 source).
+# _batch_inner_sem — caps parallelism *inside* a single batch (2 analyses
+#                    at a time) so it doesn't monopolise the thread pool.
+_heavy_clip_sem = asyncio.Semaphore(2)
+_batch_sem = asyncio.Semaphore(1)
 _batch_inner_sem = asyncio.Semaphore(2)
 
 from app.modules.diagnose.services.layer_analysis import (
@@ -1352,8 +1362,10 @@ async def batch_layer_analysis(
                 error=str(exc),
             )
 
-    # Hold the heavy lock for the whole batch so it cannot race hierarchy/vector clips.
-    async with _heavy_clip_sem:
+    # _batch_sem: at most one concurrent batch per worker.  We intentionally do
+    # NOT use _heavy_clip_sem here so that on-demand user requests (single
+    # layer analysis, hierarchy) are never blocked by a running batch.
+    async with _batch_sem:
         analyses = await asyncio.gather(*[_one(cfg) for cfg in configs])
     return BatchAnalysisResponse(analyses=list(analyses))
 

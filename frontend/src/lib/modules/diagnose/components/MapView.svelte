@@ -78,6 +78,12 @@
 	let bootError = $state('');
 	/** Whether background loading (hierarchy, vectors, analysis) is still in progress. */
 	let bgLoading = $state(false);
+	/**
+	 * AbortController only for the background /analysis/batch call.
+	 * Aborted on every on-demand layer-click so the server's _batch_sem slot
+	 * is freed immediately and the user request can proceed without a 502.
+	 */
+	let bgBatchAbort = new AbortController();
 
 	function readBootMode() {
 		try {
@@ -839,6 +845,7 @@
 
 	onMount(async () => {
 		mapDataAbort = new AbortController();
+		bgBatchAbort = new AbortController();
 		postOpenLoadGen = 0;
 		hierarchyInFlight = null;
 		bootMode = readBootMode();
@@ -981,8 +988,11 @@
 						await preloadRenderableVectors();
 						if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
 
-						// 3. Batch layer analysis
-						await preloadAllSecondaryData();
+					// 3. Batch layer analysis — delayed 2.5 s so the user's first
+					// layer clicks get uncontested backend semaphore slots.
+					await new Promise((r) => setTimeout(r, 2500));
+					if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
+					await preloadAllSecondaryData();
 						if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
 
 						// 4. Zones, notes, hypotheses
@@ -1044,6 +1054,7 @@
 	onDestroy(() => {
 		postOpenLoadGen += 1;
 		mapDataAbort.abort();
+		bgBatchAbort.abort();
 		bgLoading = false;
 		fieldNotePinReady = false;
 		villageHoverPopup?.remove();
@@ -2358,10 +2369,13 @@
 			layerAnalysisLoading = Object.fromEntries(
 				thematicLayers.map((l) => [l.id, true])
 			);
+			// Use bgBatchAbort (not mapDataAbort) so a user-initiated layer click
+			// can abort *only* the background batch, freeing the server's _batch_sem
+			// without cancelling hierarchy or vector loading.
 			const { analyses } = await fetchBatchLayerAnalysis(project.id, {
-				signal: mapDataAbort.signal
+				signal: bgBatchAbort.signal
 			});
-			if (mapDataAbort.signal.aborted) return;
+			if (bgBatchAbort.signal.aborted || mapDataAbort.signal.aborted) return;
 			const next = { ...layerAnalysis };
 			for (const a of analyses || []) {
 				next[a.layer_id] = a;
@@ -2369,7 +2383,7 @@
 			layerAnalysis = next;
 			analysisPreloadDone = true;
 		} catch (err) {
-			if (err?.name === 'AbortError' || mapDataAbort.signal.aborted) return;
+			if (err?.name === 'AbortError' || bgBatchAbort.signal.aborted || mapDataAbort.signal.aborted) return;
 			console.error('Batch analysis failed', err);
 			// Clear loading flags so on-demand fetch is not blocked
 			layerAnalysisLoading = Object.fromEntries(
@@ -2404,6 +2418,13 @@
 		const meta = secondaryLayers.find((l) => l.id === layerId);
 		if (!meta || isOverlayLayer(meta)) return;
 		if (hasLoadedAnalysis(layerAnalysis[layerId]) || layerAnalysisLoading[layerId]) return;
+
+		// Cancel any in-flight background batch so the server's _batch_sem slot is
+		// freed before this on-demand request arrives.  Create a fresh controller so
+		// the batch can restart after the user's request completes.
+		bgBatchAbort.abort();
+		bgBatchAbort = new AbortController();
+
 		layerAnalysisLoading = { ...layerAnalysisLoading, [layerId]: true };
 		try {
 			const isCog = meta.kind === 'cog';
