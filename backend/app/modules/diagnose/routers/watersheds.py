@@ -110,11 +110,7 @@ async def villages_by_district(
     ),
     user: dict = Depends(get_current_user),
 ):
-    """List villages in a state + district (optional name filter).
-
-    Also finishes state centroid enrichment so the subsequent village→clip
-    resolve does not block on a cold full-state S3 read.
-    """
+    """List villages in a state + district from the prebuilt lookup index."""
     del user
     try:
         villages = await asyncio.to_thread(

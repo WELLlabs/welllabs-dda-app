@@ -654,7 +654,45 @@ def _village_row_to_hit(props: dict, geom=None) -> dict:
 
 
 def _village_index_cache_path() -> Path:
-    return Path(settings.packages_dir) / "villages_name_index.jsonl"
+    """Prefer the full centroid lookup; fall back to legacy name-only cache name."""
+    packages = Path(settings.packages_dir)
+    lookup = packages / "villages_lookup.jsonl"
+    legacy = packages / "villages_name_index.jsonl"
+    return lookup if lookup.exists() or not legacy.exists() else legacy
+
+
+def _villages_lookup_s3_key() -> str:
+    return "vector/villages_lookup.jsonl"
+
+
+def _index_centroid_coverage(records: list[dict]) -> float:
+    if not records:
+        return 0.0
+    with_c = sum(1 for r in records if r.get("lng") is not None and r.get("lat") is not None)
+    return with_c / len(records)
+
+
+def _download_villages_lookup_from_s3(dest: Path) -> bool:
+    """Fetch prebuilt lookup from S3 into packages_dir. Returns True on success."""
+    if not settings.aws_s3_bucket:
+        return False
+    try:
+        import boto3
+    except ImportError:
+        return False
+    key = _villages_lookup_s3_key()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(dest.suffix + ".tmp")
+    try:
+        client = boto3.client("s3", region_name=settings.aws_default_region or None)
+        logger.info("Downloading village lookup s3://%s/%s …", settings.aws_s3_bucket, key)
+        client.download_file(settings.aws_s3_bucket, key, str(tmp))
+        tmp.replace(dest)
+        return dest.is_file() and dest.stat().st_size > 0
+    except Exception as exc:
+        logger.warning("Village lookup S3 download failed: %s", exc)
+        tmp.unlink(missing_ok=True)
+        return False
 
 
 def _set_village_indexes(records: list[dict]) -> list[dict]:
@@ -813,21 +851,69 @@ def _build_village_name_index_from_fgb() -> list[dict]:
 
 
 def ensure_village_name_index(*, force_rebuild: bool = False) -> list[dict]:
-    """Load or build the national village name index (cached under packages_dir)."""
+    """Load national village lookup (id/name/state/district + centroids when available).
+
+    Preference order:
+      1. In-memory
+      2. Local packages_dir/villages_lookup.jsonl (or legacy name index)
+      3. Download vector/villages_lookup.jsonl from S3
+      4. Attribute-only build from villages.fgb (no centroids — dropdowns still work;
+         polygon resolve falls back to per-state enrich)
+    """
     global _village_name_index
     if _village_name_index is not None and not force_rebuild:
         return _village_name_index
     with _village_index_lock:
         if _village_name_index is not None and not force_rebuild:
             return _village_name_index
-        cache_path = _village_index_cache_path()
+
+        packages = Path(settings.packages_dir)
+        lookup_path = packages / "villages_lookup.jsonl"
+        legacy_path = packages / "villages_name_index.jsonl"
+
         if not force_rebuild:
-            cached = _load_village_index_from_cache(cache_path)
-            if cached is not None:
-                logger.info("Loaded village name index from cache (%s rows)", len(cached))
+            for path in (lookup_path, legacy_path):
+                cached = _load_village_index_from_cache(path)
+                if cached is None:
+                    continue
+                coverage = _index_centroid_coverage(cached)
+                # Name-only cache: try S3 lookup before accepting it.
+                if coverage < 0.5 and path == legacy_path:
+                    if _download_villages_lookup_from_s3(lookup_path):
+                        upgraded = _load_village_index_from_cache(lookup_path)
+                        if upgraded is not None and _index_centroid_coverage(upgraded) >= 0.5:
+                            logger.info(
+                                "Loaded village lookup from S3 (%s rows, %.0f%% centroids)",
+                                len(upgraded),
+                                100 * _index_centroid_coverage(upgraded),
+                            )
+                            return _set_village_indexes(upgraded)
+                logger.info(
+                    "Loaded village index from %s (%s rows, %.0f%% centroids)",
+                    path.name,
+                    len(cached),
+                    100 * coverage,
+                )
                 return _set_village_indexes(cached)
+
+            if _download_villages_lookup_from_s3(lookup_path):
+                cached = _load_village_index_from_cache(lookup_path)
+                if cached is not None:
+                    logger.info(
+                        "Loaded village lookup from S3 (%s rows, %.0f%% centroids)",
+                        len(cached),
+                        100 * _index_centroid_coverage(cached),
+                    )
+                    return _set_village_indexes(cached)
+
         records = _build_village_name_index_from_fgb()
-        _write_village_index_cache(cache_path, records)
+        # Persist under legacy name so we do not pretend this has centroids.
+        _write_village_index_cache(legacy_path, records)
+        logger.warning(
+            "Village index has no centroids — run "
+            "`python scripts/build_village_lookup.py --upload` for fast dropdowns "
+            "and map-click-style village resolve."
+        )
         return _set_village_indexes(records)
 
 
@@ -840,7 +926,10 @@ def warm_village_name_index() -> None:
 
 
 def ensure_state_village_centroids(state: str) -> None:
-    """Spatial-read one state bbox and attach centroids to the in-memory index."""
+    """Spatial-read one state bbox and attach centroids to the in-memory index.
+
+    No-op when the prebuilt lookup already has centroids for this state.
+    """
     s = (state or "").strip().lower()
     if not s:
         return
@@ -851,6 +940,15 @@ def ensure_state_village_centroids(state: str) -> None:
             return
         ensure_village_name_index()
         if _village_by_id is None:
+            return
+        # Prebuilt lookup already has centroids — do not re-hit S3 on dropdown/select.
+        state_rows = [
+            r
+            for r in (_village_name_index or [])
+            if str(r.get("state") or "").strip().lower() == s
+        ]
+        if state_rows and _index_centroid_coverage(state_rows) >= 0.8:
+            _enriched_states.add(s)
             return
         bbox = _STATE_BBOXES.get(s, _INDIA_BBOX)
         _configure_gdal_aws()
@@ -1141,9 +1239,7 @@ def list_villages_for_district(
     if not s or not d:
         raise ValueError("state and district are required")
     ensure_village_name_index()
-    # Finish centroid enrich before the user picks a village — otherwise
-    # village_geometry_by_id blocks on a full-state S3 read (often minutes).
-    ensure_state_village_centroids(state)
+    # Dropdown must stay instant — use prebuilt lookup only (no live S3 enrich).
     q_lower = (q or "").strip().lower()
 
     resolved = _resolve_district_bucket_key(s, d)

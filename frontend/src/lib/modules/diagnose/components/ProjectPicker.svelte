@@ -324,7 +324,6 @@
 		}
 		cascadeLoading = 'villages';
 		try {
-			// Server finishes centroid enrich here so village→clip stays fast.
 			const rows = await fetchVillagesByDistrict(villageState, district);
 			villageCache.set(cacheKey, rows);
 			if (villageState && villageDistrict === district) villageOptions = rows;
