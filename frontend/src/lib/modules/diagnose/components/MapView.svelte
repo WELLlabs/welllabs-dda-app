@@ -2124,27 +2124,6 @@
 		return !!map.getSource(`vec-${layer.id}`);
 	}
 
-	async function preloadRenderableVectors() {
-		// Background preload — one attempt per layer, silently skip failures.
-		// If a layer isn't on the map yet when the user selects it, ensureVectorLayerOnMap
-		// loads it on demand, so no retries needed here.
-		const layers = secondaryLayers.filter(
-			(l) =>
-				l.kind === 'vector' &&
-				l.map_render !== false &&
-				l.url &&
-				l.status !== 'error'
-		);
-		for (const layer of layers) {
-			if (mapDataAbort.signal.aborted) return;
-			try {
-				await ensureVectorLayerOnMap(layer);
-			} catch (err) {
-				console.warn(`Background preload skipped for ${layer.name}:`, err);
-			}
-		}
-	}
-
 	async function preloadAllSecondaryData() {
 		if (!project?.id) return;
 		status = 'Loading watershed analysis…';
