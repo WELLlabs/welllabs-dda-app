@@ -22,6 +22,8 @@ layers:
     name: Watershed
     source: watershed_hierarchy
     analysis_type: watershed_hierarchy
+    # Skip batch re-clip — map hierarchy endpoint already loads the GeoJSON.
+    analysis_batch: false
     map_render: true
     render:
       type: hierarchy

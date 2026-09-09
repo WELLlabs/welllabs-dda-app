@@ -44,6 +44,14 @@ async def lifespan(_app: FastAPI):
 
     threading.Thread(target=warm_village_name_index, name="village-index-warm", daemon=True).start()
     try:
+        from app.modules.diagnose.services.layer_analysis import warm_hierarchy_vector_caches
+
+        threading.Thread(
+            target=warm_hierarchy_vector_caches, name="hierarchy-gpkg-warm", daemon=True
+        ).start()
+    except Exception:
+        pass
+    try:
         yield
     finally:
         close_pool()

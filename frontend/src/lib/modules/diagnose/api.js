@@ -135,14 +135,17 @@ export async function fetchWatershedPreviewContext(geometry) {
 	return request('/watersheds/preview-context', {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ geometry })
+		body: JSON.stringify({ geometry }),
+		retries: 2,
+		retryDelayMs: 900
 	});
 }
 
 /** Post-create Watershed layer: basin / sub-basin / L7 / L12 / rivers. */
 export async function fetchWatershedHierarchy(projectId) {
 	return request(
-		`/layers/watershed/hierarchy?project_id=${encodeURIComponent(projectId)}`
+		`/layers/watershed/hierarchy?project_id=${encodeURIComponent(projectId)}`,
+		{ retries: 2, retryDelayMs: 900 }
 	);
 }
 

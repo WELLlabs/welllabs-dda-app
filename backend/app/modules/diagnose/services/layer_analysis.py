@@ -234,6 +234,16 @@ def _area_m2(geom) -> float:
 _FGB_CACHE_DIR = Path(tempfile.gettempdir()) / "dda_vector_fgb_cache"
 # Full-file local cache for mid-size GPKGs (Sub Basins ~77MB). Skip huge national files.
 _LOCAL_VECTOR_CACHE_MAX_BYTES = 120 * 1024 * 1024
+# Hierarchy/preview GPKGs (esp. rivers) are cold-path bottlenecks on vsis3 — cache larger.
+_HIERARCHY_LOCAL_CACHE_MAX_BYTES = 450 * 1024 * 1024
+_HIERARCHY_LOCAL_CACHE_KEYS = frozenset(
+    {
+        "vector/india_rivers_level_12.gpkg",
+        "vector/Basin.gpkg",
+        "vector/Sub Basins of india.gpkg",
+        "vector/india_basins_level_7.gpkg",
+    }
+)
 _LOCAL_VECTOR_SUFFIXES = {".gpkg"}
 _vector_cache_locks: dict[str, Any] = {}
 _vector_cache_guard = None
@@ -295,7 +305,13 @@ def _ensure_local_vector_cache(s3_key: str) -> Path | None:
             size = int(head.get("ContentLength") or 0)
         except Exception:
             return None
-        if size <= 0 or size > _LOCAL_VECTOR_CACHE_MAX_BYTES:
+        max_bytes = (
+            _HIERARCHY_LOCAL_CACHE_MAX_BYTES
+            if s3_key.lstrip("/") in _HIERARCHY_LOCAL_CACHE_KEYS
+            or s3_key in _HIERARCHY_LOCAL_CACHE_KEYS
+            else _LOCAL_VECTOR_CACHE_MAX_BYTES
+        )
+        if size <= 0 or size > max_bytes:
             return None
         if path.exists() and path.stat().st_size == size:
             return path
@@ -310,6 +326,15 @@ def _ensure_local_vector_cache(s3_key: str) -> Path | None:
         if path.exists() and path.stat().st_size > 0:
             return path
         return None
+
+
+def warm_hierarchy_vector_caches() -> None:
+    """Best-effort download of basin/rivers GPKGs so first preview isn't the cold miss."""
+    for key in _HIERARCHY_LOCAL_CACHE_KEYS:
+        try:
+            _ensure_local_vector_cache(key)
+        except Exception:
+            continue
 
 
 def _read_vector_gdf_bbox(s3_key: str, bbox: tuple[float, float, float, float]):
@@ -444,7 +469,7 @@ def clip_vector_geojson(
     return json.loads(clipped.to_json())
 
 
-_CLIP_MEM: dict[tuple[str, str], dict] = {}
+_CLIP_MEM: dict[tuple, dict] = {}
 
 
 def clipped_vector_geojson_for_watershed(
@@ -452,17 +477,23 @@ def clipped_vector_geojson_for_watershed(
     vector_url: str,
     watershed_geom: dict,
     layer_cfg: LayerConfig | None = None,
+    *,
+    pad_frac: float = 0.05,
 ) -> dict:
+    """Clip with in-process memo — shared by map vector data, preview, and hierarchy."""
     cache_key = (
         s3_key,
         json.dumps(watershed_geom, sort_keys=True),
-        layer_cfg.id if layer_cfg else "",
+        getattr(layer_cfg, "id", None) or "",
+        round(float(pad_frac), 4),
     )
     cached = _CLIP_MEM.get(cache_key)
     if cached is not None:
         return cached
-    result = clip_vector_geojson(s3_key, vector_url, watershed_geom, layer_cfg=layer_cfg)
-    if len(_CLIP_MEM) > 64:
+    result = clip_vector_geojson(
+        s3_key, vector_url, watershed_geom, layer_cfg=layer_cfg, pad_frac=pad_frac
+    )
+    if len(_CLIP_MEM) > 96:
         _CLIP_MEM.clear()
     _CLIP_MEM[cache_key] = result
     return result

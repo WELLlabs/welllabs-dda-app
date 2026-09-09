@@ -221,7 +221,8 @@
 			previewContextLayers = result.layers ?? [];
 		} catch (err) {
 			console.error('Preview context failed', err);
-			previewContextLayers = [];
+			// Keep any prior layers so a timeout/502 doesn't wipe a useful map.
+			if (!previewContextLayers.length) previewContextLayers = [];
 		} finally {
 			contextLoading = false;
 		}

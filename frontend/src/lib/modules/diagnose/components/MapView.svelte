@@ -1810,11 +1810,32 @@
 	}
 
 	async function fetchClippedGeoJSON(url) {
-		const response = await fetch(resolveApiUrl(url), { credentials: 'include' });
-		if (!response.ok) {
-			throw new Error(`Failed to fetch vector layer (${response.status})`);
+		const resolved = resolveApiUrl(url);
+		let lastError = null;
+		for (let attempt = 0; attempt < 3; attempt++) {
+			try {
+				const response = await fetch(resolved, { credentials: 'include' });
+				if (!response.ok) {
+					const retryable = response.status === 502 || response.status === 503 || response.status === 504;
+					lastError = new Error(`Failed to fetch vector layer (${response.status})`);
+					if (retryable && attempt < 2) {
+						await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+						continue;
+					}
+					throw lastError;
+				}
+				return response.json();
+			} catch (err) {
+				lastError = err;
+				const msg = err instanceof Error ? err.message : String(err);
+				if (/502|503|504|Failed to fetch|NetworkError/i.test(msg) && attempt < 2) {
+					await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+					continue;
+				}
+				throw err;
+			}
 		}
-		return response.json();
+		throw lastError ?? new Error('Failed to fetch vector layer');
 	}
 
 	function villageLabelFromProps(props, labelColumn) {

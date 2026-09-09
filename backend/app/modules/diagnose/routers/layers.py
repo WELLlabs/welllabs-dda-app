@@ -1200,10 +1200,21 @@ async def watershed_hierarchy_layers(
     from app.modules.diagnose.services.preview_context import project_hierarchy_map_layers
 
     try:
-        layers = await asyncio.to_thread(project_hierarchy_map_layers, geom)
+        layers = await asyncio.wait_for(
+            asyncio.to_thread(project_hierarchy_map_layers, geom),
+            timeout=55.0,
+        )
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(
+            504, "Watershed hierarchy timed out — retry; the server may still be warming GPKG caches."
+        ) from exc
     except Exception as exc:
         raise HTTPException(502, f"Watershed hierarchy failed: {exc}") from exc
-    return {"layers": layers}
+    return Response(
+        content=json.dumps({"layers": layers}, separators=(",", ":")),
+        media_type="application/json",
+        headers={"Cache-Control": "private, max-age=300"},
+    )
 
 
 @router.get("/vector/{layer_id}/data")

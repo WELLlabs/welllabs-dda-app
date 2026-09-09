@@ -140,14 +140,24 @@ class PreviewContextBody(BaseModel):
 
 
 @router.post("/preview-context")
-def watershed_preview_context(body: PreviewContextBody, user: dict = Depends(get_current_user)):
+async def watershed_preview_context(body: PreviewContextBody, user: dict = Depends(get_current_user)):
     """Return rivers / basin / sub-basin / L7 layers clipped to a preview AOI."""
     del user
+    import asyncio
+
     from app.modules.diagnose.services.preview_context import preview_context_layers
 
     try:
-        return {"layers": preview_context_layers(body.geometry)}
+        layers = await asyncio.wait_for(
+            asyncio.to_thread(preview_context_layers, body.geometry),
+            timeout=55.0,
+        )
+        return {"layers": layers}
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(
+            504, "Preview context timed out — retry; basin layers may still be warming on the server."
+        ) from exc
     except Exception as exc:
         raise HTTPException(502, f"Preview context failed: {exc}") from exc

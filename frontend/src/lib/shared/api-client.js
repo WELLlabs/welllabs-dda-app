@@ -37,10 +37,14 @@ async function parseErrorMessage(res) {
  * Build a `request(path, init)` helper scoped to a module's API base path
  * (e.g. `/api/diagnose`), with consistent JSON + error handling.
  * @param {string} basePath
+ * @param {{ retries?: number, retryDelayMs?: number }} [defaults]
  */
-export function createApiClient(basePath) {
+export function createApiClient(basePath, defaults = {}) {
+	const defaultRetries = defaults.retries ?? 0;
+	const defaultDelay = defaults.retryDelayMs ?? 700;
+
 	return async function request(path, init = {}) {
-		const { headers, ...rest } = init;
+		const { headers, retries = defaultRetries, retryDelayMs = defaultDelay, ...rest } = init;
 		/** @type {RequestInit} */
 		const opts = {
 			credentials: 'include',
@@ -49,12 +53,36 @@ export function createApiClient(basePath) {
 		if (headers !== undefined) {
 			opts.headers = headers;
 		}
-		const res = await fetch(`${basePath}${path}`, opts);
-		if (!res.ok) {
-			throw new Error(await parseErrorMessage(res));
+
+		let lastError = null;
+		const attempts = Math.max(1, Number(retries) + 1);
+		for (let attempt = 0; attempt < attempts; attempt++) {
+			try {
+				const res = await fetch(`${basePath}${path}`, opts);
+				if (!res.ok) {
+					const message = await parseErrorMessage(res);
+					const retryable = res.status === 502 || res.status === 503 || res.status === 504;
+					if (retryable && attempt < attempts - 1) {
+						await new Promise((r) => setTimeout(r, retryDelayMs * (attempt + 1)));
+						continue;
+					}
+					throw new Error(message);
+				}
+				if (res.status === 204) return undefined;
+				return res.json();
+			} catch (err) {
+				lastError = err;
+				const msg = err instanceof Error ? err.message : String(err);
+				const retryable =
+					/502|503|504|timed out|Bad gateway|Failed to fetch|NetworkError/i.test(msg);
+				if (retryable && attempt < attempts - 1) {
+					await new Promise((r) => setTimeout(r, retryDelayMs * (attempt + 1)));
+					continue;
+				}
+				throw err;
+			}
 		}
-		if (res.status === 204) return undefined;
-		return res.json();
+		throw lastError ?? new Error('Request failed');
 	};
 }
 
