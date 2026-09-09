@@ -121,6 +121,9 @@
 	let contextSourceIds = [];
 	/** @type {maplibregl.Popup | null} */
 	let villagePopup = null;
+	/** Avoid re-fitBounds when context layers load or props re-render with same AOI. */
+	let lastFitKey = '';
+	let lastMarkerKey = '';
 
 	const CLIP_SOURCE = 'clip-aoi';
 	const PARTS_SOURCE = 'clip-parts';
@@ -570,11 +573,25 @@
 
 		// Prefer the village frame when present — fitting to L12/union makes the
 		// village outline a few pixels and effectively invisible on map-click.
+		// Only auto-zoom when the AOI actually changes (not when context layers arrive).
 		const focusGeoms = villageGeometry
 			? [villageGeometry]
 			: [clipGeometry, ...(parts || []).map((p) => p?.geometry)];
 		const bounds = boundsFromGeoms(focusGeoms);
-		if (bounds) {
+		const fitKey = bounds
+			? [
+					bounds[0][0].toFixed(5),
+					bounds[0][1].toFixed(5),
+					bounds[1][0].toFixed(5),
+					bounds[1][1].toFixed(5),
+					String(selectedPartId ?? ''),
+					villageGeometry ? 'v' : 'c'
+				].join('|')
+			: '';
+		if (!fitKey) {
+			lastFitKey = '';
+		} else if (fitKey !== lastFitKey) {
+			lastFitKey = fitKey;
 			map.fitBounds(bounds, {
 				padding: 64,
 				maxZoom: villageGeometry ? 14 : 12,
@@ -642,11 +659,15 @@
 		if (markerVisible) {
 			placeMarker(lng, lat);
 			if (!interactiveClick) {
-				map.flyTo({
-					center: [lng, lat],
-					zoom: Math.max(map.getZoom(), 9),
-					duration: 500
-				});
+				const key = `${Number(lng).toFixed(5)},${Number(lat).toFixed(5)}`;
+				if (key !== lastMarkerKey) {
+					lastMarkerKey = key;
+					map.flyTo({
+						center: [lng, lat],
+						zoom: Math.max(map.getZoom(), 9),
+						duration: 500
+					});
+				}
 			}
 		} else {
 			clearMarker();
