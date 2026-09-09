@@ -4,6 +4,7 @@ import json
 import math
 import time
 import asyncio
+import threading
 import numpy as np
 from collections import OrderedDict
 from functools import lru_cache
@@ -278,31 +279,42 @@ def _tile_cache_set(key: tuple, data: bytes) -> None:
             _TILE_CACHE.popitem(last=False)
 
 
-# Per-(s3_key, project_id) elevation range cache for consistent cross-tile scaling.
+# Per-(s3_key, watershed_geom) elevation range cache for consistent cross-tile scaling.
+# Lock prevents concurrent tile requests from each doing the same expensive S3 COG
+# range-read on a cold worker — first thread computes, rest wait then hit cache.
 _ELEV_RANGE_CACHE: dict[tuple[str, str], tuple[float, float]] = {}
+_ELEV_RANGE_LOCK = threading.Lock()
 
 
 def _watershed_elev_range(s3_key: str, http_url: str, watershed_geom: dict) -> tuple[float, float]:
-    """Return (lo, hi) elevation percentiles for the watershed, computed once and cached."""
+    """Return (lo, hi) elevation percentiles for the watershed, computed once and cached.
+
+    Uses a lock so concurrent tile requests on a cold worker only pay the
+    S3 COG range-read once; all others wait and then hit the in-process cache.
+    """
     cache_key = (s3_key, json.dumps(watershed_geom, sort_keys=True, separators=(",", ":")))
     if cache_key in _ELEV_RANGE_CACHE:
         return _ELEV_RANGE_CACHE[cache_key]
-    try:
-        ws = shp_shape(watershed_geom)
-        minx, miny, maxx, maxy = ws.bounds
-        img = Reader(http_url).part([minx, miny, maxx, maxy], indexes=[1], max_size=256)
-        arr = img.array[0].astype(np.float32)
-        if img.alpha_mask is not None:
-            arr = np.where(img.alpha_mask > 0, arr, np.nan)
-        valid = arr[~np.isnan(arr)]
-        if valid.size < 4:
+    with _ELEV_RANGE_LOCK:
+        # Double-check: another thread may have computed while we waited for the lock.
+        if cache_key in _ELEV_RANGE_CACHE:
+            return _ELEV_RANGE_CACHE[cache_key]
+        try:
+            ws = shp_shape(watershed_geom)
+            minx, miny, maxx, maxy = ws.bounds
+            img = Reader(http_url).part([minx, miny, maxx, maxy], indexes=[1], max_size=256)
+            arr = img.array[0].astype(np.float32)
+            if img.alpha_mask is not None:
+                arr = np.where(img.alpha_mask > 0, arr, np.nan)
+            valid = arr[~np.isnan(arr)]
+            if valid.size < 4:
+                result = (0.0, 3000.0)
+            else:
+                result = (float(np.percentile(valid, 2)), float(np.percentile(valid, 98)))
+        except Exception:
             result = (0.0, 3000.0)
-        else:
-            result = (float(np.percentile(valid, 2)), float(np.percentile(valid, 98)))
-    except Exception:
-        result = (0.0, 3000.0)
-    _ELEV_RANGE_CACHE[cache_key] = result
-    return result
+        _ELEV_RANGE_CACHE[cache_key] = result
+        return result
 
 
 @lru_cache(maxsize=64)
@@ -993,6 +1005,42 @@ async def cog_watershed_image(
     )
 
 
+@router.get("/cog/prewarm")
+async def prewarm_cog_layers(
+    project_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """Background pre-warm: compute elevation ranges + watershed images for all COG layers.
+
+    Called fire-and-forget from the frontend after map open.  Returns 204 when done.
+    Warms the in-process caches so the first user tile/image request is cheap.
+    """
+    assert_diagnosis_access(user["id"], project_id)
+    feature = _watershed_feature(project_id)
+    geom = feature.get("geometry") or feature
+
+    async def _warm_one(cfg: LayerConfig) -> None:
+        try:
+            http_url = _presigned_url_cached(cfg.s3_key)
+            if cfg.tile_strategy == "watershed_image":
+                cache_key = (cfg.s3_key, project_id)
+                if _watershed_image_cache_get(cache_key) is None:
+                    content = await asyncio.to_thread(_render_watershed_image, http_url, feature, cfg)
+                    _watershed_image_cache_set(cache_key, content)
+            elif cfg.render_type == "continuous":
+                # Pre-compute the elevation range used for per-tile colour scaling.
+                await asyncio.to_thread(_watershed_elev_range, cfg.s3_key, http_url, geom)
+        except Exception:
+            pass  # best-effort — a failure here doesn't affect the user
+
+    cog_cfgs = [
+        cfg for cfg in get_catalog().layers
+        if cfg.source == "cog" and cfg.s3_key in set(_cog_keys())
+    ]
+    await asyncio.gather(*[_warm_one(cfg) for cfg in cog_cfgs])
+    return Response(status_code=204)
+
+
 def _parse_bbox_param(bbox: str | None) -> list[float] | None:
     if not bbox:
         return None
@@ -1072,7 +1120,9 @@ async def proxy_cog_tile(
             return Response(
                 content=content,
                 media_type="image/png",
-                headers={"Cache-Control": "no-store"},
+                # private: browser may cache; not CDN/public (contains project-specific masking).
+                # 1 h TTL keeps repeated layer switches instant without stale data issues.
+                headers={"Cache-Control": "private, max-age=3600"},
             )
 
         titiler_url = _titiler_tile_url(http_url, z, x, y, layer_cfg, clip_bbox)

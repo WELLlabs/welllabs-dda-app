@@ -928,6 +928,15 @@
 				await loadCogLayers();
 				if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
 
+				// Fire-and-forget: pre-warm backend COG caches (watershed images + elevation
+				// ranges for DEM-style continuous layers) so the first user click is instant.
+				fetch(
+					resolveApiUrl(
+						apiPath(`/diagnose/layers/cog/prewarm?project_id=${encodeURIComponent(project.id)}`)
+					),
+					{ credentials: 'include' }
+				).catch(() => {});
+
 				await loadVectorLayers();
 				if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
 
