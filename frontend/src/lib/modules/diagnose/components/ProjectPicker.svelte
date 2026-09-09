@@ -482,9 +482,23 @@
 		selectMode === 'point'
 			? 'Click the map or enter coordinates (latitude, longitude). If the point sits in a village with several micro watersheds, choose one or all.'
 			: selectMode === 'village'
-				? 'Choose state → district → village. Use the options on the left to clip to one micro or all intersecting. Orange outline is the selected clip.'
+				? 'Choose state → district → village. Use the options on the left to clip to one micro or all intersecting. Blue dashed outline is the selected L12 clip.'
 				: 'Upload a polygon AOI (GeoJSON, KML, or GPX polygon). That shape becomes the clip boundary.'
 	);
+
+	/** Human-readable hierarchy level for the active clip. */
+	const clipLevelLabel = $derived.by(() => {
+		const preview = watershedPreview;
+		if (!preview || preview.error) return null;
+		if (preview.source === 'custom' || preview.watershed_id === 'custom') {
+			return 'Custom AOI';
+		}
+		const n = Array.isArray(preview.parts) ? preview.parts.length : 0;
+		if (microChoice === 'all' && n > 1) {
+			return `Micro watersheds (L12) · ${n} units`;
+		}
+		return 'Micro watershed (L12)';
+	});
 
 	function formatProjectDate(iso) {
 		const d = new Date(iso);
@@ -670,10 +684,24 @@
 						{:else if watershedPreview?.error}
 							<p class="m-0 text-red-600">{watershedPreview.error}</p>
 						{:else if watershedPreview}
-							<p class="m-0 font-medium text-brand-navy">{watershedPreview.watershed_name}</p>
-							<p class="m-0 mt-1 text-brand-steel">ID: {watershedPreview.watershed_id}</p>
+							<p class="m-0 text-[11px] font-semibold uppercase tracking-wide text-brand-navy/55">
+								Clip level
+							</p>
+							<p class="m-0 mt-0.5 font-medium text-brand-navy">{clipLevelLabel}</p>
+							<p class="m-0 mt-2 text-[11px] font-semibold uppercase tracking-wide text-brand-navy/55">
+								Watershed ID
+							</p>
+							<p class="m-0 mt-0.5 break-all font-mono text-sm text-brand-navy">
+								{watershedPreview.watershed_id}
+							</p>
+							{#if watershedPreview.watershed_name && String(watershedPreview.watershed_name) !== String(watershedPreview.watershed_id)}
+								<p class="m-0 mt-2 text-[11px] font-semibold uppercase tracking-wide text-brand-navy/55">
+									Name
+								</p>
+								<p class="m-0 mt-0.5 text-sm text-brand-steel">{watershedPreview.watershed_name}</p>
+							{/if}
 							{#if watershedPreview.village_name}
-								<p class="m-0 mt-1 text-brand-steel">
+								<p class="m-0 mt-2 text-brand-steel">
 									Village: {watershedPreview.village_name}
 									{#if watershedPreview.village_geometry}
 										<span class="text-brand-navy"> — grey dotted outline on the map</span>

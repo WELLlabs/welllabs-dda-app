@@ -58,11 +58,12 @@
 	} = $props();
 
 	const markerVisible = $derived(showMarker ?? interactiveClick);
-	/** Match legend “Micro watershed (L12)” */
+	/** Match legend “Micro watershed (L12)” — selected clip IS the L12 AOI */
 	const SELECTED_COLOR = MICRO_COLOR;
 	/** Same family, clearly secondary — listed as “Other micros” when multi-select */
 	const UNSELECTED_COLOR = '#7eb6f5';
-	const CLIP_ACCENT = '#ea580c';
+	/** Project clip outline uses L12 blue (dashed) so it matches the legend */
+	const CLIP_ACCENT = MICRO_COLOR;
 
 	const showLegend = $derived(
 		Boolean(
@@ -104,7 +105,7 @@
 		if (clipGeometry) {
 			items.push({
 				id: 'selected_clip',
-				name: 'Selected clip',
+				name: 'Selected L12 clip',
 				color: CLIP_ACCENT,
 				style: 'dashed'
 			});
@@ -228,7 +229,7 @@
 						SELECTED_COLOR,
 						UNSELECTED_COLOR
 					],
-					// Selected outline comes from orange “Selected clip”; avoid dual-colour border.
+					// Selected outline comes from dashed “Selected L12 clip”; avoid dual-colour border.
 					'line-width': [
 						'case',
 						['==', ['get', 'selected'], 1],
@@ -534,18 +535,19 @@
 			features: clipFeat ? [clipFeat] : []
 		});
 		// When micros are drawn, skip clip fill so it does not bury the blue parts
-		// (union clip often matches the same polygons). Keep orange outline only.
+		// (union clip often matches the same polygons). Keep dashed L12 outline only.
 		if (map.getLayer('clip-fill')) {
 			map.setPaintProperty('clip-fill', 'fill-color', CLIP_ACCENT);
 			map.setPaintProperty(
 				'clip-fill',
 				'fill-opacity',
-				clipFeat && !partFeats.length ? 0.16 : 0
+				clipFeat && !partFeats.length ? 0.22 : 0
 			);
 		}
 		if (map.getLayer('clip-line')) {
 			map.setPaintProperty('clip-line', 'line-color', CLIP_ACCENT);
 			map.setPaintProperty('clip-line', 'line-width', 3);
+			map.setPaintProperty('clip-line', 'line-dasharray', [2, 1.25]);
 		}
 
 		const villageFeat = asFeature(villageGeometry, {
