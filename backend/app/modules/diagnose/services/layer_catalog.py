@@ -417,8 +417,8 @@ def _parse_layer_key_csv(raw: str) -> list[str]:
 def resolve_enabled_vector_keys(raw: str | None = None) -> list[str]:
     """VECTOR_LAYERS allowlist, or every layers.yaml vector key when empty/all/*.
 
-    Basin / Sub basin / L7 / hierarchy rivers are NOT in this list — they load via
-    watershed_hierarchy + preview_context (and WATERSHEDS_FGB_KEY for L12 micro).
+    Basin / Sub basin / L7 hierarchy FGBs are not catalog vector entries — they are
+    used only by project-picker preview_context (and WATERSHEDS_FGB_KEY for L12 AOI).
     """
     from app.shared.config import settings
 

@@ -1242,11 +1242,8 @@ async def list_vector_layers(
         assert_diagnosis_access(user["id"], project_id)
     layers: list[VectorLayer] = []
     for cfg in get_catalog().vector_layers():
+        # Hierarchy stack is picker-only (preview_context); skip in project maps.
         if cfg.source == "watershed_hierarchy":
-            entry = _build_vector_layer(cfg)
-            q = f"?project_id={quote(project_id, safe='')}" if project_id else ""
-            proxy_url = f"{settings.api_public_prefix}/diagnose/layers/watershed/hierarchy{q}"
-            layers.append(entry.model_copy(update={"url": proxy_url}))
             continue
         if cfg.s3_key not in enabled:
             continue
@@ -1386,9 +1383,7 @@ async def batch_layer_analysis(
             continue
         if not cfg.analysis_batch:
             continue
-        if cfg.source == "watershed_hierarchy":
-            configs.append(cfg)
-        elif cfg.source == "cog" and cfg.s3_key in enabled_cog:
+        if cfg.source == "cog" and cfg.s3_key in enabled_cog:
             configs.append(cfg)
         elif cfg.source == "vector_fgb" and cfg.s3_key in enabled_vec:
             configs.append(cfg)

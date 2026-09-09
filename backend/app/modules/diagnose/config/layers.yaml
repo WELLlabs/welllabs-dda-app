@@ -1,8 +1,9 @@
 # Per-layer render + analysis catalog.
 # VECTOR_LAYERS / COG_LAYERS in .env are optional allowlists of s3_keys.
 # Empty or "all" → enable every matching key in this file.
-# Watershed hierarchy (Basin / Sub basin / L7 / rivers stack) is always on via
-# source: watershed_hierarchy + preview_context — those keys are not listed in VECTOR_LAYERS.
+# Basin / Sub basin / L7 hierarchy stack is NOT a project map layer (slow FGB
+# clips). Project picker preview still uses preview_context FGBs separately.
+# Project AOI outline comes from the diagnosis watershed_geom, not this catalog.
 
 colors:
   deep_blue: "#00306d"
@@ -18,37 +19,6 @@ colors:
   black: "#000000"
 
 layers:
-  # ── Watershed hierarchy (default landing layer) ─────────────────────────
-  - id: watershed
-    category: Hydrology & Landscape Controls
-    s3_key: ""
-    name: Watershed
-    source: watershed_hierarchy
-    analysis_type: watershed_hierarchy
-    # Skip batch re-clip — map hierarchy endpoint already loads the GeoJSON.
-    analysis_batch: false
-    map_render: true
-    render:
-      type: hierarchy
-      classes:
-        - { value: basin, label: Basin, color: "#00306d" }
-        - { value: sub_basin, label: Sub basin, color: "#7c3aed" }
-        - { value: level7, label: Level-7 watershed, color: "#db2777" }
-        - { value: micro, label: Micro watershed (L12), color: "#1c75e9" }
-        - { value: rivers, label: Rivers, color: "#457b9d" }
-    meaning: >-
-      This view stacks the drainage hierarchy that contains the project AOI: basin,
-      sub basin, Level-7, and Level-12 micro watersheds, plus rivers that cross the area.
-      Use it to place field work in the correct hydrologic unit and to see how local
-      micros nest inside larger planning units.
-    uncertainty: >-
-      National basin products can lag administrative renames and local drainage edits.
-      Micro (L12) outlines are model-derived watersheds, not cadastral parcels.
-    field_check: >-
-      Confirm the basin / sub-basin name with facilitators, walk the main drain that
-      leaves the AOI, and note whether neighbouring micros share the same outlet or
-      diverge into a different Level-7 unit.
-
   # ── Raster COGs ──────────────────────────────────────────────────────────
   - id: lulc250k
     category: Hydrology & Landscape Controls

@@ -17,7 +17,6 @@
 		fetchBatchLayerAnalysis,
 		fetchObservationZones,
 		fetchVectorLayers,
-		fetchWatershedHierarchy,
 		fieldNoteMediaUrl,
 		fieldNoteThumbnailUrl,
 		updateFieldNote,
@@ -57,18 +56,12 @@
 	];
 
 	const OVERLAY_LAYER_IDS = new Set(['village_boundaries', 'canals', 'drainage']);
-	const WATERSHED_LAYER_ID = 'watershed';
-	const HIERARCHY_DRAW_ORDER = ['basin', 'sub_basin', 'level7', 'micro', 'rivers'];
-	/** @type {string[]} */
-	let hierarchySourceIds = $state([]);
 	/** @type {{ title: string, items: Array<{ label: string, color: string, continuous?: boolean }> }} */
 	let retainedLegend = $state({ title: '', items: [] });
-	/** Cancel in-flight hierarchy/batch when leaving the map (reload / navigate). */
+	/** Cancel in-flight batch when leaving the map (reload / navigate). */
 	let mapDataAbort = new AbortController();
-	/** Serialize post-open heavy loads so hierarchy and batch never stampede workers. */
+	/** Serialize post-open heavy loads so batch never stampede workers. */
 	let postOpenLoadGen = 0;
-	/** @type {Promise<void> | null} */
-	let hierarchyInFlight = null;
 	const BOOT_KEY = 'diagnose:project-boot';
 	/** @type {'creating' | 'opening'} */
 	let bootMode = $state('opening');
@@ -76,7 +69,7 @@
 	let bootPercent = $state(0);
 	let bootStep = $state('Starting…');
 	let bootError = $state('');
-	/** Whether background loading (hierarchy, vectors, analysis) is still in progress. */
+	/** Whether background loading (vectors, analysis) is still in progress. */
 	let bgLoading = $state(false);
 	/**
 	 * AbortController only for the background /analysis/batch call.
@@ -156,11 +149,8 @@
 	]);
 
 	async function showOnlySecondaryLayer(layerId) {
-		const showHierarchy = layerId === WATERSHED_LAYER_ID;
-		const hasHierarchy = hierarchySourceIds.length > 0;
-		// Keep project AOI visible until hierarchy GeoJSON is actually on the map.
-		setHierarchyVisible(showHierarchy && hasHierarchy);
-		setWatershedOutlineVisible(showHierarchy ? !hasHierarchy : true);
+		// Project AOI outline stays visible under thematic layers.
+		setWatershedOutlineVisible(true);
 
 		// Hard-hide every thematic vector/COG layer first so WISER siblings never stack.
 		if (map) {
@@ -191,7 +181,6 @@
 		for (const l of secondaryLayers) {
 			// Overlays (village boundaries, canals, streams) keep their own eye-toggle state
 			if (isOverlayLayer(l)) continue;
-			if (l.id === WATERSHED_LAYER_ID) continue;
 			const visible = l.id === layerId && l.map_render !== false;
 			cogVisibility = { ...cogVisibility, [l.id]: visible };
 			if (l.kind === 'vector') {
@@ -203,10 +192,6 @@
 				setLayerVisibility(`cog-${l.id}`, visible);
 			}
 		}
-		cogVisibility = {
-			...cogVisibility,
-			[WATERSHED_LAYER_ID]: showHierarchy && hasHierarchy
-		};
 	}
 
 	async function selectLayer(layer) {
@@ -223,29 +208,6 @@
 		} else if (layer?.kind === 'secondary') {
 			if (mapReady) {
 				const meta = secondaryLayers.find((l) => l.id === layer.id);
-				if (meta?.id === WATERSHED_LAYER_ID) {
-					// Paint AOI immediately; hierarchy loads in background (was blocking the UI).
-					await showOnlySecondaryLayer(layer.id);
-					if (hierarchySourceIds.length === 0) {
-						setWatershedOutlineVisible(true);
-						setHierarchyVisible(false);
-					}
-					void (async () => {
-						await ensureWatershedHierarchyOnMap();
-						if (
-							selectedLayer?.kind === 'secondary' &&
-							selectedLayer.id === WATERSHED_LAYER_ID
-						) {
-							await showOnlySecondaryLayer(WATERSHED_LAYER_ID);
-							if (hierarchySourceIds.length === 0) {
-								setWatershedOutlineVisible(true);
-								setHierarchyVisible(false);
-							}
-						}
-						void ensureLayerAnalysis(layer.id);
-					})();
-					return;
-				}
 				if (meta?.kind === 'vector' && meta.map_render !== false) {
 					await ensureVectorLayerOnMap(meta);
 				}
@@ -492,7 +454,6 @@
 
 	function removeVectorLayers() {
 		if (!map) return;
-		clearWatershedHierarchyLayers();
 		for (const layer of vectorLayers) {
 			const fillId = `vec-${layer.id}-fill`;
 			const lineId = `vec-${layer.id}-line`;
@@ -509,20 +470,20 @@
 	}
 
 	function rebuildSecondaryList(cogs, vectors) {
-		const hierarchy = [];
 		const otherVectors = [];
 		const seen = new Set();
 		const wiserRankSeen = new Set();
 		for (const l of vectors || []) {
 			if (!l?.id || seen.has(l.id)) continue;
+			// Hierarchy stack removed from project maps (slow FGB clips).
+			if (l.id === 'watershed' || l.source === 'watershed_hierarchy') continue;
 			seen.add(l.id);
 			// Guard against catalog/env double-registration of the same WISER rank view.
 			if (WISER_RANK_LAYER_IDS.has(l.id)) {
 				if (wiserRankSeen.has(l.id)) continue;
 				wiserRankSeen.add(l.id);
 			}
-			if (l.id === WATERSHED_LAYER_ID) hierarchy.push({ ...l, kind: 'vector' });
-			else otherVectors.push({ ...l, kind: 'vector' });
+			otherVectors.push({ ...l, kind: 'vector' });
 		}
 		const cogOut = [];
 		for (const l of cogs || []) {
@@ -530,7 +491,7 @@
 			seen.add(l.id);
 			cogOut.push({ ...l, kind: 'cog' });
 		}
-		return [...hierarchy, ...cogOut, ...otherVectors];
+		return [...cogOut, ...otherVectors];
 	}
 
 	/** Matplotlib-style CSS gradients for continuous rasters (matches notebook colorbars). */
@@ -675,9 +636,6 @@
 		if (selectedLayer?.kind !== 'secondary') return [];
 		const layer = secondaryLayers.find((l) => l.id === selectedLayer.id);
 		if (!layer || isOverlayLayer(layer)) return [];
-		if (layer.id === WATERSHED_LAYER_ID) {
-			return layer.legend || layerActiveLegend[layer.id] || [];
-		}
 		return layerActiveLegend[layer.id] || layer.legend || [];
 	});
 
@@ -847,7 +805,6 @@
 		mapDataAbort = new AbortController();
 		bgBatchAbort = new AbortController();
 		postOpenLoadGen = 0;
-		hierarchyInFlight = null;
 		bootMode = readBootMode();
 		projectBooting = true;
 		bootPercent = 0;
@@ -942,20 +899,11 @@
 
 				// Pick the default layer and make it visible now.
 				// COG layers (LULC, DEM…) will start streaming tiles immediately.
-				// Watershed outline shows while hierarchy loads in the background.
+				// Project AOI outline is always shown under thematic layers.
 				if (thematicLayers.length > 0) {
-					const prefer =
-						thematicLayers.find((l) => l.id === WATERSHED_LAYER_ID)?.id ??
-						thematicLayers[0].id;
+					const prefer = thematicLayers[0].id;
 					selectedLayer = { kind: 'secondary', id: prefer };
-					// For vector thematic layers, show AOI outline while clip loads in bg.
-					if (prefer === WATERSHED_LAYER_ID) {
-						setWatershedOutlineVisible(true);
-						setHierarchyVisible(false);
-						cogVisibility = { ...cogVisibility, [WATERSHED_LAYER_ID]: false };
-					} else {
-						await showOnlySecondaryLayer(prefer);
-					}
+					await showOnlySecondaryLayer(prefer);
 					void ensureLayerAnalysis(prefer);
 				} else if (secondaryLayers.length > 0) {
 					selectedLayer = { kind: 'secondary', id: secondaryLayers[0].id };
@@ -978,33 +926,18 @@
 					try {
 						if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
 
-						// 1. Watershed hierarchy (large FGB clips)
-						const hierarchyOk = await ensureWatershedHierarchyOnMap();
-						if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
-						if (selectedLayer?.id === WATERSHED_LAYER_ID) {
-							if (hierarchyOk) {
-								setHierarchyVisible(true);
-								setWatershedOutlineVisible(false);
-								cogVisibility = { ...cogVisibility, [WATERSHED_LAYER_ID]: true };
-							} else {
-								setWatershedOutlineVisible(true);
-								setHierarchyVisible(false);
-							}
-						}
-
-						// 2. Preload renderable vectors in background (one attempt each)
-						if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
+						// 1. Preload renderable vectors in background (one attempt each)
 						await preloadRenderableVectors();
 						if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
 
-					// 3. Batch layer analysis — delayed 2.5 s so the user's first
-					// layer clicks get uncontested backend semaphore slots.
-					await new Promise((r) => setTimeout(r, 2500));
-					if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
-					await preloadAllSecondaryData();
+						// 2. Batch layer analysis — delayed 2.5 s so the user's first
+						// layer clicks get uncontested backend semaphore slots.
+						await new Promise((r) => setTimeout(r, 2500));
+						if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
+						await preloadAllSecondaryData();
 						if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
 
-						// 4. Zones, notes, hypotheses
+						// 3. Zones, notes, hypotheses
 						await Promise.allSettled([
 							reloadObservationZones(),
 							reloadFieldNotes(),
@@ -1487,135 +1420,6 @@
 		setLayerVisibility('watershed-line', visible);
 	}
 
-	function setHierarchyVisible(visible) {
-		for (const id of hierarchySourceIds) {
-			setLayerVisibility(`ws-h-${id}-fill`, visible);
-			setLayerVisibility(`ws-h-${id}-line`, visible);
-		}
-	}
-
-	function clearWatershedHierarchyLayers() {
-		for (const id of hierarchySourceIds) {
-			const fillId = `ws-h-${id}-fill`;
-			const lineId = `ws-h-${id}-line`;
-			if (map?.getLayer(fillId)) map.removeLayer(fillId);
-			if (map?.getLayer(lineId)) map.removeLayer(lineId);
-			if (map?.getSource(`ws-h-${id}`)) map.removeSource(`ws-h-${id}`);
-		}
-		hierarchySourceIds = [];
-	}
-
-	function hierarchyHasDrawableFeatures(layers) {
-		return (layers || []).some((l) => {
-			if (!l || l.status === 'error' || !l.geojson) return false;
-			return (l.geojson.features || []).length > 0;
-		});
-	}
-
-	async function ensureWatershedHierarchyOnMap() {
-		if (!map || !project?.id) return false;
-		const meta = secondaryLayers.find((l) => l.id === WATERSHED_LAYER_ID);
-		if (meta?.legend?.length) {
-			layerActiveLegend = { ...layerActiveLegend, [WATERSHED_LAYER_ID]: meta.legend };
-		}
-		const expected = HIERARCHY_DRAW_ORDER.join('|');
-		const loaded = hierarchySourceIds.join('|');
-		if (loaded === expected && loaded.length > 0) {
-			setHierarchyVisible(true);
-			setWatershedOutlineVisible(false);
-			return true;
-		}
-		if (hierarchyInFlight) {
-			await hierarchyInFlight;
-			return hierarchySourceIds.length > 0;
-		}
-		hierarchyInFlight = (async () => {
-			clearWatershedHierarchyLayers();
-			// Keep AOI while hierarchy downloads — do not blank the map.
-			setWatershedOutlineVisible(true);
-			setHierarchyVisible(false);
-			status = 'Loading watershed hierarchy…';
-			try {
-				const result = await fetchWatershedHierarchy(project.id, {
-					signal: mapDataAbort.signal
-				});
-				if (mapDataAbort.signal.aborted) return;
-				const layers = (result.layers || []).filter(
-					(l) => l && l.status !== 'error' && l.geojson
-				);
-				if (!hierarchyHasDrawableFeatures(layers)) {
-					setHierarchyVisible(false);
-					setWatershedOutlineVisible(true);
-					status = 'Watershed hierarchy returned no features — showing project AOI';
-					return;
-				}
-				const byId = new Map(layers.map((l) => [l.id, l]));
-				const beforeId = map.getLayer('watershed-fill') ? 'watershed-fill' : undefined;
-				const ids = [];
-				for (const id of HIERARCHY_DRAW_ORDER) {
-					const layer = byId.get(id);
-					if (!layer) continue;
-					const sourceId = `ws-h-${id}`;
-					const isLine = layer.geometry_kind === 'line' || layer.render_type === 'line';
-					if (map.getSource(sourceId)) {
-						map.getSource(sourceId).setData(layer.geojson);
-					} else {
-						map.addSource(sourceId, { type: 'geojson', data: layer.geojson });
-					}
-					if (!isLine && !map.getLayer(`${sourceId}-fill`)) {
-						map.addLayer(
-							{
-								id: `${sourceId}-fill`,
-								type: 'fill',
-								source: sourceId,
-								paint: {
-									'fill-color': layer.fill_color || layer.line_color || '#64748b',
-									'fill-opacity': layer.fill_opacity ?? 0.08
-								}
-							},
-							beforeId
-						);
-					}
-					if (!map.getLayer(`${sourceId}-line`)) {
-						map.addLayer(
-							{
-								id: `${sourceId}-line`,
-								type: 'line',
-								source: sourceId,
-								paint: {
-									'line-color': layer.line_color || '#334155',
-									'line-width': layer.line_width ?? 1.5,
-									'line-opacity': 0.92
-								}
-							},
-							beforeId
-						);
-					}
-					ids.push(id);
-				}
-				hierarchySourceIds = ids;
-				applyLayerStackOrder();
-				if (selectedLayer?.id === WATERSHED_LAYER_ID) {
-					setHierarchyVisible(true);
-					setWatershedOutlineVisible(false);
-				}
-				status = 'Ready';
-			} catch (err) {
-				if (err?.name === 'AbortError' || mapDataAbort.signal.aborted) return;
-				console.error('Watershed hierarchy failed', err);
-				setHierarchyVisible(false);
-				setWatershedOutlineVisible(true);
-				status = `Watershed hierarchy failed: ${err instanceof Error ? err.message : String(err)}`;
-			}
-		})();
-		try {
-			await hierarchyInFlight;
-		} finally {
-			hierarchyInFlight = null;
-		}
-		return hierarchySourceIds.length > 0;
-	}
-
 	function setLayerVisibility(layerId, visible) {
 		if (!map?.getLayer(layerId)) return;
 		map.setLayoutProperty(layerId, 'visibility', visible ? 'visible' : 'none');
@@ -1662,13 +1466,7 @@
 		}
 		if (map.getLayer('watershed-fill')) map.moveLayer('watershed-fill');
 		if (map.getLayer('watershed-line')) map.moveLayer('watershed-line');
-		for (const id of hierarchySourceIds) {
-			const fillId = `ws-h-${id}-fill`;
-			const lineId = `ws-h-${id}-line`;
-			if (map.getLayer(fillId)) map.moveLayer(fillId);
-			if (map.getLayer(lineId)) map.moveLayer(lineId);
-		}
-		// Reference overlays (villages / canals / streams) above thematic + hierarchy.
+		// Reference overlays (villages / canals / streams) above thematic layers.
 		for (const layer of overlayLayers) {
 			moveVectorLayerStack(layer.id);
 		}
@@ -2145,10 +1943,6 @@
 
 	async function ensureVectorLayerOnMap(layer, { force = false } = {}) {
 		if (!map || !layer?.id) return false;
-		if (layer.id === WATERSHED_LAYER_ID) {
-			await ensureWatershedHierarchyOnMap();
-			return hierarchySourceIds.length > 0;
-		}
 		const sourceId = `vec-${layer.id}`;
 		if (map.getSource(sourceId) && !force) {
 			const cached = map.getSource(sourceId)?._data;
@@ -2328,9 +2122,6 @@
 
 	function vectorSourceReady(layer) {
 		if (!map || !layer?.id) return false;
-		if (layer.id === WATERSHED_LAYER_ID) {
-			return hierarchySourceIds.length > 0;
-		}
 		// Source must exist on the map; empty FeatureCollections are OK for sparse AOIs.
 		return !!map.getSource(`vec-${layer.id}`);
 	}
@@ -2343,7 +2134,6 @@
 			(l) =>
 				l.kind === 'vector' &&
 				l.map_render !== false &&
-				l.id !== WATERSHED_LAYER_ID &&
 				l.url &&
 				l.status !== 'error'
 		);
@@ -2361,10 +2151,8 @@
 		if (!project?.id) return;
 		status = 'Loading watershed analysis…';
 
-		// Seed COG + Watershed hierarchy legends (full catalog)
-		for (const layer of secondaryLayers.filter(
-			(l) => l.kind === 'cog' || l.id === WATERSHED_LAYER_ID
-		)) {
+		// Seed COG legends (full catalog)
+		for (const layer of secondaryLayers.filter((l) => l.kind === 'cog')) {
 			layerActiveLegend = {
 				...layerActiveLegend,
 				[layer.id]: legendFromFeatures(layer, null)
@@ -2380,7 +2168,7 @@
 			);
 			// Use bgBatchAbort (not mapDataAbort) so a user-initiated layer click
 			// can abort *only* the background batch, freeing the server's _batch_sem
-			// without cancelling hierarchy or vector loading.
+			// without cancelling vector loading.
 			const { analyses } = await fetchBatchLayerAnalysis(project.id, {
 				signal: bgBatchAbort.signal
 			});
