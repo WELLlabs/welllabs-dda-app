@@ -150,6 +150,11 @@
 				if (meta?.id === WATERSHED_LAYER_ID) {
 					await ensureWatershedHierarchyOnMap();
 					await showOnlySecondaryLayer(layer.id);
+					// Hierarchy load may have fallen back to AOI outline — don't force-hide it.
+					if (hierarchySourceIds.length === 0) {
+						setWatershedOutlineVisible(true);
+						setHierarchyVisible(false);
+					}
 					void ensureLayerAnalysis(layer.id);
 					return;
 				}
@@ -800,12 +805,24 @@
 			updateDrawSizes();
 			ensureDrawPreviewOnTop();
 			try {
-			await loadCogLayers();
+				await loadCogLayers();
 				await loadVectorLayers();
-				await preloadAllSecondaryData();
 			} catch (err) {
 				status = `Layers unavailable: ${err instanceof Error ? err.message : String(err)}`;
 			}
+			// Show map layers immediately — do not wait on batch analysis (can hang on beta).
+			if (thematicLayers.length > 0) {
+				const prefer =
+					thematicLayers.find((l) => l.id === WATERSHED_LAYER_ID)?.id ?? thematicLayers[0].id;
+				await selectLayer({ kind: 'secondary', id: prefer });
+			} else if (secondaryLayers.length > 0) {
+				await selectLayer({ kind: 'secondary', id: secondaryLayers[0].id });
+			} else {
+				await selectLayer({ kind: 'primary', id: 'observation-zones' });
+			}
+			void preloadAllSecondaryData().catch((err) => {
+				console.error('Batch analysis preload failed', err);
+			});
 			try {
 				await reloadObservationZones();
 			} catch (err) {
@@ -813,7 +830,7 @@
 				status = `Could not load observation zones: ${err instanceof Error ? err.message : String(err)}`;
 			}
 			try {
-			await reloadFieldNotes();
+				await reloadFieldNotes();
 			} catch (err) {
 				console.error('Failed to load field notes', err);
 				status = `Could not load field notes: ${err instanceof Error ? err.message : String(err)}`;
@@ -824,18 +841,11 @@
 				console.error('Failed to load hypotheses', err);
 				status = `Could not load hypotheses: ${err instanceof Error ? err.message : String(err)}`;
 			}
-			if (thematicLayers.length > 0) {
-				const prefer =
-					thematicLayers.find((l) => l.id === WATERSHED_LAYER_ID)?.id ?? thematicLayers[0].id;
-				await selectLayer({ kind: 'secondary', id: prefer });
-			} else if (secondaryLayers.length > 0) {
-				await selectLayer({ kind: 'secondary', id: secondaryLayers[0].id });
-			} else {
-				await selectLayer({ kind: 'primary', id: 'observation-zones' });
-			}
 			ensureDrawPreviewOnTop();
 			status =
-				status.startsWith('Layers unavailable') || status.startsWith('Could not load')
+				status.startsWith('Layers unavailable') ||
+				status.startsWith('Could not load') ||
+				status.startsWith('Watershed hierarchy failed')
 					? status
 					: 'Ready';
 			requestAnimationFrame(() => map?.resize());
@@ -1314,6 +1324,13 @@
 		hierarchySourceIds = [];
 	}
 
+	function hierarchyHasDrawableFeatures(layers) {
+		return (layers || []).some((l) => {
+			if (!l || l.status === 'error' || !l.geojson) return false;
+			return (l.geojson.features || []).length > 0;
+		});
+	}
+
 	async function ensureWatershedHierarchyOnMap() {
 		if (!map || !project?.id) return;
 		const meta = secondaryLayers.find((l) => l.id === WATERSHED_LAYER_ID);
@@ -1322,8 +1339,9 @@
 		}
 		const expected = HIERARCHY_DRAW_ORDER.join('|');
 		const loaded = hierarchySourceIds.join('|');
-		if (loaded === expected) {
+		if (loaded === expected && loaded.length > 0) {
 			setHierarchyVisible(true);
+			setWatershedOutlineVisible(false);
 			return;
 		}
 		clearWatershedHierarchyLayers();
@@ -1331,6 +1349,12 @@
 		try {
 			const result = await fetchWatershedHierarchy(project.id);
 			const layers = (result.layers || []).filter((l) => l && l.status !== 'error' && l.geojson);
+			if (!hierarchyHasDrawableFeatures(layers)) {
+				setHierarchyVisible(false);
+				setWatershedOutlineVisible(true);
+				status = 'Watershed hierarchy returned no features — showing project AOI';
+				return;
+			}
 			const byId = new Map(layers.map((l) => [l.id, l]));
 			const beforeId = map.getLayer('watershed-fill') ? 'watershed-fill' : undefined;
 			const ids = [];
@@ -1377,9 +1401,13 @@
 			}
 			hierarchySourceIds = ids;
 			applyLayerStackOrder();
+			setHierarchyVisible(true);
+			setWatershedOutlineVisible(false);
 			status = 'Ready';
 		} catch (err) {
 			console.error('Watershed hierarchy failed', err);
+			setHierarchyVisible(false);
+			setWatershedOutlineVisible(true);
 			status = `Watershed hierarchy failed: ${err instanceof Error ? err.message : String(err)}`;
 		}
 	}
