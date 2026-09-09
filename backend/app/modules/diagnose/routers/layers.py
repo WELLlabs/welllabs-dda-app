@@ -22,15 +22,11 @@ from shapely.geometry import shape as shp_shape
 
 # Cap heavy clip/analysis work per worker.
 #
-# _heavy_clip_sem  — on-demand user requests: watershed hierarchy, single
-#                    vector /data clips, single-layer analysis.  Capacity 2
-#                    lets one background preload + one user click run in
-#                    parallel without blocking.
+# _heavy_clip_sem  — single-layer analysis (and leftover hierarchy endpoint).
+#                    Vector /data intentionally has NO semaphore — matches prod
+#                    so on-demand layer clicks are not queued behind analysis.
 # _batch_sem       — at most ONE concurrent /analysis/batch call per worker.
-#                    Kept separate so a running batch never blocks a user's
-#                    on-demand layer-click analysis (the 502 source).
-# _batch_inner_sem — caps parallelism *inside* a single batch (2 analyses
-#                    at a time) so it doesn't monopolise the thread pool.
+# _batch_inner_sem — caps parallelism *inside* a single batch.
 _heavy_clip_sem = asyncio.Semaphore(2)
 _batch_sem = asyncio.Semaphore(1)
 _batch_inner_sem = asyncio.Semaphore(2)
@@ -1306,10 +1302,11 @@ async def clipped_vector_layer_data(
         raise HTTPException(404, f"S3 error: {err.get('Code')} – {err.get('Message')}") from exc
 
     try:
-        async with _heavy_clip_sem:
-            geojson = await asyncio.to_thread(
-                clipped_vector_geojson_for_watershed, cfg.s3_key, vector_url, geom, cfg
-            )
+        # No semaphore — match prod. On-demand vector paints must not queue
+        # behind analysis / other clips (that was making beta feel slower).
+        geojson = await asyncio.to_thread(
+            clipped_vector_geojson_for_watershed, cfg.s3_key, vector_url, geom, cfg
+        )
     except Exception as exc:
         raise HTTPException(500, f"Clip failed: {exc}") from exc
 

@@ -926,18 +926,15 @@
 					try {
 						if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
 
-						// 1. Preload renderable vectors in background (one attempt each)
-						await preloadRenderableVectors();
-						if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
+						// Vectors load on demand (prod behaviour) — do not background-
+						// preload every FGB clip; that queues workers and slows clicks.
 
-						// 2. Batch layer analysis — delayed 2.5 s so the user's first
-						// layer clicks get uncontested backend semaphore slots.
+						// Batch layer analysis — delayed so first layer clicks stay fast.
 						await new Promise((r) => setTimeout(r, 2500));
 						if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
 						await preloadAllSecondaryData();
 						if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
 
-						// 3. Zones, notes, hypotheses
 						await Promise.allSettled([
 							reloadObservationZones(),
 							reloadFieldNotes(),
@@ -1954,8 +1951,9 @@
 
 		status = `Loading ${layer.name}…`;
 		let data;
-		// Cache clipped GeoJSON by layer URL (layer_id) so WISER siblings stay independent.
-		const cacheKey = layer.url || layer.id;
+		// Reuse watershed-clipped GeoJSON for the same S3 key (prod behaviour) —
+		// WISER siblings + village overlays share one clip; paint is re-bound below.
+		const cacheKey = layer.s3_key || layer.url || layer.id;
 		if (!force && cacheKey && vectorGeoJsonByKey[cacheKey]) {
 			data = vectorGeoJsonByKey[cacheKey];
 		} else {
