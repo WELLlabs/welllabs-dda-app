@@ -1090,6 +1090,7 @@ def list_village_districts(state: str) -> list[str]:
     if not s:
         raise ValueError("state is required")
     ensure_village_name_index()
+    # Kick warm early so by-district rarely blocks on first open.
     warm_state_village_centroids_async(state)
     return list(_village_districts_by_state.get(s, []))
 
@@ -1140,7 +1141,9 @@ def list_villages_for_district(
     if not s or not d:
         raise ValueError("state and district are required")
     ensure_village_name_index()
-    warm_state_village_centroids_async(state)
+    # Finish centroid enrich before the user picks a village — otherwise
+    # village_geometry_by_id blocks on a full-state S3 read (often minutes).
+    ensure_state_village_centroids(state)
     q_lower = (q or "").strip().lower()
 
     resolved = _resolve_district_bucket_key(s, d)

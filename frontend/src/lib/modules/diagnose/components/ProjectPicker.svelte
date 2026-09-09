@@ -43,6 +43,11 @@
 	let creating = $state(false);
 	let deletingId = $state(null);
 	let mounted = $state(false);
+	/** @type {AbortController | null} */
+	let villageAbort = null;
+	/** @type {AbortController | null} */
+	let previewAbort = null;
+	let previewGen = 0;
 
 	let villageState = $state('');
 	let villageDistrict = $state('');
@@ -210,25 +215,49 @@
 		if (watershedPreview.geometry) void loadPreviewContext(watershedPreview.geometry);
 	}
 
+	function abortInFlightLoads() {
+		villageAbort?.abort();
+		previewAbort?.abort();
+		villageAbort = null;
+		previewAbort = null;
+		previewGen += 1;
+		contextLoading = false;
+	}
+
 	async function loadPreviewContext(geometry) {
 		if (!geometry) {
 			previewContextLayers = [];
 			return;
 		}
+		previewAbort?.abort();
+		previewAbort = new AbortController();
+		const { signal } = previewAbort;
+		const gen = ++previewGen;
 		contextLoading = true;
 		try {
-			const result = await fetchWatershedPreviewContext(geometry);
-			previewContextLayers = result.layers ?? [];
+			// Basin / sub-basin / L7 first (fast), then rivers (often the slow GPKG).
+			const fast = await fetchWatershedPreviewContext(geometry, {
+				signal,
+				includeRivers: false
+			});
+			if (gen !== previewGen || signal.aborted) return;
+			previewContextLayers = fast.layers ?? [];
+			const full = await fetchWatershedPreviewContext(geometry, {
+				signal,
+				includeRivers: true
+			});
+			if (gen !== previewGen || signal.aborted) return;
+			previewContextLayers = full.layers ?? previewContextLayers;
 		} catch (err) {
+			if (signal.aborted || (err instanceof Error && err.name === 'AbortError')) return;
 			console.error('Preview context failed', err);
-			// Keep any prior layers so a timeout/502 doesn't wipe a useful map.
-			if (!previewContextLayers.length) previewContextLayers = [];
 		} finally {
-			contextLoading = false;
+			if (gen === previewGen) contextLoading = false;
 		}
 	}
 
 	function resetVillageCascade() {
+		abortInFlightLoads();
 		villageState = '';
 		villageDistrict = '';
 		villageId = '';
@@ -251,12 +280,14 @@
 	}
 
 	async function onStateChange(state) {
+		abortInFlightLoads();
 		villageState = state;
 		villageDistrict = '';
 		villageId = '';
 		districtOptions = [];
 		villageOptions = [];
 		watershedPreview = null;
+		previewContextLayers = [];
 		if (!state) return;
 		cascadeError = '';
 		const cached = districtCache.get(state);
@@ -277,10 +308,12 @@
 	}
 
 	async function onDistrictChange(district) {
+		abortInFlightLoads();
 		villageDistrict = district;
 		villageId = '';
 		villageOptions = [];
 		watershedPreview = null;
+		previewContextLayers = [];
 		if (!district || !villageState) return;
 		cascadeError = '';
 		const cacheKey = `${villageState}::${district}`;
@@ -291,6 +324,7 @@
 		}
 		cascadeLoading = 'villages';
 		try {
+			// Server finishes centroid enrich here so village→clip stays fast.
 			const rows = await fetchVillagesByDistrict(villageState, district);
 			villageCache.set(cacheKey, rows);
 			if (villageState && villageDistrict === district) villageOptions = rows;
@@ -304,6 +338,7 @@
 	async function onVillageChange(id) {
 		villageId = id;
 		if (!id) {
+			abortInFlightLoads();
 			watershedPreview = null;
 			microChoice = 'all';
 			previewContextLayers = [];
@@ -311,16 +346,19 @@
 		}
 		const hit = villageOptions.find((v) => v.id === id);
 		previewLoading = true;
-		// Keep previous map while loading so the UI does not blank out.
 		microChoice = 'all';
 		cascadeError = '';
+		villageAbort?.abort();
+		previewAbort?.abort();
+		villageAbort = new AbortController();
+		const { signal } = villageAbort;
 		try {
-			const result = await watershedsFromVillage({ villageId: id });
+			const result = await watershedsFromVillage({ villageId: id, signal });
+			if (signal.aborted) return;
 			setWatershedPreview(result, 'all');
 			if (result.seed_lng != null) lng = result.seed_lng;
 			if (result.seed_lat != null) lat = result.seed_lat;
 			if (!name.trim() && hit?.name) name = titleCase(hit.name);
-			// Context layers are secondary — load after clip is on screen.
 			const geom = watershedPreview?.geometry;
 			if (geom) {
 				previewContextLayers = [];
@@ -329,10 +367,11 @@
 				});
 			}
 		} catch (err) {
+			if (signal.aborted || (err instanceof Error && err.name === 'AbortError')) return;
 			watershedPreview = { error: String(err) };
 			previewContextLayers = [];
 		} finally {
-			previewLoading = false;
+			if (!signal.aborted) previewLoading = false;
 		}
 	}
 
@@ -442,6 +481,8 @@
 		if (!name.trim() || !previewOk()) return;
 		creating = true;
 		error = '';
+		// Free workers that may still be clipping preview layers.
+		abortInFlightLoads();
 		try {
 			const project = await createProject({
 				name: name.trim(),

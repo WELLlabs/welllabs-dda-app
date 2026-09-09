@@ -62,7 +62,7 @@ export function createApiClient(basePath, defaults = {}) {
 				if (!res.ok) {
 					const message = await parseErrorMessage(res);
 					const retryable = res.status === 502 || res.status === 503 || res.status === 504;
-					if (retryable && attempt < attempts - 1) {
+					if (retryable && attempt < attempts - 1 && !opts.signal?.aborted) {
 						await new Promise((r) => setTimeout(r, retryDelayMs * (attempt + 1)));
 						continue;
 					}
@@ -72,6 +72,7 @@ export function createApiClient(basePath, defaults = {}) {
 				return res.json();
 			} catch (err) {
 				lastError = err;
+				if (err?.name === 'AbortError' || opts.signal?.aborted) throw err;
 				const msg = err instanceof Error ? err.message : String(err);
 				const retryable =
 					/502|503|504|timed out|Bad gateway|Failed to fetch|NetworkError/i.test(msg);

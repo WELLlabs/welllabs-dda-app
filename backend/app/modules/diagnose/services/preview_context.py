@@ -193,25 +193,32 @@ def _clip_one(meta: dict[str, Any], geometry: dict[str, Any]) -> dict[str, Any]:
     return entry
 
 
-def preview_context_layers(geometry: dict[str, Any]) -> list[dict[str, Any]]:
+def preview_context_layers(
+    geometry: dict[str, Any], *, include_rivers: bool = True
+) -> list[dict[str, Any]]:
     """Clip/filter configured reference layers to the preview AOI geometry."""
     if not geometry:
         raise ValueError("geometry is required")
 
-    cache_key = _geom_cache_key("preview", geometry)
+    metas = [
+        m
+        for m in PREVIEW_CONTEXT_LAYERS
+        if include_rivers or m["id"] != "rivers"
+    ]
+    cache_key = _geom_cache_key(
+        "preview" if include_rivers else "preview_norivers", geometry
+    )
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
 
     # Parallel S3/local reads — wall time ≈ slowest layer, not sum.
     by_id: dict[str, dict[str, Any]] = {}
-    with ThreadPoolExecutor(max_workers=len(PREVIEW_CONTEXT_LAYERS)) as pool:
-        futures = {
-            pool.submit(_clip_one, meta, geometry): meta["id"] for meta in PREVIEW_CONTEXT_LAYERS
-        }
+    with ThreadPoolExecutor(max_workers=max(1, len(metas))) as pool:
+        futures = {pool.submit(_clip_one, meta, geometry): meta["id"] for meta in metas}
         for fut in as_completed(futures):
             by_id[futures[fut]] = fut.result()
-    layers = [by_id[meta["id"]] for meta in PREVIEW_CONTEXT_LAYERS]
+    layers = [by_id[meta["id"]] for meta in metas]
     _cache_set(cache_key, layers)
     return layers
 

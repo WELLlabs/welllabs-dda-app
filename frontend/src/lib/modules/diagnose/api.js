@@ -26,7 +26,9 @@ export async function createProject(nameOrPayload, lng, lat) {
 	return request('/projects', {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify(body)
+		body: JSON.stringify(body),
+		retries: 2,
+		retryDelayMs: 1000
 	});
 }
 
@@ -111,14 +113,17 @@ export async function fetchVillagesByDistrict(state, district, q = '') {
 	return data.villages ?? [];
 }
 
-export async function watershedsFromVillage({ villageId, geometry } = {}) {
+export async function watershedsFromVillage({ villageId, geometry, signal } = {}) {
 	return request('/watersheds/from-village', {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({
 			village_id: villageId ?? null,
 			geometry: geometry ?? null
-		})
+		}),
+		signal,
+		retries: 1,
+		retryDelayMs: 800
 	});
 }
 
@@ -131,11 +136,12 @@ export async function watershedsFromGeometry(geometry, name = null) {
 }
 
 /** Rivers / basin / sub-basin / L7 overlays for the create-project map preview. */
-export async function fetchWatershedPreviewContext(geometry) {
+export async function fetchWatershedPreviewContext(geometry, { signal, includeRivers = true } = {}) {
 	return request('/watersheds/preview-context', {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ geometry }),
+		body: JSON.stringify({ geometry, include_rivers: includeRivers }),
+		signal,
 		retries: 2,
 		retryDelayMs: 900
 	});

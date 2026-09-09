@@ -132,22 +132,37 @@ def get_project(project_id: str, user: dict = Depends(require_diagnosis_access))
 
 
 @router.post("", status_code=201)
-def create_project(body: ProjectCreate, user: dict = Depends(get_current_user)):
-    try:
+async def create_project(body: ProjectCreate, user: dict = Depends(get_current_user)):
+    import asyncio
+
+    def _build_row():
         if body.geometry is not None:
             # Client-supplied clip (village union or custom AOI) — validate, do not re-lookup.
             parse_geojson_polygon(body.geometry)
             if body.source == "custom" or (body.watershed_id or "") == "custom":
                 watershed = custom_aoi_from_geometry(body.geometry, name=body.watershed_name)
             else:
+                from shapely.geometry import mapping as shp_mapping
                 from shapely.geometry import shape as shp_shape
 
                 geom = shp_shape(body.geometry)
+                # Large multi-micro unions can stall PostGIS / CF if left unsimplified.
+                try:
+                    if geom.geom_type in ("MultiPolygon", "GeometryCollection") or len(
+                        getattr(geom, "geoms", [])
+                    ) > 1:
+                        geom = geom.simplify(0.00015, preserve_topology=True)
+                    elif hasattr(geom, "area") and float(geom.area) > 0.05:
+                        geom = geom.simplify(0.00015, preserve_topology=True)
+                except Exception:
+                    pass
+                if geom.is_empty:
+                    raise ValueError("Watershed geometry is empty after simplify")
                 centroid = geom.centroid
                 watershed = {
                     "watershed_id": (body.watershed_id or f"union:geom").strip()[:500],
                     "watershed_name": (body.watershed_name or "Watershed union").strip()[:500],
-                    "geometry": body.geometry,
+                    "geometry": shp_mapping(geom),
                     "seed_lng": float(centroid.x),
                     "seed_lat": float(centroid.y),
                 }
@@ -157,49 +172,59 @@ def create_project(body: ProjectCreate, user: dict = Depends(get_current_user)):
             watershed = lookup_watershed(body.lng, body.lat)
             seed_lng = body.lng
             seed_lat = body.lat
+        return watershed, seed_lng, seed_lat
+
+    try:
+        watershed, seed_lng, seed_lat = await asyncio.to_thread(_build_row)
     except ValueError as exc:
         raise HTTPException(400 if body.geometry is not None else 404, str(exc)) from exc
     except Exception as exc:
         raise HTTPException(502, f"Watershed resolve failed: {exc}") from exc
 
-    with db_cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO diagnosis (
-                name, owner_id, watershed_id, watershed_name, watershed_geom, seed_lng, seed_lat
+    def _insert():
+        with db_cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO diagnosis (
+                    name, owner_id, watershed_id, watershed_name, watershed_geom, seed_lng, seed_lat
+                )
+                VALUES (
+                    %(name)s,
+                    %(owner_id)s,
+                    %(watershed_id)s,
+                    %(watershed_name)s,
+                    ST_SetSRID(ST_GeomFromGeoJSON(%(watershed_geom)s), 4326),
+                    %(seed_lng)s,
+                    %(seed_lat)s
+                )
+                RETURNING id, name, owner_id,
+                          %(owner_name)s AS owner_name,
+                          %(owner_email)s AS owner_email,
+                          watershed_id, watershed_name, seed_lng, seed_lat,
+                          created_at, updated_at,
+                          ST_AsGeoJSON(watershed_geom, 9)::json AS watershed_geojson,
+                          ST_AsGeoJSON(ST_Envelope(watershed_geom))::json AS bounds_geojson,
+                          0 AS observation_zone_count,
+                          0 AS field_note_count
+                """,
+                {
+                    "name": body.name.strip(),
+                    "owner_id": user["id"],
+                    "owner_name": user["name"],
+                    "owner_email": user["email"],
+                    "watershed_id": watershed["watershed_id"],
+                    "watershed_name": watershed["watershed_name"],
+                    "watershed_geom": json.dumps(watershed["geometry"]),
+                    "seed_lng": seed_lng,
+                    "seed_lat": seed_lat,
+                },
             )
-            VALUES (
-                %(name)s,
-                %(owner_id)s,
-                %(watershed_id)s,
-                %(watershed_name)s,
-                ST_SetSRID(ST_GeomFromGeoJSON(%(watershed_geom)s), 4326),
-                %(seed_lng)s,
-                %(seed_lat)s
-            )
-            RETURNING id, name, owner_id,
-                      %(owner_name)s AS owner_name,
-                      %(owner_email)s AS owner_email,
-                      watershed_id, watershed_name, seed_lng, seed_lat,
-                      created_at, updated_at,
-                      ST_AsGeoJSON(watershed_geom, 9)::json AS watershed_geojson,
-                      ST_AsGeoJSON(ST_Envelope(watershed_geom))::json AS bounds_geojson,
-                      0 AS observation_zone_count,
-                      0 AS field_note_count
-            """,
-            {
-                "name": body.name.strip(),
-                "owner_id": user["id"],
-                "owner_name": user["name"],
-                "owner_email": user["email"],
-                "watershed_id": watershed["watershed_id"],
-                "watershed_name": watershed["watershed_name"],
-                "watershed_geom": json.dumps(watershed["geometry"]),
-                "seed_lng": seed_lng,
-                "seed_lat": seed_lat,
-            },
-        )
-        row = cur.fetchone()
+            return cur.fetchone()
+
+    try:
+        row = await asyncio.to_thread(_insert)
+    except Exception as exc:
+        raise HTTPException(502, f"Project create failed: {exc}") from exc
     return _row_to_dict(row)
 
 
