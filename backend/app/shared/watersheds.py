@@ -13,7 +13,9 @@ from typing import Any
 
 import pyogrio
 from shapely import from_wkb, make_valid
+from shapely.errors import GEOSException, ShapelyError
 from shapely.geometry import MultiPolygon, Polygon, Point, mapping, shape
+from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
 from app.shared.config import settings
@@ -216,6 +218,54 @@ def _read_bbox_extent(path: str, minx: float, miny: float, maxx: float, maxy: fl
     return result, geom_col
 
 
+def _prepare_geom(geom: BaseGeometry | None) -> BaseGeometry | None:
+    """Return a usable geom; skip make_valid on huge/broken rings (can hang or OOM)."""
+    if geom is None or geom.is_empty:
+        return None
+    if geom.is_valid:
+        return geom
+    # Rough size gate — make_valid on dense census polygons has taken down the
+    # single uvicorn worker (Cloudflare 502 for that request).
+    try:
+        if len(geom.wkb) > 250_000:
+            return None
+        fixed = make_valid(geom)
+    except (GEOSException, ShapelyError, MemoryError, Exception):
+        return None
+    if fixed is None or fixed.is_empty:
+        return None
+    if fixed.geom_type not in ("Polygon", "MultiPolygon", "GeometryCollection"):
+        return fixed
+    return fixed
+
+
+def _geom_from_cell(raw) -> BaseGeometry | None:
+    """Parse an Arrow geometry cell; skip null/truncated WKB instead of crashing."""
+    if raw is None:
+        return None
+    if isinstance(raw, BaseGeometry):
+        return raw
+    if isinstance(raw, memoryview):
+        raw = raw.tobytes()
+    if isinstance(raw, bytearray):
+        raw = bytes(raw)
+    if isinstance(raw, str):
+        # Occasional hex WKB
+        try:
+            raw = bytes.fromhex(raw)
+        except ValueError:
+            return None
+    if not isinstance(raw, (bytes, bytearray)):
+        return None
+    if len(raw) < 5:
+        return None
+    try:
+        return from_wkb(raw)
+    except (GEOSException, ShapelyError, TypeError, ValueError) as exc:
+        logger.debug("Skipping unreadable WKB (%s bytes): %s", len(raw), exc)
+        return None
+
+
 def _row_props(table, index: int) -> dict:
     props = {}
     for name in table.column_names:
@@ -225,29 +275,47 @@ def _row_props(table, index: int) -> dict:
     return props
 
 
-def _find_containing(table, geom_col: str, point: Point):
+_MAX_SCAN_ROWS = 600
+_MAX_SCAN_ROWS_QUICK = 200
+
+
+def _find_containing(table, geom_col: str, point: Point, *, quick: bool = False):
     if table.num_rows == 0:
         return None, None
 
     geoms = table.column(geom_col)
-    for i in range(table.num_rows):
-        geom = from_wkb(geoms[i].as_py())
-        if geom is None or not geom.is_valid:
+    limit = min(table.num_rows, _MAX_SCAN_ROWS_QUICK if quick else _MAX_SCAN_ROWS)
+    for i in range(limit):
+        raw = _geom_from_cell(geoms[i].as_py())
+        # Quick path: never call make_valid — invalid/huge census rings are why
+        # no-village clicks were taking down the API worker.
+        geom = raw if quick else _prepare_geom(raw)
+        if geom is None or geom.is_empty:
             continue
-        if geom.contains(point):
-            return geom, _row_props(table, i)
+        try:
+            if geom.contains(point) or geom.intersects(point):
+                return geom, _row_props(table, i)
+        except (GEOSException, ShapelyError):
+            continue
     return None, None
 
 
-def _find_intersecting(table, geom_col: str, shape_geom):
+def _find_intersecting(table, geom_col: str, shape_geom, *, quick: bool = False):
     if table.num_rows == 0:
         return None, None
 
     geoms = table.column(geom_col)
-    for i in range(table.num_rows):
-        geom = from_wkb(geoms[i].as_py())
-        if geom is not None and geom.intersects(shape_geom):
-            return geom, _row_props(table, i)
+    limit = min(table.num_rows, _MAX_SCAN_ROWS_QUICK if quick else _MAX_SCAN_ROWS)
+    for i in range(limit):
+        raw = _geom_from_cell(geoms[i].as_py())
+        geom = raw if quick else _prepare_geom(raw)
+        if geom is None or geom.is_empty:
+            continue
+        try:
+            if geom.intersects(shape_geom):
+                return geom, _row_props(table, i)
+        except (GEOSException, ShapelyError):
+            continue
     return None, None
 
 
@@ -256,14 +324,16 @@ def _collect_intersecting(table, geom_col: str, shape_geom) -> list[tuple[Any, d
         return []
     out: list[tuple[Any, dict]] = []
     geoms = table.column(geom_col)
-    for i in range(table.num_rows):
-        geom = from_wkb(geoms[i].as_py())
-        if geom is None or geom.is_empty:
+    limit = min(table.num_rows, _MAX_SCAN_ROWS)
+    for i in range(limit):
+        geom = _prepare_geom(_geom_from_cell(geoms[i].as_py()))
+        if geom is None:
             continue
-        if not geom.is_valid:
-            geom = make_valid(geom)
-        if geom is not None and geom.intersects(shape_geom):
-            out.append((geom, _row_props(table, i)))
+        try:
+            if geom.intersects(shape_geom):
+                out.append((geom, _row_props(table, i)))
+        except (GEOSException, ShapelyError):
+            continue
     return out
 
 
@@ -297,23 +367,84 @@ def lookup_watershed(lng: float, lat: float) -> dict:
     return _feature_payload(geom, props)
 
 
-def village_containing_point(lng: float, lat: float) -> tuple[Any, dict]:
-    """Return the village polygon containing (lng, lat), if any."""
+def village_containing_point(
+    lng: float,
+    lat: float,
+    *,
+    quick: bool = False,
+) -> tuple[Any, dict]:
+    """Return the village polygon containing (lng, lat), if any.
+
+    ``quick=True`` is for map-click enrichment: one small bbox, no make_valid,
+    so points with *no* village still return immediately instead of scanning
+    (and potentially OOMing on) surrounding census polygons.
+    """
     _configure_gdal_aws()
     path = _villages_vsis3_path()
     point = Point(lng, lat)
-    for pad in (0.02, 0.08, 0.2, 0.5):
+    pads = (0.015,) if quick else (0.02, 0.06, 0.12)
+    for pad in pads:
         try:
             table, geom_col = _read_bbox(path, lng, lat, pad)
         except Exception as exc:
             logger.warning("Village containing-point read failed pad=%s: %s", pad, exc)
             continue
-        geom, props = _find_containing(table, geom_col, point)
-        if geom is None:
-            geom, props = _find_intersecting(table, geom_col, point.buffer(0.002))
+        geom, props = _find_containing(table, geom_col, point, quick=quick)
+        if geom is None and not quick:
+            geom, props = _find_intersecting(
+                table, geom_col, point.buffer(0.002), quick=False
+            )
         if geom is not None and props is not None:
             return geom, props
     raise ValueError(f"No village contains point ({lng}, {lat})")
+
+
+_VILLAGE_ENRICH_TIMEOUT_S = 8.0
+
+
+def _enrich_point_with_village(hit: dict, lng: float, lat: float) -> dict:
+    """Attach village outline + intersecting micros when present; never raise.
+
+    Points outside any village return the L12 hit unchanged (no error, no 502).
+    """
+    try:
+        village_geom, village_props = village_containing_point(lng, lat, quick=True)
+    except ValueError:
+        # Expected for clicks with no village — keep L12 clip only.
+        return hit
+    except Exception as exc:
+        logger.warning(
+            "Village context for point (%s, %s) failed; returning L12 only: %s",
+            lng,
+            lat,
+            exc,
+        )
+        return hit
+
+    try:
+        village_name = _pick_prop(village_props, _VILLAGE_NAME_KEYS) or None
+        hit["village_geometry"] = _geojson_geom(_simplify_for_preview(village_geom))
+        hit["village_name"] = village_name
+
+        parts = watersheds_intersecting(village_geom)
+        hit["parts"] = parts
+        if len(parts) > 1:
+            unioned = union_geometries(parts, village_name=village_name)
+            hit["all_geometry"] = unioned["geometry"]
+            hit["all_watershed_id"] = unioned["watershed_id"]
+            hit["all_watershed_name"] = unioned["watershed_name"]
+            hit["all_bounds"] = unioned["bounds"]
+    except ValueError:
+        # Village found but micro intersect failed — still keep village outline.
+        return hit
+    except Exception as exc:
+        logger.warning(
+            "Village multi-micro enrich for (%s, %s) failed; returning L12 only: %s",
+            lng,
+            lat,
+            exc,
+        )
+    return hit
 
 
 def lookup_watershed_with_village_context(lng: float, lat: float) -> dict:
@@ -322,7 +453,12 @@ def lookup_watershed_with_village_context(lng: float, lat: float) -> dict:
     Default clip geometry remains the L12 under the click. When the containing
     village intersects multiple micros, ``parts`` lists them and ``all_*`` holds
     the union clip for an optional "all intersecting" choice.
+
+    Village enrichment is time-boxed so a slow/corrupt FGB read cannot hang the
+    single uvicorn worker long enough for Cloudflare to return HTML 502.
     """
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+
     hit = lookup_watershed(lng, lat)
     hit["parts"] = []
     hit["source"] = "point"
@@ -331,28 +467,26 @@ def lookup_watershed_with_village_context(lng: float, lat: float) -> dict:
     hit["village_geometry"] = None
     hit["village_name"] = None
 
-    try:
-        village_geom, village_props = village_containing_point(lng, lat)
-    except ValueError:
-        return hit
-
-    village_name = _pick_prop(village_props, _VILLAGE_NAME_KEYS) or None
-    hit["village_geometry"] = _geojson_geom(_simplify_for_preview(village_geom))
-    hit["village_name"] = village_name
-
-    try:
-        parts = watersheds_intersecting(village_geom)
-    except ValueError:
-        return hit
-
-    hit["parts"] = parts
-    if len(parts) > 1:
-        unioned = union_geometries(parts, village_name=village_name)
-        hit["all_geometry"] = unioned["geometry"]
-        hit["all_watershed_id"] = unioned["watershed_id"]
-        hit["all_watershed_name"] = unioned["watershed_name"]
-        hit["all_bounds"] = unioned["bounds"]
-    return hit
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        fut = pool.submit(_enrich_point_with_village, dict(hit), lng, lat)
+        try:
+            return fut.result(timeout=_VILLAGE_ENRICH_TIMEOUT_S)
+        except FuturesTimeout:
+            logger.warning(
+                "Village enrich timed out after %.0fs for (%s, %s); returning L12 only",
+                _VILLAGE_ENRICH_TIMEOUT_S,
+                lng,
+                lat,
+            )
+            return hit
+        except Exception as exc:
+            logger.warning(
+                "Village enrich failed for (%s, %s); returning L12 only: %s",
+                lng,
+                lat,
+                exc,
+            )
+            return hit
 
 
 def parse_geojson_polygon(geometry: dict) -> Polygon | MultiPolygon:
@@ -426,7 +560,7 @@ def watersheds_intersecting(geom) -> list[dict]:
     hits = _collect_intersecting(table, geom_col, geom)
     if not hits:
         try:
-            table, geom_col = _read_bbox_extent(path, minx, miny, maxx, maxy, pad=0.5)
+            table, geom_col = _read_bbox_extent(path, minx, miny, maxx, maxy, pad=0.15)
             hits = _collect_intersecting(table, geom_col, geom)
         except Exception as exc:
             raise ValueError(f"Could not read watersheds file: {exc}") from exc
@@ -742,7 +876,7 @@ def ensure_state_village_centroids(state: str) -> None:
             rec = _village_by_id.get(vid)
             if rec is None or geoms is None:
                 continue
-            geom = from_wkb(geoms[i].as_py())
+            geom = _geom_from_cell(geoms[i].as_py())
             if geom is None or geom.is_empty:
                 continue
             c = geom.centroid
@@ -877,7 +1011,7 @@ def village_geometry_by_id(village_id: str) -> tuple[Any, dict]:
                 props = _row_props(table, i)
                 if not _village_id_matches(props, vid):
                     continue
-                geom = from_wkb(geoms[i].as_py())
+                geom = _geom_from_cell(geoms[i].as_py())
                 if geom is None or geom.is_empty:
                     continue
                 return geom, props

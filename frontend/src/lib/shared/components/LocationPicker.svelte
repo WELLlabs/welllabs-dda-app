@@ -81,8 +81,11 @@
 			if (layer.line_color) item.color = layer.line_color;
 			if (layer.status === 'error') item.error = true;
 		}
-		const order = ['basin', 'sub_basin', 'level7', 'micro', 'rivers', 'village'];
+		const order = ['basin', 'sub_basin', 'level7', 'micro', 'rivers'];
 		const items = order.map((id) => byId.get(id)).filter(Boolean);
+		if (villageGeometry) {
+			items.push(byId.get('village'));
+		}
 		const multi = Array.isArray(parts) && parts.length > 1;
 		const choosingOne = multi && selectedPartId && selectedPartId !== 'all';
 		if (choosingOne) {
@@ -133,6 +136,7 @@
 			container,
 			style: {
 				version: 8,
+				glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
 				sources: {
 					osm: {
 						type: 'raster',
@@ -271,7 +275,18 @@
 				source: VILLAGE_SOURCE,
 				paint: {
 					'fill-color': VILLAGE_COLOR,
-					'fill-opacity': 0.06
+					'fill-opacity': 0.04
+				}
+			});
+			// White underlay so grey dashes stay visible over blue micros / orange clip.
+			map.addLayer({
+				id: 'village-line-halo',
+				type: 'line',
+				source: VILLAGE_SOURCE,
+				paint: {
+					'line-color': '#ffffff',
+					'line-width': 6,
+					'line-opacity': 0.95
 				}
 			});
 			map.addLayer({
@@ -280,9 +295,27 @@
 				source: VILLAGE_SOURCE,
 				paint: {
 					'line-color': VILLAGE_COLOR,
-					'line-width': 2.75,
-					'line-dasharray': [2, 1.5],
+					'line-width': 3.25,
+					'line-dasharray': [2, 1.25],
 					'line-opacity': 1
+				}
+			});
+			map.addLayer({
+				id: 'village-label',
+				type: 'symbol',
+				source: VILLAGE_SOURCE,
+				layout: {
+					'text-field': ['coalesce', ['get', 'name'], 'Village'],
+					'text-size': 13,
+					'text-font': ['Open Sans Regular', 'Arial Unicode MS Regular'],
+					'text-anchor': 'center',
+					'text-allow-overlap': true,
+					'text-optional': false
+				},
+				paint: {
+					'text-color': VILLAGE_COLOR,
+					'text-halo-color': '#ffffff',
+					'text-halo-width': 2
 				}
 			});
 			villagePopup = new maplibregl.Popup({
@@ -293,7 +326,9 @@
 			});
 			const showVillageTip = (e) => {
 				const hit = map.queryRenderedFeatures(e.point, {
-					layers: ['village-fill', 'village-line']
+					layers: ['village-fill', 'village-line', 'village-line-halo'].filter((id) =>
+						map.getLayer(id)
+					)
 				});
 				const props = hit[0]?.properties || {};
 				const label =
@@ -318,8 +353,52 @@
 			};
 			map.on('mousemove', 'village-fill', showVillageTip);
 			map.on('mousemove', 'village-line', showVillageTip);
+			map.on('mousemove', 'village-line-halo', showVillageTip);
 			map.on('mouseleave', 'village-fill', hideVillageTip);
 			map.on('mouseleave', 'village-line', hideVillageTip);
+			map.on('mouseleave', 'village-line-halo', hideVillageTip);
+		} else {
+			if (!map.getLayer('village-line-halo') && map.getLayer('village-line')) {
+				map.addLayer(
+					{
+						id: 'village-line-halo',
+						type: 'line',
+						source: VILLAGE_SOURCE,
+						paint: {
+							'line-color': '#ffffff',
+							'line-width': 6,
+							'line-opacity': 0.95
+						}
+					},
+					'village-line'
+				);
+			}
+			if (!map.getLayer('village-label') && map.getLayer('village-line')) {
+				map.addLayer({
+					id: 'village-label',
+					type: 'symbol',
+					source: VILLAGE_SOURCE,
+					layout: {
+						'text-field': ['coalesce', ['get', 'name'], 'Village'],
+						'text-size': 13,
+						'text-font': ['Open Sans Regular', 'Arial Unicode MS Regular'],
+						'text-anchor': 'center',
+						'text-allow-overlap': true,
+						'text-optional': false
+					},
+					paint: {
+						'text-color': VILLAGE_COLOR,
+						'text-halo-color': '#ffffff',
+						'text-halo-width': 2
+					}
+				});
+			}
+			if (map.getLayer('village-line')) {
+				map.setPaintProperty('village-line', 'line-width', 3.25);
+			}
+			if (map.getLayer('village-line-halo')) {
+				map.setPaintProperty('village-line-halo', 'line-width', 6);
+			}
 		}
 	}
 
@@ -477,30 +556,43 @@
 			type: 'FeatureCollection',
 			features: villageFeat ? [villageFeat] : []
 		});
+		if (map.getLayer('village-label')) {
+			map.setLayoutProperty(
+				'village-label',
+				'visibility',
+				villageFeat ? 'visible' : 'none'
+			);
+		}
 
 		raiseMicroLayers();
 
-		const bounds = boundsFromGeoms([
-			villageGeometry,
-			clipGeometry,
-			...(parts || []).map((p) => p?.geometry)
-		]);
+		// Prefer the village frame when present — fitting to L12/union makes the
+		// village outline a few pixels and effectively invisible on map-click.
+		const focusGeoms = villageGeometry
+			? [villageGeometry]
+			: [clipGeometry, ...(parts || []).map((p) => p?.geometry)];
+		const bounds = boundsFromGeoms(focusGeoms);
 		if (bounds) {
-			map.fitBounds(bounds, { padding: 48, maxZoom: 12, duration: 500 });
+			map.fitBounds(bounds, {
+				padding: 64,
+				maxZoom: villageGeometry ? 14 : 12,
+				duration: 500
+			});
 		}
 	}
 
-	/** Keep L12 micros above context / village / clip fills so they stay visible. */
+	/** Stack: fills → micro lines → clip → village outline + label on top. */
 	function raiseMicroLayers() {
 		if (!map) return;
-		// Base stack: fills first, then lines. Micros near the top.
 		for (const id of [
 			'village-fill',
 			'clip-fill',
 			'parts-fill',
 			'parts-line',
+			'clip-line',
+			'village-line-halo',
 			'village-line',
-			'clip-line'
+			'village-label'
 		]) {
 			if (map.getLayer(id)) map.moveLayer(id);
 		}

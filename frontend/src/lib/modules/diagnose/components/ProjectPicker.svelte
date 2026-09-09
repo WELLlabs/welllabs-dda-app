@@ -675,6 +675,9 @@
 							{#if watershedPreview.village_name}
 								<p class="m-0 mt-1 text-brand-steel">
 									Village: {watershedPreview.village_name}
+									{#if watershedPreview.village_geometry}
+										<span class="text-brand-navy"> — grey dotted outline on the map</span>
+									{/if}
 								</p>
 							{/if}
 							{#if multiMicroParts.length}

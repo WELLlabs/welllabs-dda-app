@@ -22,6 +22,17 @@ SQUARE_B = {
 }
 
 
+def test_geom_from_cell_skips_truncated_wkb():
+    from shapely.geometry import Point
+
+    from app.shared.watersheds import _geom_from_cell
+
+    assert _geom_from_cell(None) is None
+    assert _geom_from_cell(b"\x01") is None
+    assert _geom_from_cell(b"") is None
+    assert _geom_from_cell(Point(1, 2)).equals(Point(1, 2))
+
+
 def test_parse_geojson_polygon_accepts_polygon():
     geom = parse_geojson_polygon(SQUARE_A)
     assert geom.geom_type == "Polygon"

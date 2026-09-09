@@ -8,12 +8,27 @@ async function parseErrorMessage(res) {
 			'An admin must disable or fix the Worker on beta.welllabs.org (see devops/cloudflare/README.md).'
 		);
 	}
+	if (
+		res.status === 502 ||
+		res.status === 504 ||
+		/bad gateway|504: gateway time-out|cloudflare/i.test(text)
+	) {
+		if (text.trimStart().startsWith('<!') || /cf-error-details|Bad gateway/i.test(text)) {
+			return (
+				`Upstream API error (${res.status}): the server timed out or crashed while ` +
+				'resolving this location. Try another nearby point, or retry in a moment.'
+			);
+		}
+	}
 	let message = text || res.statusText;
 	try {
 		const json = JSON.parse(text);
 		if (json.detail) message = typeof json.detail === 'string' ? json.detail : JSON.stringify(json.detail);
 	} catch {
-		// keep raw text
+		// keep raw text — but never dump full HTML pages into the UI
+		if (text.trimStart().startsWith('<!')) {
+			message = `Request failed (${res.status} ${res.statusText || 'error'})`;
+		}
 	}
 	return message;
 }

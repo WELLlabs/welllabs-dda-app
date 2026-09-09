@@ -481,6 +481,7 @@
 			applyLineOverlayStyle(layer);
 		}
 		toggleCog(layer.id, visible);
+		if (visible) applyLayerStackOrder();
 	}
 
 	function applyCanalLineStyle(lineId, haloId, { color, width, halo = true }) {
@@ -1404,21 +1405,27 @@
 		applyLayerStackOrder();
 	}
 
+	function moveVectorLayerStack(layerId) {
+		const fillId = `vec-${layerId}-fill`;
+		const lineId = `vec-${layerId}-line`;
+		const haloId = `${lineId}-halo`;
+		const labelId = `vec-${layerId}-label`;
+		if (map.getLayer(fillId)) map.moveLayer(fillId);
+		if (map.getLayer(haloId)) map.moveLayer(haloId);
+		if (map.getLayer(lineId)) map.moveLayer(lineId);
+		if (map.getLayer(labelId)) map.moveLayer(labelId);
+	}
+
 	function applyLayerStackOrder() {
 		if (!mapReady) return;
+		// Thematic layers first (under overlays).
 		for (const layer of secondaryLayers) {
+			if (isOverlayLayer(layer)) continue;
 			if (layer.kind === 'cog') {
-			const id = `cog-${layer.id}`;
-			if (map.getLayer(id)) map.moveLayer(id);
+				const id = `cog-${layer.id}`;
+				if (map.getLayer(id)) map.moveLayer(id);
 			} else {
-				const fillId = `vec-${layer.id}-fill`;
-				const lineId = `vec-${layer.id}-line`;
-				const haloId = `${lineId}-halo`;
-				const labelId = `vec-${layer.id}-label`;
-				if (map.getLayer(fillId)) map.moveLayer(fillId);
-				if (map.getLayer(haloId)) map.moveLayer(haloId);
-				if (map.getLayer(lineId)) map.moveLayer(lineId);
-				if (map.getLayer(labelId)) map.moveLayer(labelId);
+				moveVectorLayerStack(layer.id);
 			}
 		}
 		if (map.getLayer('watershed-fill')) map.moveLayer('watershed-fill');
@@ -1428,6 +1435,10 @@
 			const lineId = `ws-h-${id}-line`;
 			if (map.getLayer(fillId)) map.moveLayer(fillId);
 			if (map.getLayer(lineId)) map.moveLayer(lineId);
+		}
+		// Reference overlays (villages / canals / streams) above thematic + hierarchy.
+		for (const layer of overlayLayers) {
+			moveVectorLayerStack(layer.id);
 		}
 		for (const key of primaryLayerOrder) {
 			if (key === 'hypotheses') continue;
@@ -1945,6 +1956,23 @@
 						'line-color': '#ffffff',
 						'line-width': (layer.line_width ?? 2) + 2.5,
 						'line-opacity': 0.92
+					}
+				},
+				beforeId
+			);
+		}
+		// Thin white underlay so grey dashed village edges stay readable on basemap / fills.
+		if (isOutline) {
+			map.addLayer(
+				{
+					id: `${lineId}-halo`,
+					type: 'line',
+					source: sourceId,
+					layout: { visibility: 'none' },
+					paint: {
+						'line-color': '#ffffff',
+						'line-width': (layer.line_width ?? 2.75) + 2,
+						'line-opacity': 0.95
 					}
 				},
 				beforeId
