@@ -712,7 +712,9 @@ def _build_watershed_rasters(
 
 
 def _enabled_vector_keys() -> set[str]:
-    return {k.strip() for k in (settings.vector_layers or "").split(",") if k.strip()}
+    from app.modules.diagnose.services.layer_catalog import resolve_enabled_vector_keys
+
+    return set(resolve_enabled_vector_keys())
 
 
 def _vector_style_payload(cfg) -> dict:

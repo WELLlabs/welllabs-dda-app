@@ -382,3 +382,59 @@ def display_name_for_key(s3_key: str) -> str:
 
 def get_vector_catalog() -> tuple[LayerConfig, ...]:
     return get_catalog().vector_layers()
+
+
+def catalog_vector_s3_keys() -> list[str]:
+    """Unique vector s3_keys from layers.yaml (excludes watershed_hierarchy)."""
+    keys: list[str] = []
+    seen: set[str] = set()
+    for layer in get_catalog().vector_layers():
+        if layer.source != "vector_fgb" or not layer.s3_key:
+            continue
+        if layer.s3_key in seen:
+            continue
+        seen.add(layer.s3_key)
+        keys.append(layer.s3_key)
+    return keys
+
+
+def catalog_cog_s3_keys() -> list[str]:
+    """Unique COG s3_keys from layers.yaml."""
+    keys: list[str] = []
+    seen: set[str] = set()
+    for layer in get_catalog().cog_layers():
+        if not layer.s3_key or layer.s3_key in seen:
+            continue
+        seen.add(layer.s3_key)
+        keys.append(layer.s3_key)
+    return keys
+
+
+def _parse_layer_key_csv(raw: str) -> list[str]:
+    return [part.strip() for part in (raw or "").split(",") if part.strip()]
+
+
+def resolve_enabled_vector_keys(raw: str | None = None) -> list[str]:
+    """VECTOR_LAYERS allowlist, or every layers.yaml vector key when empty/all/*.
+
+    Basin / Sub basin / L7 / hierarchy rivers are NOT in this list — they load via
+    watershed_hierarchy + preview_context (and WATERSHEDS_FGB_KEY for L12 micro).
+    """
+    from app.shared.config import settings
+
+    value = settings.vector_layers if raw is None else raw
+    text = (value or "").strip()
+    if not text or text.lower() in {"*", "all"}:
+        return catalog_vector_s3_keys()
+    return _parse_layer_key_csv(text)
+
+
+def resolve_enabled_cog_keys(raw: str | None = None) -> list[str]:
+    """COG_LAYERS allowlist, or every layers.yaml COG key when empty/all/*."""
+    from app.shared.config import settings
+
+    value = settings.cog_layers if raw is None else raw
+    text = (value or "").strip()
+    if not text or text.lower() in {"*", "all"}:
+        return catalog_cog_s3_keys()
+    return _parse_layer_key_csv(text)

@@ -133,8 +133,9 @@ def _fgb_vsis3_path() -> str:
 
 
 def _villages_s3_key() -> str:
-    for key in (settings.vector_layers or "").split(","):
-        key = key.strip()
+    from app.modules.diagnose.services.layer_catalog import resolve_enabled_vector_keys
+
+    for key in resolve_enabled_vector_keys():
         if key and "villages" in key.lower():
             return key.lstrip("/")
     return "vector/villages.fgb"

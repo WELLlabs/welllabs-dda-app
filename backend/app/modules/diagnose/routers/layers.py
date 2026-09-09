@@ -168,11 +168,15 @@ def _layer_id(key: str) -> str:
 
 
 def _cog_keys() -> list[str]:
-    return [key.strip() for key in settings.cog_layers.split(",") if key.strip()]
+    from app.modules.diagnose.services.layer_catalog import resolve_enabled_cog_keys
+
+    return resolve_enabled_cog_keys()
 
 
 def _vector_keys() -> list[str]:
-    return [key.strip() for key in settings.vector_layers.split(",") if key.strip()]
+    from app.modules.diagnose.services.layer_catalog import resolve_enabled_vector_keys
+
+    return resolve_enabled_vector_keys()
 
 
 def _cog_id_for_key(key: str) -> str:
@@ -1184,7 +1188,7 @@ async def list_vector_layers(
             proxy_url = f"{settings.api_public_prefix}/diagnose/layers/watershed/hierarchy{q}"
             layers.append(entry.model_copy(update={"url": proxy_url}))
             continue
-        if not enabled or cfg.s3_key not in enabled:
+        if cfg.s3_key not in enabled:
             continue
         entry = _build_vector_layer(cfg)
         q = f"?project_id={quote(project_id, safe='')}" if project_id else ""

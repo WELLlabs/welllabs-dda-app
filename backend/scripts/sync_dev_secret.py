@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Sync selected fields from local backend/.env into the dev app-config secret.
+"""Sync selected fields from local backend/.env into the **dev** app-config secret.
 
 Updates beta FRONTEND_ORIGIN, Google OAuth, and diagnose layer enablement
 (COG_LAYERS / VECTOR_LAYERS / WATERSHEDS_FGB_KEY) so beta matches local layer config.
+
+Does NOT touch the prod secret.
 """
 
 from __future__ import annotations
@@ -31,6 +33,14 @@ SYNC_KEYS = (
     "WATERSHEDS_FGB_KEY",
 )
 
+# Hierarchy stack — always loaded via preview_context, never via VECTOR_LAYERS.
+HIERARCHY_KEYS = (
+    "vector/Basin.fgb",
+    "vector/Sub Basins of india.fgb",
+    "vector/india_basins_level_7.fgb",
+    "vector/india_rivers_level_12.fgb",
+)
+
 
 def _parse_env(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
@@ -48,7 +58,10 @@ def _parse_env(path: Path) -> dict[str, str]:
 
 
 def _layer_filenames(csv_value: str) -> list[str]:
-    return [part.strip().rsplit("/", 1)[-1] for part in csv_value.split(",") if part.strip()]
+    text = str(csv_value or "").strip()
+    if not text or text.lower() in {"*", "all"}:
+        return ["(all layers.yaml keys)"]
+    return [part.strip().rsplit("/", 1)[-1] for part in text.split(",") if part.strip()]
 
 
 def main() -> int:
@@ -73,11 +86,15 @@ def main() -> int:
 
     oauth_id = config.get("GOOGLE_OAUTH_CLIENT_ID", "")
     masked = oauth_id[:20] + "..." if len(oauth_id) > 20 else oauth_id
-    print(f"Updated dev secret FRONTEND_ORIGIN={BETA_ORIGIN!r}")
+    print(f"Updated DEV secret only (prod untouched) FRONTEND_ORIGIN={BETA_ORIGIN!r}")
     print(f"GOOGLE_OAUTH_CLIENT_ID={masked}")
     print(f"Synced from .env: {', '.join(updated) or '(none)'}")
-    print(f"COG layers: {_layer_filenames(str(config.get('COG_LAYERS') or ''))}")
-    print(f"VECTOR layers: {_layer_filenames(str(config.get('VECTOR_LAYERS') or ''))}")
+    print(f"COG_LAYERS: {_layer_filenames(str(config.get('COG_LAYERS') or ''))}")
+    print(f"VECTOR_LAYERS: {_layer_filenames(str(config.get('VECTOR_LAYERS') or ''))}")
+    print("Hierarchy (not in VECTOR_LAYERS):")
+    for key in HIERARCHY_KEYS:
+        print(f"  - {key}")
+    print(f"WATERSHEDS_FGB_KEY (L12 micro): {config.get('WATERSHEDS_FGB_KEY')}")
     print(f"Keys preserved: {len(config)} total")
     print("Note: API must restart / redeploy to load the new secret into the container.")
     return 0

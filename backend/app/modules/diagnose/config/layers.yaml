@@ -1,5 +1,8 @@
 # Per-layer render + analysis catalog.
-# COG_LAYERS / VECTOR_LAYERS in .env enable which s3_keys are active; this file owns styling.
+# VECTOR_LAYERS / COG_LAYERS in .env are optional allowlists of s3_keys.
+# Empty or "all" → enable every matching key in this file.
+# Watershed hierarchy (Basin / Sub basin / L7 / rivers stack) is always on via
+# source: watershed_hierarchy + preview_context — those keys are not listed in VECTOR_LAYERS.
 
 colors:
   deep_blue: "#00306d"

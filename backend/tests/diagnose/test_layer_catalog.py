@@ -7,9 +7,11 @@ from pathlib import Path
 import pytest
 
 from app.modules.diagnose.services.layer_catalog import (
+    catalog_vector_s3_keys,
     get_catalog,
     get_layer_for_key,
     load_catalog,
+    resolve_enabled_vector_keys,
 )
 
 
@@ -216,3 +218,14 @@ layers:
     )
     with pytest.raises(ValueError, match="Unknown color"):
         load_catalog(path)
+
+
+def test_resolve_enabled_vector_keys_defaults_to_catalog():
+    keys = catalog_vector_s3_keys()
+    assert "vector/Canals.gpkg" in keys
+    assert "vector/village_resilience.fgb" in keys
+    # Hierarchy basin/sub-basin keys are not catalog vector_fgb entries.
+    assert "vector/Basin.fgb" not in keys
+    assert resolve_enabled_vector_keys("all") == keys
+    assert resolve_enabled_vector_keys("") == keys
+    assert resolve_enabled_vector_keys("vector/Canals.gpkg") == ["vector/Canals.gpkg"]
