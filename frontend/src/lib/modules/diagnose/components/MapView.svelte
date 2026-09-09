@@ -76,6 +76,8 @@
 	let bootPercent = $state(0);
 	let bootStep = $state('Starting…');
 	let bootError = $state('');
+	/** Whether background loading (hierarchy, vectors, analysis) is still in progress. */
+	let bgLoading = $state(false);
 
 	function readBootMode() {
 		try {
@@ -844,6 +846,7 @@
 		bootPercent = 0;
 		bootStep = bootMode === 'creating' ? 'Saving project…' : 'Starting…';
 		bootError = '';
+		bgLoading = false;
 		map = new maplibregl.Map({
 			container,
 			transformRequest: (url, resourceType) => {
@@ -895,6 +898,7 @@
 			mapReady = true;
 			projectBooting = true;
 			bootError = '';
+			bgLoading = false;
 			const loadGen = ++postOpenLoadGen;
 			map.setPitch(0);
 			map.setBearing(0);
@@ -903,99 +907,38 @@
 			applyBasemapVisibility(BASE_LAYERS.esri.id, baseLayer === 'esri');
 
 			try {
-				setBoot(4, 'Initializing map…');
+				// ── Fast critical path (< 500 ms) ──────────────────────────────
+				// Register COG tile sources + vector catalog. Tile layers stream
+				// lazily from Titiler; we don't wait for any clip work here.
 				await ensureFieldNotePinIcon();
 				if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
 
-				setBoot(10, 'Drawing project area…');
 				loadWatershedBoundary();
 				initDrawPreview();
 				updateDrawSizes();
 				ensureDrawPreviewOnTop();
 
-				setBoot(18, 'Loading raster layers…');
 				await loadCogLayers();
 				if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
 
-				setBoot(30, 'Loading vector catalog…');
 				await loadVectorLayers();
 				if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
 
-				setBoot(42, 'Loading watershed hierarchy…');
-				let hierarchyOk = false;
-				for (let attempt = 0; attempt < 3 && !hierarchyOk; attempt++) {
-					if (attempt > 0) clearWatershedHierarchyLayers();
-					hierarchyOk = await ensureWatershedHierarchyOnMap();
-					if (!hierarchyOk && attempt < 2) {
-						await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
-					}
-				}
-				if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
-				if (!hierarchyOk) {
-					console.warn('Watershed hierarchy not on map after retries — showing AOI');
-					setWatershedOutlineVisible(true);
-					setHierarchyVisible(false);
-				}
-
-				setBoot(55, 'Clipping map layers…');
-				await preloadRenderableVectors((done, total, name) => {
-					const pct = 55 + Math.round((22 * done) / Math.max(total, 1));
-					setBoot(pct, total ? `Clipping ${name} (${done}/${total})…` : 'Clipping map layers…');
-				});
-				if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
-
-				setBoot(80, 'Running layer analysis…');
-				await preloadAllSecondaryData();
-				if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
-
-				setBoot(90, 'Loading observation zones…');
-				try {
-					await reloadObservationZones();
-				} catch (err) {
-					console.error('Failed to load observation zones', err);
-				}
-				if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
-
-				setBoot(94, 'Loading field notes…');
-				try {
-					await reloadFieldNotes();
-				} catch (err) {
-					console.error('Failed to load field notes', err);
-				}
-				if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
-
-				setBoot(97, 'Loading hypotheses…');
-				try {
-					await reloadHypotheses();
-				} catch (err) {
-					console.error('Failed to load hypotheses', err);
-				}
-				if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
-
-				setBoot(99, 'Opening map…');
+				// Pick the default layer and make it visible now.
+				// COG layers (LULC, DEM…) will start streaming tiles immediately.
+				// Watershed outline shows while hierarchy loads in the background.
 				if (thematicLayers.length > 0) {
 					const prefer =
 						thematicLayers.find((l) => l.id === WATERSHED_LAYER_ID)?.id ??
 						thematicLayers[0].id;
 					selectedLayer = { kind: 'secondary', id: prefer };
-					await showOnlySecondaryLayer(prefer);
+					// For vector thematic layers, show AOI outline while clip loads in bg.
 					if (prefer === WATERSHED_LAYER_ID) {
-						if (hierarchySourceIds.length === 0) {
-							setWatershedOutlineVisible(true);
-							setHierarchyVisible(false);
-						} else {
-							setHierarchyVisible(true);
-							setWatershedOutlineVisible(false);
-						}
+						setWatershedOutlineVisible(true);
+						setHierarchyVisible(false);
+						cogVisibility = { ...cogVisibility, [WATERSHED_LAYER_ID]: false };
 					} else {
-						const meta = secondaryLayers.find((l) => l.id === prefer);
-						if (meta?.kind === 'vector' && !vectorSourceReady(meta)) {
-							await ensureVectorLayerOnMap(meta, { force: true });
-							if (!vectorSourceReady(meta)) {
-								throw new Error(`${meta.name} did not load onto the map`);
-							}
-							await showOnlySecondaryLayer(prefer);
-						}
+						await showOnlySecondaryLayer(prefer);
 					}
 					void ensureLayerAnalysis(prefer);
 				} else if (secondaryLayers.length > 0) {
@@ -1006,21 +949,63 @@
 					activePrimaryTab = 'observation-zones';
 				}
 
-				// Hold overlay until the next paint so MapLibre commits sources/visibility.
-				await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-				if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
-
 				ensureDrawPreviewOnTop();
-				setBoot(100, 'Ready');
-				status = 'Ready';
-				projectBooting = false;
 				requestAnimationFrame(() => map?.resize());
+
+				// ── Dismiss overlay now — map is usable ─────────────────────────
+				projectBooting = false;
+				status = 'Ready';
+
+				// ── Heavy background work — non-blocking ───────────────────────
+				bgLoading = true;
+				void (async () => {
+					try {
+						if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
+
+						// 1. Watershed hierarchy (large FGB clips)
+						const hierarchyOk = await ensureWatershedHierarchyOnMap();
+						if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
+						if (selectedLayer?.id === WATERSHED_LAYER_ID) {
+							if (hierarchyOk) {
+								setHierarchyVisible(true);
+								setWatershedOutlineVisible(false);
+								cogVisibility = { ...cogVisibility, [WATERSHED_LAYER_ID]: true };
+							} else {
+								setWatershedOutlineVisible(true);
+								setHierarchyVisible(false);
+							}
+						}
+
+						// 2. Preload renderable vectors in background (one attempt each)
+						if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
+						await preloadRenderableVectors();
+						if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
+
+						// 3. Batch layer analysis
+						await preloadAllSecondaryData();
+						if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
+
+						// 4. Zones, notes, hypotheses
+						await Promise.allSettled([
+							reloadObservationZones(),
+							reloadFieldNotes(),
+							reloadHypotheses()
+						]);
+					} catch (err) {
+						if (err?.name !== 'AbortError' && !mapDataAbort.signal.aborted) {
+							console.warn('Background load error (non-fatal):', err);
+						}
+					} finally {
+						if (loadGen === postOpenLoadGen) bgLoading = false;
+					}
+				})();
 			} catch (err) {
 				if (err?.name === 'AbortError' || mapDataAbort.signal.aborted) return;
 				console.error('Project bootstrap failed', err);
 				bootError = err instanceof Error ? err.message : String(err);
 				status = `Load failed: ${bootError}`;
 				projectBooting = false;
+				bgLoading = false;
 			}
 		});
 
@@ -1059,6 +1044,7 @@
 	onDestroy(() => {
 		postOpenLoadGen += 1;
 		mapDataAbort.abort();
+		bgLoading = false;
 		fieldNotePinReady = false;
 		villageHoverPopup?.remove();
 		map?.remove();
@@ -2329,7 +2315,10 @@
 		return !!map.getSource(`vec-${layer.id}`);
 	}
 
-	async function preloadRenderableVectors(onProgress) {
+	async function preloadRenderableVectors() {
+		// Background preload — one attempt per layer, silently skip failures.
+		// If a layer isn't on the map yet when the user selects it, ensureVectorLayerOnMap
+		// loads it on demand, so no retries needed here.
 		const layers = secondaryLayers.filter(
 			(l) =>
 				l.kind === 'vector' &&
@@ -2338,43 +2327,13 @@
 				l.url &&
 				l.status !== 'error'
 		);
-		const total = layers.length;
-		const failed = [];
-		for (let i = 0; i < layers.length; i++) {
-			if (mapDataAbort.signal.aborted) return;
-			const layer = layers[i];
-			onProgress?.(i, total, layer.name);
-			let ok = false;
-			for (let attempt = 0; attempt < 3 && !ok; attempt++) {
-				try {
-					ok = await ensureVectorLayerOnMap(layer, { force: attempt > 0 });
-					if (!ok) ok = vectorSourceReady(layer);
-				} catch (err) {
-					console.error(`Failed to preload ${layer.name} (attempt ${attempt + 1})`, err);
-					ok = false;
-				}
-				if (!ok && attempt < 2) {
-					await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
-				}
-			}
-			if (!ok) failed.push(layer.name);
-			onProgress?.(i + 1, total, layer.name);
-		}
-		if (total === 0) onProgress?.(0, 0, '');
-		// Second pass: verify every thematic source is on the map (blank-map bug).
-		const missing = layers.filter((l) => !vectorSourceReady(l));
-		for (const layer of missing) {
+		for (const layer of layers) {
 			if (mapDataAbort.signal.aborted) return;
 			try {
-				await ensureVectorLayerOnMap(layer, { force: true });
+				await ensureVectorLayerOnMap(layer);
 			} catch (err) {
-				console.error(`Verify preload failed for ${layer.name}`, err);
+				console.warn(`Background preload skipped for ${layer.name}:`, err);
 			}
-		}
-		const stillMissing = layers.filter((l) => !vectorSourceReady(l));
-		if (stillMissing.length || failed.length) {
-			const names = [...new Set([...failed, ...stillMissing.map((l) => l.name)])].join(', ');
-			throw new Error(`Map layers failed to preload: ${names}`);
 		}
 	}
 
@@ -3033,36 +2992,22 @@
 </script>
 
 <div class="relative flex h-full min-h-0 w-full">
-	{#if projectBooting}
+	{#if bootError}
 		<div
-			class="absolute inset-0 z-[80] flex flex-col items-center justify-center gap-5 bg-white/95 px-6 backdrop-blur-sm"
-			role="status"
-			aria-live="polite"
-			aria-busy="true"
+			class="absolute inset-x-0 top-0 z-[80] flex items-center gap-2 bg-red-600 px-4 py-2 text-sm text-white"
+			role="alert"
 		>
-			<div
-				class="h-11 w-11 animate-spin rounded-full border-2 border-brand-navy/20 border-t-brand-blue"
-				aria-hidden="true"
-			></div>
-			<div class="flex w-full max-w-md flex-col gap-2 text-center">
-				<p class="m-0 font-headline text-xl font-semibold text-brand-navy">
-					{bootMode === 'creating' ? 'Creating project' : 'Loading project'}
-				</p>
-				<p class="m-0 font-body text-sm text-brand-steel">{bootStep}</p>
-				<div
-					class="mt-2 h-2 w-full overflow-hidden rounded-full bg-brand-navy/10"
-					aria-hidden="true"
-				>
-					<div
-						class="h-full rounded-full bg-brand-blue transition-[width] duration-300 ease-out"
-						style:width="{bootPercent}%"
-					></div>
-				</div>
-				<p class="m-0 font-body text-xs tabular-nums text-brand-navy/55">{bootPercent}%</p>
-				{#if bootError}
-					<p class="m-0 mt-2 font-body text-sm text-red-600">{bootError}</p>
-				{/if}
-			</div>
+			<span class="flex-1 truncate">{bootError}</span>
+			<button
+				type="button"
+				class="shrink-0 underline opacity-80 hover:opacity-100"
+				onclick={() => (bootError = '')}
+			>Dismiss</button>
+		</div>
+	{/if}
+	{#if bgLoading}
+		<div class="absolute inset-x-0 top-0 z-[70] h-0.5 overflow-hidden" aria-hidden="true">
+			<div class="h-full w-full origin-left animate-[indeterminate_1.6s_ease-in-out_infinite] bg-brand-blue"></div>
 		</div>
 	{/if}
 	<aside
@@ -3396,8 +3341,6 @@
 
 	<aside
 		class="flex shrink-0 flex-col overflow-hidden border-l border-brand-navy/10 bg-white font-body"
-		class:pointer-events-none={projectBooting}
-		class:opacity-40={projectBooting}
 		style:width="{rightSidebarWidth}px"
 	>
 		<div class="min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-3">
@@ -4238,6 +4181,25 @@
 </div>
 
 <style>
+	@keyframes indeterminate {
+		0% {
+			transform: scaleX(0);
+			transform-origin: 0 0;
+		}
+		40% {
+			transform: scaleX(0.65);
+			transform-origin: 0 0;
+		}
+		60% {
+			transform: scaleX(0.65);
+			transform-origin: 100% 0;
+		}
+		100% {
+			transform: scaleX(0);
+			transform-origin: 100% 0;
+		}
+	}
+
 	.sidebar-section-title {
 		margin: 0 0 1.25rem;
 	}
