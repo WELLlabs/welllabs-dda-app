@@ -20,7 +20,7 @@ PREVIEW_CONTEXT_LAYERS: tuple[dict[str, Any], ...] = (
     {
         "id": "rivers",
         "name": "Rivers",
-        "s3_key": "vector/india_rivers_level_12.gpkg",
+        "s3_key": "vector/india_rivers_level_12.fgb",
         "geometry_kind": "line",
         "render_type": "line",
         "clip_mode": "clip",
@@ -33,7 +33,7 @@ PREVIEW_CONTEXT_LAYERS: tuple[dict[str, Any], ...] = (
     {
         "id": "basin",
         "name": "Basin",
-        "s3_key": "vector/Basin.gpkg",
+        "s3_key": "vector/Basin.fgb",
         "geometry_kind": "polygon",
         "render_type": "outline",
         "clip_mode": "intersect",
@@ -46,7 +46,7 @@ PREVIEW_CONTEXT_LAYERS: tuple[dict[str, Any], ...] = (
     {
         "id": "sub_basin",
         "name": "Sub basin",
-        "s3_key": "vector/Sub Basins of india.gpkg",
+        "s3_key": "vector/Sub Basins of india.fgb",
         "geometry_kind": "polygon",
         "render_type": "outline",
         "clip_mode": "intersect",
@@ -59,7 +59,7 @@ PREVIEW_CONTEXT_LAYERS: tuple[dict[str, Any], ...] = (
     {
         "id": "level7",
         "name": "Level-7 watershed",
-        "s3_key": "vector/india_basins_level_7.gpkg",
+        "s3_key": "vector/india_basins_level_7.fgb",
         "geometry_kind": "polygon",
         "render_type": "outline",
         "clip_mode": "intersect",

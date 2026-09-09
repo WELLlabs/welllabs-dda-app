@@ -1212,7 +1212,7 @@ async def watershed_hierarchy_layers(
             )
     except asyncio.TimeoutError as exc:
         raise HTTPException(
-            504, "Watershed hierarchy timed out — retry; the server may still be warming GPKG caches."
+            504, "Watershed hierarchy timed out — retry; the server may still be warming FGB caches."
         ) from exc
     except Exception as exc:
         raise HTTPException(502, f"Watershed hierarchy failed: {exc}") from exc

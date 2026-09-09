@@ -164,7 +164,7 @@ def test_notebook_gap_layers_resolve_by_s3_key():
     assert drainage is not None
     assert drainage.category == "Reference"
     assert drainage.overlay is True
-    assert drainage.s3_key == "vector/india_rivers_level_12.gpkg"
+    assert drainage.s3_key == "vector/india_rivers_level_12.fgb"
     assert drainage.render_type == "line"
     assert drainage.line_color == "#00306d"
 

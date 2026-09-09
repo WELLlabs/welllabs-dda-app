@@ -238,13 +238,19 @@ _LOCAL_VECTOR_CACHE_MAX_BYTES = 120 * 1024 * 1024
 _HIERARCHY_LOCAL_CACHE_MAX_BYTES = 450 * 1024 * 1024
 _HIERARCHY_LOCAL_CACHE_KEYS = frozenset(
     {
+        "vector/india_rivers_level_12.fgb",
+        "vector/Basin.fgb",
+        "vector/Sub Basins of india.fgb",
+        "vector/india_basins_level_7.fgb",
+        # Legacy GPKG keys (kept until all hosts/envs use FGB).
         "vector/india_rivers_level_12.gpkg",
         "vector/Basin.gpkg",
         "vector/Sub Basins of india.gpkg",
         "vector/india_basins_level_7.gpkg",
     }
 )
-_LOCAL_VECTOR_SUFFIXES = {".gpkg"}
+# FGB hierarchy files need local cache too — vsis3 cold reads still hurt first project open.
+_LOCAL_VECTOR_SUFFIXES = {".gpkg", ".fgb"}
 _vector_cache_locks: dict[str, Any] = {}
 _vector_cache_guard = None
 
@@ -284,7 +290,7 @@ def _cache_lock_for(s3_key: str):
 
 
 def _ensure_local_vector_cache(s3_key: str) -> Path | None:
-    """Download mid-size GPKG once for fast local bbox reads; None → use /vsis3/."""
+    """Download mid-size GPKG/FGB once for fast local bbox reads; None → use /vsis3/."""
     suffix = Path(s3_key).suffix.lower()
     if suffix not in _LOCAL_VECTOR_SUFFIXES:
         return None
@@ -329,7 +335,7 @@ def _ensure_local_vector_cache(s3_key: str) -> Path | None:
 
 
 def warm_hierarchy_vector_caches() -> None:
-    """Best-effort download of basin/rivers GPKGs so first preview isn't the cold miss."""
+    """Best-effort download of basin/rivers FGBs so first preview isn't the cold miss."""
     for key in _HIERARCHY_LOCAL_CACHE_KEYS:
         try:
             _ensure_local_vector_cache(key)
@@ -340,8 +346,9 @@ def warm_hierarchy_vector_caches() -> None:
 def _read_vector_gdf_bbox(s3_key: str, bbox: tuple[float, float, float, float]):
     """Read only features intersecting bbox.
 
-    Mid-size GPKGs are cached locally (vsis3 range reads on GPKG are very slow).
-    Large FGB/GPKG stay on /vsis3/ HTTP range requests and are never fully downloaded.
+    Mid-size GPKG/FGB hierarchy files are cached locally (vsis3 range reads on
+    GPKG are very slow; FGB is better but still benefits from a warm local copy).
+    Large national FGBs stay on /vsis3/ HTTP range requests when over the size cap.
     """
     import geopandas as gpd
 

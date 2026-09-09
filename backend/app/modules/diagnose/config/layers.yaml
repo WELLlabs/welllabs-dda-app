@@ -144,7 +144,7 @@ layers:
   - id: drainage
     category: Reference
     overlay: true
-    s3_key: vector/india_rivers_level_12.gpkg
+    s3_key: vector/india_rivers_level_12.fgb
     name: Stream Network
     source: vector_fgb
     analysis_type: vector_length

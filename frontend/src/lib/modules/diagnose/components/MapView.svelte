@@ -141,12 +141,45 @@
 		showSelectedHypothesisMenu = false;
 	}
 
+	const WISER_RANK_LAYER_IDS = new Set([
+		'irrigation_access_wiser',
+		'kharif_resilience_wiser',
+		'rabi_resilience_wiser'
+	]);
+
 	async function showOnlySecondaryLayer(layerId) {
 		const showHierarchy = layerId === WATERSHED_LAYER_ID;
 		const hasHierarchy = hierarchySourceIds.length > 0;
 		// Keep project AOI visible until hierarchy GeoJSON is actually on the map.
 		setHierarchyVisible(showHierarchy && hasHierarchy);
 		setWatershedOutlineVisible(showHierarchy ? !hasHierarchy : true);
+
+		// Hard-hide every thematic vector/COG layer first so WISER siblings never stack.
+		if (map) {
+			for (const layer of map.getStyle()?.layers || []) {
+				const id = layer.id;
+				if (
+					id.startsWith('vec-') &&
+					(id.endsWith('-fill') ||
+						id.endsWith('-line') ||
+						id.endsWith('-line-halo') ||
+						id.endsWith('-label'))
+				) {
+					const overlay = overlayLayers.some((o) => id.startsWith(`vec-${o.id}-`));
+					if (!overlay) setLayerVisibility(id, false);
+				} else if (id.startsWith('cog-')) {
+					setLayerVisibility(id, false);
+				}
+			}
+			// Explicitly clear WISER rank siblings (shared FGB → easy to leave stacked).
+			for (const wid of WISER_RANK_LAYER_IDS) {
+				if (wid === layerId) continue;
+				setLayerVisibility(`vec-${wid}-fill`, false);
+				setLayerVisibility(`vec-${wid}-line`, false);
+				cogVisibility = { ...cogVisibility, [wid]: false };
+			}
+		}
+
 		for (const l of secondaryLayers) {
 			// Overlays (village boundaries, canals, streams) keep their own eye-toggle state
 			if (isOverlayLayer(l)) continue;
@@ -470,15 +503,26 @@
 	function rebuildSecondaryList(cogs, vectors) {
 		const hierarchy = [];
 		const otherVectors = [];
-		for (const l of vectors) {
+		const seen = new Set();
+		const wiserRankSeen = new Set();
+		for (const l of vectors || []) {
+			if (!l?.id || seen.has(l.id)) continue;
+			seen.add(l.id);
+			// Guard against catalog/env double-registration of the same WISER rank view.
+			if (WISER_RANK_LAYER_IDS.has(l.id)) {
+				if (wiserRankSeen.has(l.id)) continue;
+				wiserRankSeen.add(l.id);
+			}
 			if (l.id === WATERSHED_LAYER_ID) hierarchy.push({ ...l, kind: 'vector' });
 			else otherVectors.push({ ...l, kind: 'vector' });
 		}
-		return [
-			...hierarchy,
-			...cogs.map((l) => ({ ...l, kind: 'cog' })),
-			...otherVectors
-		];
+		const cogOut = [];
+		for (const l of cogs || []) {
+			if (!l?.id || seen.has(l.id)) continue;
+			seen.add(l.id);
+			cogOut.push({ ...l, kind: 'cog' });
+		}
+		return [...hierarchy, ...cogOut, ...otherVectors];
 	}
 
 	/** Matplotlib-style CSS gradients for continuous rasters (matches notebook colorbars). */
@@ -878,8 +922,20 @@
 				if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
 
 				setBoot(42, 'Loading watershed hierarchy…');
-				await ensureWatershedHierarchyOnMap();
+				let hierarchyOk = false;
+				for (let attempt = 0; attempt < 3 && !hierarchyOk; attempt++) {
+					if (attempt > 0) clearWatershedHierarchyLayers();
+					hierarchyOk = await ensureWatershedHierarchyOnMap();
+					if (!hierarchyOk && attempt < 2) {
+						await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+					}
+				}
 				if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
+				if (!hierarchyOk) {
+					console.warn('Watershed hierarchy not on map after retries — showing AOI');
+					setWatershedOutlineVisible(true);
+					setHierarchyVisible(false);
+				}
 
 				setBoot(55, 'Clipping map layers…');
 				await preloadRenderableVectors((done, total, name) => {
@@ -931,6 +987,15 @@
 							setHierarchyVisible(true);
 							setWatershedOutlineVisible(false);
 						}
+					} else {
+						const meta = secondaryLayers.find((l) => l.id === prefer);
+						if (meta?.kind === 'vector' && !vectorSourceReady(meta)) {
+							await ensureVectorLayerOnMap(meta, { force: true });
+							if (!vectorSourceReady(meta)) {
+								throw new Error(`${meta.name} did not load onto the map`);
+							}
+							await showOnlySecondaryLayer(prefer);
+						}
 					}
 					void ensureLayerAnalysis(prefer);
 				} else if (secondaryLayers.length > 0) {
@@ -940,6 +1005,10 @@
 					selectedLayer = { kind: 'primary', id: 'observation-zones' };
 					activePrimaryTab = 'observation-zones';
 				}
+
+				// Hold overlay until the next paint so MapLibre commits sources/visibility.
+				await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+				if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
 
 				ensureDrawPreviewOnTop();
 				setBoot(100, 'Ready');
@@ -1438,7 +1507,7 @@
 	}
 
 	async function ensureWatershedHierarchyOnMap() {
-		if (!map || !project?.id) return;
+		if (!map || !project?.id) return false;
 		const meta = secondaryLayers.find((l) => l.id === WATERSHED_LAYER_ID);
 		if (meta?.legend?.length) {
 			layerActiveLegend = { ...layerActiveLegend, [WATERSHED_LAYER_ID]: meta.legend };
@@ -1448,11 +1517,11 @@
 		if (loaded === expected && loaded.length > 0) {
 			setHierarchyVisible(true);
 			setWatershedOutlineVisible(false);
-			return;
+			return true;
 		}
 		if (hierarchyInFlight) {
 			await hierarchyInFlight;
-			return;
+			return hierarchySourceIds.length > 0;
 		}
 		hierarchyInFlight = (async () => {
 			clearWatershedHierarchyLayers();
@@ -1538,6 +1607,7 @@
 		} finally {
 			hierarchyInFlight = null;
 		}
+		return hierarchySourceIds.length > 0;
 	}
 
 	function setLayerVisibility(layerId, visible) {
@@ -2067,21 +2137,26 @@
 		}
 	}
 
-	async function ensureVectorLayerOnMap(layer) {
-		if (!map || !layer?.id) return;
+	async function ensureVectorLayerOnMap(layer, { force = false } = {}) {
+		if (!map || !layer?.id) return false;
 		if (layer.id === WATERSHED_LAYER_ID) {
 			await ensureWatershedHierarchyOnMap();
-			return;
+			return hierarchySourceIds.length > 0;
 		}
 		const sourceId = `vec-${layer.id}`;
-		if (map.getSource(sourceId)) return;
-		if (!layer.url || layer.map_render === false) return;
+		if (map.getSource(sourceId) && !force) {
+			const cached = map.getSource(sourceId)?._data;
+			const n = cached?.features?.length ?? vectorGeoJsonByKey[layer.url || layer.id]?.features?.length;
+			if (n == null || n > 0) return true;
+			force = true;
+		}
+		if (!layer.url || layer.map_render === false) return false;
 
 		status = `Loading ${layer.name}…`;
 		let data;
-		// Cache by layer-specific clip URL (shared s3_keys may have different derived columns).
+		// Cache clipped GeoJSON by layer URL (layer_id) so WISER siblings stay independent.
 		const cacheKey = layer.url || layer.id;
-		if (cacheKey && vectorGeoJsonByKey[cacheKey]) {
+		if (!force && cacheKey && vectorGeoJsonByKey[cacheKey]) {
 			data = vectorGeoJsonByKey[cacheKey];
 		} else {
 			try {
@@ -2089,7 +2164,7 @@
 			} catch (fetchErr) {
 				console.error(`Failed to load ${layer.name}:`, fetchErr);
 				status = `${layer.name} failed: ${fetchErr instanceof Error ? fetchErr.message : String(fetchErr)}`;
-				return;
+				return false;
 			}
 			if (cacheKey) {
 				vectorGeoJsonByKey = { ...vectorGeoJsonByKey, [cacheKey]: data };
@@ -2113,6 +2188,21 @@
 		const fillColor = isOutline ? '#1f2937' : vectorFillColor(layer);
 		const labelColumn = layer.label_column || 'Village Na';
 		const fillOpacity = layer.fill_opacity ?? 0.65;
+
+		if (map.getSource(sourceId)) {
+			map.getSource(sourceId).setData(data);
+			// Re-bind paint so WISER siblings never keep another layer's match expression.
+			if (map.getLayer(fillId) && !isLine) {
+				map.setPaintProperty(fillId, 'fill-color', fillColor);
+				map.setPaintProperty(fillId, 'fill-opacity', isOutline ? 0.04 : fillOpacity);
+			}
+			if (map.getLayer(lineId) && isLine && layer.style_column) {
+				map.setPaintProperty(lineId, 'line-color', vectorLineColor(layer));
+			}
+			applyLayerStackOrder();
+			ensureDrawPreviewOnTop();
+			return true;
+		}
 
 		map.addSource(sourceId, { type: 'geojson', data });
 		if (!isLine) {
@@ -2227,6 +2317,16 @@
 		applyLayerStackOrder();
 		ensureDrawPreviewOnTop();
 		status = 'Ready';
+		return !!map.getSource(sourceId);
+	}
+
+	function vectorSourceReady(layer) {
+		if (!map || !layer?.id) return false;
+		if (layer.id === WATERSHED_LAYER_ID) {
+			return hierarchySourceIds.length > 0;
+		}
+		// Source must exist on the map; empty FeatureCollections are OK for sparse AOIs.
+		return !!map.getSource(`vec-${layer.id}`);
 	}
 
 	async function preloadRenderableVectors(onProgress) {
@@ -2239,18 +2339,43 @@
 				l.status !== 'error'
 		);
 		const total = layers.length;
+		const failed = [];
 		for (let i = 0; i < layers.length; i++) {
 			if (mapDataAbort.signal.aborted) return;
 			const layer = layers[i];
 			onProgress?.(i, total, layer.name);
-			try {
-				await ensureVectorLayerOnMap(layer);
-			} catch (err) {
-				console.error(`Failed to preload ${layer.name}`, err);
+			let ok = false;
+			for (let attempt = 0; attempt < 3 && !ok; attempt++) {
+				try {
+					ok = await ensureVectorLayerOnMap(layer, { force: attempt > 0 });
+					if (!ok) ok = vectorSourceReady(layer);
+				} catch (err) {
+					console.error(`Failed to preload ${layer.name} (attempt ${attempt + 1})`, err);
+					ok = false;
+				}
+				if (!ok && attempt < 2) {
+					await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+				}
 			}
+			if (!ok) failed.push(layer.name);
 			onProgress?.(i + 1, total, layer.name);
 		}
 		if (total === 0) onProgress?.(0, 0, '');
+		// Second pass: verify every thematic source is on the map (blank-map bug).
+		const missing = layers.filter((l) => !vectorSourceReady(l));
+		for (const layer of missing) {
+			if (mapDataAbort.signal.aborted) return;
+			try {
+				await ensureVectorLayerOnMap(layer, { force: true });
+			} catch (err) {
+				console.error(`Verify preload failed for ${layer.name}`, err);
+			}
+		}
+		const stillMissing = layers.filter((l) => !vectorSourceReady(l));
+		if (stillMissing.length || failed.length) {
+			const names = [...new Set([...failed, ...stillMissing.map((l) => l.name)])].join(', ');
+			throw new Error(`Map layers failed to preload: ${names}`);
+		}
 	}
 
 	async function preloadAllSecondaryData() {
