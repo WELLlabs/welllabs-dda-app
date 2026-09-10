@@ -60,7 +60,19 @@ echo "→ Restarting FastAPI backend (uvicorn)..."
 if ! systemctl is-enabled --quiet welllabs-backend.service; then
     systemctl enable welllabs-backend.service
 fi
-systemctl restart welllabs-backend.service
+
+# Hard reset: a wedged prior deploy (e.g. workers=4 + exhausted Postgres) leaves
+# orphan uvicorn processes holding :8080 and DB connections. Soft restart alone
+# then fails health → CodeDeploy HEALTH_CONSTRAINTS → rollback to the bad build.
+echo "  Stopping backend and clearing orphans on :8080..."
+systemctl stop welllabs-backend.service 2>/dev/null || true
+sleep 2
+fuser -k 8080/tcp 2>/dev/null || true
+pkill -f 'uvicorn app.main:app' 2>/dev/null || true
+rm -f /tmp/welllabs-village-warm.lock
+sleep 1
+
+systemctl start welllabs-backend.service
 
 if ! wait_for_backend_health 36 5; then
     echo "ERROR: Backend did not become healthy on :8080/health. Journal logs:"

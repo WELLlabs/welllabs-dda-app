@@ -37,19 +37,21 @@ except ImportError:  # pragma: no cover
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     # Keep the pool small — each uvicorn worker creates its own pool.
-    # Oversized pools + multi-worker restarts have exhausted Postgres and hung beta.
-    init_pool(min_size=1, max_size=5)
-    # Warm village typeahead index in the background (S3 attribute read ~30–60s first time).
-    # Only one process should warm: uvicorn workers each run lifespan, and parallel
-    # S3 downloads after deploy have saturated the host (site unreachable).
+    # min_size=0: do not block process start on Postgres (exhausted connections
+    # after a bad multi-worker deploy must not prevent /health from answering,
+    # or CodeDeploy ValidateService fails forever and HEALTH_CONSTRAINTS rolls back).
+    import logging
     import os
     import threading
     import time
 
-    from app.shared.watersheds import warm_village_name_index
+    log = logging.getLogger("uvicorn.error")
+    try:
+        init_pool(min_size=0, max_size=5)
+    except Exception:
+        log.exception("Database pool failed to open — /health still available; DB routes will error until pool recovers")
 
-    # Prefer the first worker. Uvicorn sets UVICORN_WORKER / no standard env —
-    # use a simple file lock so only one process warms.
+    # Only one process should warm: uvicorn workers each run lifespan.
     warm_lock = "/tmp/welllabs-village-warm.lock"
     should_warm = False
     try:
@@ -58,7 +60,6 @@ async def lifespan(_app: FastAPI):
         os.close(fd)
         should_warm = True
     except FileExistsError:
-        # Another worker is warming (or warmed recently).
         try:
             age = time.time() - os.path.getmtime(warm_lock)
             if age > 3600:
@@ -71,11 +72,15 @@ async def lifespan(_app: FastAPI):
             should_warm = False
 
     if should_warm:
-        threading.Thread(
-            target=warm_village_name_index, name="village-index-warm", daemon=True
-        ).start()
-    # Hierarchy FGB warm removed from startup — hierarchy is not on project maps,
-    # and downloading those files on every deploy was thrashing disk/network.
+        try:
+            from app.shared.watersheds import warm_village_name_index
+
+            threading.Thread(
+                target=warm_village_name_index, name="village-index-warm", daemon=True
+            ).start()
+        except Exception:
+            log.exception("Village index warm failed to start (non-fatal)")
+
     try:
         yield
     finally:
