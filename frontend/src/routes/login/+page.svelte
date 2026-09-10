@@ -1,10 +1,10 @@
 <script>
-import { onMount } from 'svelte';
+	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { login, requestVerifyEmail, startGoogleAuth } from '$lib/modules/accounts/api.js';
 	import { session } from '$lib/shared/session.svelte.js';
-	import ContourBackground from '$lib/shared/components/landing/ContourBackground.svelte';
+	import AuthDismissShell from '$lib/shared/components/auth/AuthDismissShell.svelte';
 	import { appPath, isGoogleOAuthCallback } from '$lib/shared/paths.js';
 
 	let email = $state('');
@@ -20,10 +20,11 @@ import { onMount } from 'svelte';
 	onMount(() => {
 		if (page.url.searchParams.get('oauth_error') === '1') {
 			const detail = page.url.searchParams.get('oauth_detail') || '';
+			const localCallback = `${window.location.origin}${appPath('/backend/accounts/auth/google/callback')}`;
 			error =
 				'Google sign-in failed. Open login in a new incognito window and try again.' +
 				(detail ? ` (${detail})` : '') +
-				' Ensure Google Cloud Console has redirect URI: https://ai.welllabs.org/wst/backend/accounts/auth/google/callback';
+				` Ensure Google Cloud Console has redirect URI: ${localCallback}`;
 			return;
 		}
 		const next = page.url.searchParams.get('next');
@@ -93,15 +94,14 @@ import { onMount } from 'svelte';
 	<title>Sign in · Water Security Toolbox</title>
 </svelte:head>
 
-<div class="relative flex min-h-screen items-center justify-center overflow-hidden bg-void px-4 font-body">
-	<ContourBackground intensity="ambient" />
-
-	{#if completingOAuth}
-		<div class="relative z-10 font-body text-ink-dim">Completing Google sign-in…</div>
-	{:else}
-	<div class="relative z-10 w-full max-w-sm rounded-[20px] border border-hairline bg-panel p-8 shadow-glass">
+{#if completingOAuth}
+	<div class="relative flex min-h-screen items-center justify-center bg-void font-body text-ink-dim">
+		Completing Google sign-in…
+	</div>
+{:else}
+	<AuthDismissShell labelledBy="signin-title">
 		<span class="font-mono text-[11px] uppercase tracking-[0.2em] text-diagnose">Welcome back</span>
-		<h1 class="mt-2 font-display text-2xl text-ink">Sign in</h1>
+		<h1 id="signin-title" class="mt-2 font-display text-2xl text-ink">Sign in</h1>
 		<p class="mt-1 font-body text-[13px] text-ink-dim">Access your watershed workspace.</p>
 
 		<form onsubmit={handleSubmit} class="mt-7 flex flex-col gap-4">
@@ -131,7 +131,9 @@ import { onMount } from 'svelte';
 					autocomplete="current-password"
 				/>
 				<p class="m-0 mt-1.5 text-right">
-					<a href={appPath('/forgot-password')} class="font-mono text-[11px] text-diagnose hover:underline">Forgot password?</a>
+					<a href={appPath('/forgot-password')} class="font-mono text-[11px] text-diagnose hover:underline"
+						>Forgot password?</a
+					>
 				</p>
 			</div>
 
@@ -179,6 +181,5 @@ import { onMount } from 'svelte';
 			Don't have an account?
 			<a href={appPath('/register')} class="font-medium text-diagnose hover:underline">Register</a>
 		</p>
-	</div>
-	{/if}
-</div>
+	</AuthDismissShell>
+{/if}

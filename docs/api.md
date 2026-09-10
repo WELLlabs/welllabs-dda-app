@@ -70,7 +70,7 @@ Protected APIs require an **active and verified** user.
 |--------|------|------|--------|-------------|
 | GET | `/` | Yes | Any | List all projects accessible to the current user (owned, shared, or via org). |
 | GET | `/{project_id}` | Yes | Access | Get project details including watershed geometry and counts. |
-| POST | `/` | Yes | Any | Create project. Body: `{name, lng, lat}`. Looks up the watershed at the coordinates. |
+| POST | `/` | Yes | Any | Create project. Body: `{name, lng?, lat?, geometry?, watershed_id?, watershed_name?, source?}` where `source` is `point` (default), `village`, or `custom`. Provide `(lng, lat)` for HydroBASINS lookup, or `geometry` (Polygon/MultiPolygon) to store as the clip AOI directly. |
 | DELETE | `/{project_id}` | Yes | Owner | Delete project, its S3 media, and all related data. |
 
 ### Project Access — `/api/diagnose/projects/{project_id}/access`
@@ -109,6 +109,12 @@ Enabled layers come from `COG_LAYERS` / `VECTOR_LAYERS`; styling and analysis me
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | POST | `/lookup` | Yes | Return the watershed polygon for a coordinate. Body: `{lng, lat}`. |
+| GET | `/villages/search?q=&limit=` | Yes | National village typeahead (min 4 chars) against a cached name index from `vector/villages.fgb`. |
+| GET | `/villages/states` | Yes | Distinct states from the village index. |
+| GET | `/villages/districts?state=` | Yes | Districts for a state. |
+| GET | `/villages/by-district?state=&district=&q=` | Yes | Villages in a state + district (optional name filter). |
+| POST | `/from-village` | Yes | Union all Level-12 basins intersecting a village. Body: `{village_id}` or `{geometry}`. Response includes `geometry`, `bounds`, `parts`, `watershed_id`, `watershed_name`. |
+| POST | `/from-geometry` | Yes | Validate a custom AOI Polygon/MultiPolygon. Body: `{geometry, name?}`. Returns clip preview payload (`watershed_id=custom`). |
 
 ### Observation Zones — `/api/diagnose/observation-zones`
 

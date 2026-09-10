@@ -42,6 +42,11 @@ export async function updateMe(fields) {
 	});
 }
 
+/** Permanently delete the signed-in account. */
+export async function deleteMe() {
+	await request('/auth/users/me', { method: 'DELETE' });
+}
+
 export async function verifyEmail(token) {
 	return request('/auth/verify', {
 		method: 'POST',

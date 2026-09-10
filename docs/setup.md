@@ -49,7 +49,7 @@ cp .env.example .env
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | S3 access |
 | `AWS_S3_BUCKET` / `AWS_DEFAULT_REGION` | Bucket and region |
 | `COG_LAYERS` | Comma-separated COG keys under `rasters/` |
-| `VECTOR_LAYERS` | Comma-separated FlatGeobuf keys under `vector/` |
+| `VECTOR_LAYERS` | Comma-separated vector keys under `vector/` (`.fgb` or `.gpkg`) |
 | `WATERSHEDS_FGB_KEY` | Watershed boundaries (`.fgb` or `.gpkg`) under `vector/` |
 | `POSTGIS_PUBLIC_HOST` / `POSTGIS_PUBLIC_PORT` | Host QField can reach (not `localhost`) |
 | `QFIELD_CLOUD_URL` / `QFIELD_PROJECT_NAME` | QField Cloud API + project name prefix |
@@ -121,8 +121,8 @@ For more detail, see [settings.md](settings.md).
 your-bucket/
 ├── rasters/*.tif                    Shared COG rasters (LULC, DEM, JRC, …)
 ├── vector/*.fgb|*.gpkg              Secondary vectors + watershed boundaries
-├── {project_id}/media/{file}        Field note photos/audio
-└── {project_id}/packages/{...}      QField package artifacts
+├── diagnose/{project_id}/media/{file}   Field note photos/audio
+└── diagnose/{project_id}/packages/{...}   QField package artifacts
 ```
 
 IAM: `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` on `arn:aws:s3:::your-bucket/*`.

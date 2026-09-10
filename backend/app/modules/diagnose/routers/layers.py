@@ -4,13 +4,14 @@ import json
 import math
 import time
 import asyncio
+import threading
 import numpy as np
 from collections import OrderedDict
 from functools import lru_cache
 from botocore.exceptions import ClientError
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 from rasterio.features import geometry_mask
@@ -18,6 +19,36 @@ from rasterio.warp import transform_geom
 from rio_tiler.io import Reader
 from rio_tiler.models import ImageData
 from shapely.geometry import shape as shp_shape
+
+# Cap heavy clip/analysis work per worker.
+#
+# _heavy_clip_sem  — single-layer analysis (and leftover hierarchy endpoint).
+# _vector_clip_sem  — vector /data on-demand clips.  Kept separate from
+#                    _heavy_clip_sem so analysis cannot block layer-click
+#                    fetches.  Capacity 2 keeps interactive capacity free
+#                    for /projects list + auth while a clip runs.
+# _tile_sem        — COG tile renders. MapLibre can fire dozens of parallel
+#                    tile requests; without a cap the default thread pool
+#                    saturates and unrelated navigation (back to projects)
+#                    times out at Cloudflare → 502.
+# _batch_sem       — at most ONE concurrent /analysis/batch call per worker.
+# _batch_inner_sem — caps parallelism *inside* a single batch.
+# _prewarm_sem     — at most one prewarm per worker (never competes with tiles).
+_heavy_clip_sem = asyncio.Semaphore(2)
+_vector_clip_sem = asyncio.Semaphore(2)
+_tile_sem = asyncio.Semaphore(4)
+_batch_sem = asyncio.Semaphore(1)
+_batch_inner_sem = asyncio.Semaphore(2)
+_prewarm_sem = asyncio.Semaphore(1)
+
+# Hard budgets under Cloudflare's ~100s proxy timeout. Prefer 503 over hang→502.
+_VECTOR_CLIP_TIMEOUT_S = 45.0
+_TILE_RENDER_TIMEOUT_S = 25.0
+_BATCH_TOTAL_TIMEOUT_S = 70.0
+_BATCH_LAYER_TIMEOUT_S = 30.0
+_ANALYSIS_TIMEOUT_S = 45.0
+_PREWARM_LAYER_TIMEOUT_S = 30.0
+_WATERSHED_IMAGE_TIMEOUT_S = 45.0
 
 from app.modules.diagnose.services.layer_analysis import (
     analyze_layer,
@@ -65,6 +96,12 @@ class ChoroplethStopItem(BaseModel):
     color: str
 
 
+class CompanionItem(BaseModel):
+    id: str
+    line_color: str | None = None
+    line_width: float | None = None
+
+
 class CogLayer(BaseModel):
     id: str
     name: str
@@ -73,6 +110,7 @@ class CogLayer(BaseModel):
     tiles_url: str
     info_url: str
     render_type: str | None = None
+    colormap: str | None = None
     legend: list[LegendItem] = []
     bounds: list[float] | None = None
     status: str = "unknown"
@@ -83,6 +121,9 @@ class CogLayer(BaseModel):
     field_check: str = ""
     analysis_type: str | None = None
     category: str | None = None
+    tile_strategy: str = "tiles"
+    watershed_image_url: str | None = None
+    companions: list[CompanionItem] = []
 
 
 class LayersResponse(BaseModel):
@@ -98,6 +139,10 @@ class VectorLayer(BaseModel):
     render_type: str
     style_column: str | None = None
     label_column: str | None = None
+    line_color: str | None = None
+    line_width: float | None = None
+    fill_opacity: float | None = None
+    geometry_kind: str | None = None
     legend: list[LegendItem] = []
     choropleth_stops: list[ChoroplethStopItem] = []
     interpretation: str = ""
@@ -106,7 +151,9 @@ class VectorLayer(BaseModel):
     field_check: str = ""
     analysis_type: str | None = None
     map_render: bool = True
+    overlay: bool = False
     category: str | None = None
+    line_dasharray: list[float] | None = None
     status: str = "ok"
     error: str | None = None
 
@@ -147,11 +194,15 @@ def _layer_id(key: str) -> str:
 
 
 def _cog_keys() -> list[str]:
-    return [key.strip() for key in settings.cog_layers.split(",") if key.strip()]
+    from app.modules.diagnose.services.layer_catalog import resolve_enabled_cog_keys
+
+    return resolve_enabled_cog_keys()
 
 
 def _vector_keys() -> list[str]:
-    return [key.strip() for key in settings.vector_layers.split(",") if key.strip()]
+    from app.modules.diagnose.services.layer_catalog import resolve_enabled_vector_keys
+
+    return resolve_enabled_vector_keys()
 
 
 def _cog_id_for_key(key: str) -> str:
@@ -243,31 +294,42 @@ def _tile_cache_set(key: tuple, data: bytes) -> None:
             _TILE_CACHE.popitem(last=False)
 
 
-# Per-(s3_key, project_id) elevation range cache for consistent cross-tile scaling.
+# Per-(s3_key, watershed_geom) elevation range cache for consistent cross-tile scaling.
+# Lock prevents concurrent tile requests from each doing the same expensive S3 COG
+# range-read on a cold worker — first thread computes, rest wait then hit cache.
 _ELEV_RANGE_CACHE: dict[tuple[str, str], tuple[float, float]] = {}
+_ELEV_RANGE_LOCK = threading.Lock()
 
 
 def _watershed_elev_range(s3_key: str, http_url: str, watershed_geom: dict) -> tuple[float, float]:
-    """Return (lo, hi) elevation percentiles for the watershed, computed once and cached."""
+    """Return (lo, hi) elevation percentiles for the watershed, computed once and cached.
+
+    Uses a lock so concurrent tile requests on a cold worker only pay the
+    S3 COG range-read once; all others wait and then hit the in-process cache.
+    """
     cache_key = (s3_key, json.dumps(watershed_geom, sort_keys=True, separators=(",", ":")))
     if cache_key in _ELEV_RANGE_CACHE:
         return _ELEV_RANGE_CACHE[cache_key]
-    try:
-        ws = shp_shape(watershed_geom)
-        minx, miny, maxx, maxy = ws.bounds
-        img = Reader(http_url).part([minx, miny, maxx, maxy], indexes=[1], max_size=256)
-        arr = img.array[0].astype(np.float32)
-        if img.alpha_mask is not None:
-            arr = np.where(img.alpha_mask > 0, arr, np.nan)
-        valid = arr[~np.isnan(arr)]
-        if valid.size < 4:
+    with _ELEV_RANGE_LOCK:
+        # Double-check: another thread may have computed while we waited for the lock.
+        if cache_key in _ELEV_RANGE_CACHE:
+            return _ELEV_RANGE_CACHE[cache_key]
+        try:
+            ws = shp_shape(watershed_geom)
+            minx, miny, maxx, maxy = ws.bounds
+            img = Reader(http_url).part([minx, miny, maxx, maxy], indexes=[1], max_size=256)
+            arr = img.array[0].astype(np.float32)
+            if img.alpha_mask is not None:
+                arr = np.where(img.alpha_mask > 0, arr, np.nan)
+            valid = arr[~np.isnan(arr)]
+            if valid.size < 4:
+                result = (0.0, 3000.0)
+            else:
+                result = (float(np.percentile(valid, 2)), float(np.percentile(valid, 98)))
+        except Exception:
             result = (0.0, 3000.0)
-        else:
-            result = (float(np.percentile(valid, 2)), float(np.percentile(valid, 98)))
-    except Exception:
-        result = (0.0, 3000.0)
-    _ELEV_RANGE_CACHE[cache_key] = result
-    return result
+        _ELEV_RANGE_CACHE[cache_key] = result
+        return result
 
 
 @lru_cache(maxsize=64)
@@ -275,7 +337,12 @@ def _watershed_feature_json(project_id: str) -> str:
     with db_cursor() as cur:
         cur.execute(
             """
-            SELECT ST_AsGeoJSON(watershed_geom, 9)::json AS geom
+            SELECT
+                ST_AsGeoJSON(watershed_geom, 9)::json AS geom,
+                ST_XMin(watershed_geom) AS minx,
+                ST_YMin(watershed_geom) AS miny,
+                ST_XMax(watershed_geom) AS maxx,
+                ST_YMax(watershed_geom) AS maxy
             FROM diagnosis WHERE id = %(id)s
             """,
             {"id": project_id},
@@ -283,11 +350,28 @@ def _watershed_feature_json(project_id: str) -> str:
         row = cur.fetchone()
     if not row or not row["geom"]:
         raise HTTPException(404, "Project watershed not found")
-    return json.dumps({"type": "Feature", "geometry": row["geom"], "properties": {}})
+    return json.dumps(
+        {
+            "type": "Feature",
+            "geometry": row["geom"],
+            "properties": {},
+            "_bounds": [row["minx"], row["miny"], row["maxx"], row["maxy"]],
+        }
+    )
 
 
 def _watershed_feature(project_id: str) -> dict:
     return json.loads(_watershed_feature_json(project_id))
+
+
+def _watershed_bbox(feature: dict) -> tuple[float, float, float, float]:
+    """Cached bbox from _watershed_feature — avoids shp_shape().bounds on every tile."""
+    b = feature.get("_bounds")
+    if isinstance(b, (list, tuple)) and len(b) == 4:
+        return float(b[0]), float(b[1]), float(b[2]), float(b[3])
+    ws_geom = feature.get("geometry") or feature
+    bounds = shp_shape(ws_geom).bounds
+    return bounds[0], bounds[1], bounds[2], bounds[3]
 
 
 def _render_params(layer_cfg: LayerConfig | None, bbox: list[float] | None = None) -> str:
@@ -400,6 +484,100 @@ def _render_clipped_tile(
     return masked.render(img_format="PNG", add_mask=True)
 
 
+_WATERSHED_IMAGE_CACHE: OrderedDict[tuple[str, str], bytes] = OrderedDict()
+_WATERSHED_IMAGE_CACHE_MAX = 32
+
+
+def _watershed_image_cache_get(key: tuple[str, str]) -> bytes | None:
+    if key in _WATERSHED_IMAGE_CACHE:
+        _WATERSHED_IMAGE_CACHE.move_to_end(key)
+        return _WATERSHED_IMAGE_CACHE[key]
+    return None
+
+
+def _watershed_image_cache_set(key: tuple[str, str], data: bytes) -> None:
+    _WATERSHED_IMAGE_CACHE[key] = data
+    _WATERSHED_IMAGE_CACHE.move_to_end(key)
+    while len(_WATERSHED_IMAGE_CACHE) > _WATERSHED_IMAGE_CACHE_MAX:
+        _WATERSHED_IMAGE_CACHE.popitem(last=False)
+
+
+def _render_watershed_image(
+    http_url: str,
+    feature: dict,
+    layer_cfg: LayerConfig | None,
+) -> bytes:
+    """Single PNG for the project watershed bbox — used for large non-COG national rasters."""
+    from rio_tiler.colormap import cmap as rio_cmaps
+
+    geom = feature.get("geometry", feature)
+    ws = shp_shape(geom)
+    minx, miny, maxx, maxy = ws.bounds
+
+    with Reader(http_url) as src:
+        img = src.part([minx, miny, maxx, maxy], indexes=[1], max_size=512)
+
+    if img.array.size == 0:
+        return _TRANSPARENT_TILE
+
+    nodata = layer_cfg.nodata if layer_cfg else None
+    if img.alpha_mask is not None:
+        base = img.alpha_mask > 0
+    else:
+        base = np.ones(img.array[0].shape, dtype=bool)
+        if nodata is not None:
+            base &= img.array[0] != nodata
+
+    ws_mask = geometry_mask(
+        [geom],
+        out_shape=(img.height, img.width),
+        transform=img.transform,
+        invert=True,
+        all_touched=True,
+    )
+    valid = base & ws_mask
+    if not valid.any():
+        return _TRANSPARENT_TILE
+
+    rio_cmap = layer_cfg.rio_colormap() if layer_cfg and layer_cfg.render_type == "categorical" else None
+    continuous_cmap = None
+    if layer_cfg and layer_cfg.render_type == "continuous":
+        try:
+            continuous_cmap = rio_cmaps.get(str(layer_cfg.continuous.get("colormap") or "viridis"))
+        except Exception:
+            continuous_cmap = None
+
+    if continuous_cmap is not None:
+        arr = np.asarray(img.array[0], dtype=np.float64)
+        if nodata is not None:
+            arr = np.where(arr == nodata, np.nan, arr)
+        valid_px = arr[valid]
+        valid_px = valid_px[np.isfinite(valid_px)]
+        if valid_px.size == 0:
+            return _TRANSPARENT_TILE
+        lo = float(np.percentile(valid_px, 2))
+        hi = float(np.percentile(valid_px, 98))
+        if hi <= lo:
+            hi = lo + 1.0
+        scaled = np.clip((arr - lo) / (hi - lo) * 255.0, 0, 255)
+        scaled = np.where(np.isfinite(scaled), scaled, 0).astype(np.uint8)
+        img = ImageData(
+            scaled[np.newaxis, :, :],
+            alpha_mask=img.alpha_mask,
+            crs=img.crs,
+            bounds=img.bounds,
+        )
+        base = np.ones(scaled.shape, dtype=bool)
+
+    alpha = np.where(valid, 255, 0).astype(np.uint8)
+    masked = ImageData(img.array, alpha_mask=alpha, crs=img.crs, bounds=img.bounds)
+    if rio_cmap:
+        return masked.render(img_format="PNG", colormap=rio_cmap, add_mask=True)
+    if continuous_cmap:
+        return masked.render(img_format="PNG", colormap=continuous_cmap, add_mask=True)
+    return masked.render(img_format="PNG", add_mask=True)
+
+
 def _intersect_bounds(cog_bounds: list[float] | None, clip: list[float] | None) -> list[float] | None:
     if not clip or len(clip) != 4:
         return cog_bounds
@@ -470,11 +648,25 @@ def _build_layer(
     cog_url = f"s3://{settings.aws_s3_bucket}/{key}"
     legend = _legend_items(layer_cfg)
     render_type = layer_cfg.render_type if layer_cfg else None
+    colormap = None
+    if layer_cfg and layer_cfg.render_type == "continuous":
+        colormap = str(layer_cfg.continuous.get("colormap") or "terrain")
     meaning = (layer_cfg.meaning or layer_cfg.interpretation) if layer_cfg else ""
     uncertainty = layer_cfg.uncertainty if layer_cfg else ""
     field_check = layer_cfg.field_check if layer_cfg else ""
     analysis_type = layer_cfg.analysis_type if layer_cfg else None
     category = layer_cfg.category if layer_cfg else None
+    tile_strategy = layer_cfg.tile_strategy if layer_cfg else "tiles"
+    companions = [
+        CompanionItem(id=c.id, line_color=c.line_color, line_width=c.line_width)
+        for c in (layer_cfg.companions if layer_cfg else ())
+    ]
+    watershed_image_url = None
+    if tile_strategy == "watershed_image" and project_id:
+        watershed_image_url = (
+            f"{settings.api_public_prefix}/diagnose/layers/cog/{layer_id}/watershed-image"
+            f"?project_id={quote(project_id, safe='')}"
+        )
 
     try:
         _presigned_url_cached(key)
@@ -488,6 +680,7 @@ def _build_layer(
             tiles_url="",
             info_url="",
             render_type=render_type,
+            colormap=colormap,
             legend=legend,
             status="error",
             error=f"{err.get('Code', 'S3Error')}: {err.get('Message', str(exc))}",
@@ -497,6 +690,9 @@ def _build_layer(
             field_check=field_check,
             analysis_type=analysis_type,
             category=category,
+            tile_strategy=tile_strategy,
+            watershed_image_url=watershed_image_url,
+            companions=companions,
         )
 
     tiles_url = f"{settings.api_public_prefix}/diagnose/layers/cog/{layer_id}/tiles/WebMercatorQuad/{{z}}/{{x}}/{{y}}{_tile_query(bbox, project_id)}"
@@ -508,6 +704,7 @@ def _build_layer(
         tiles_url=tiles_url,
         info_url="",
         render_type=render_type,
+        colormap=colormap,
         legend=legend,
         interpretation=meaning,
         meaning=meaning,
@@ -515,6 +712,9 @@ def _build_layer(
         field_check=field_check,
         analysis_type=analysis_type,
         category=category,
+        tile_strategy=tile_strategy,
+        watershed_image_url=watershed_image_url,
+        companions=companions,
     )
 
 
@@ -799,6 +999,104 @@ async def list_cog_layers(
     return LayersResponse(cog_layers=layers, titiler_url=settings.titiler_public_url)
 
 
+@router.get("/cog/{layer_id}/watershed-image")
+async def cog_watershed_image(
+    layer_id: str,
+    project_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """Return one colormap PNG clipped to the project watershed (for large non-COG rasters)."""
+    key = _key_from_id(layer_id)
+    if not key:
+        raise HTTPException(404, "Layer not found")
+    layer_cfg = get_layer_for_key(key)
+    if not layer_cfg or layer_cfg.tile_strategy != "watershed_image":
+        raise HTTPException(400, "Layer does not use watershed image rendering")
+
+    assert_diagnosis_access(user["id"], project_id)
+    feature = _watershed_feature(project_id)
+
+    cache_key = (key, project_id)
+    cached = _watershed_image_cache_get(cache_key)
+    if cached is not None:
+        return Response(
+            content=cached,
+            media_type="image/png",
+            headers={"Cache-Control": "private, max-age=3600"},
+        )
+
+    try:
+        http_url = _presigned_url_cached(key)
+        content = await asyncio.wait_for(
+            asyncio.to_thread(_render_watershed_image, http_url, feature, layer_cfg),
+            timeout=_WATERSHED_IMAGE_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(
+            503, "Watershed image timed out — retry in a moment."
+        ) from exc
+    except ClientError as exc:
+        err = exc.response.get("Error", {})
+        raise HTTPException(403, f"S3 error: {err.get('Message')}") from exc
+    except Exception as exc:
+        raise HTTPException(500, f"Watershed image failed: {exc}") from exc
+
+    _watershed_image_cache_set(cache_key, content)
+    return Response(
+        content=content,
+        media_type="image/png",
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
+
+
+@router.get("/cog/prewarm")
+async def prewarm_cog_layers(
+    project_id: str,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """Background pre-warm: compute elevation ranges + watershed images for all COG layers.
+
+    Called fire-and-forget from the frontend after map open.  Returns 204 when done.
+    Warms the in-process caches so the first user tile/image request is cheap.
+    Aborts early if the client disconnects (user navigated away).
+    """
+    assert_diagnosis_access(user["id"], project_id)
+    feature = _watershed_feature(project_id)
+    geom = feature.get("geometry") or feature
+
+    async def _warm_one(cfg: LayerConfig) -> None:
+        try:
+            http_url = _presigned_url_cached(cfg.s3_key)
+            if cfg.tile_strategy == "watershed_image":
+                cache_key = (cfg.s3_key, project_id)
+                if _watershed_image_cache_get(cache_key) is None:
+                    content = await asyncio.wait_for(
+                        asyncio.to_thread(_render_watershed_image, http_url, feature, cfg),
+                        timeout=_PREWARM_LAYER_TIMEOUT_S,
+                    )
+                    _watershed_image_cache_set(cache_key, content)
+            elif cfg.render_type == "continuous":
+                await asyncio.wait_for(
+                    asyncio.to_thread(_watershed_elev_range, cfg.s3_key, http_url, geom),
+                    timeout=_PREWARM_LAYER_TIMEOUT_S,
+                )
+        except Exception:
+            pass  # best-effort — a failure here doesn't affect the user
+
+    cog_cfgs = [
+        cfg for cfg in get_catalog().layers
+        if cfg.source == "cog" and cfg.s3_key in set(_cog_keys())
+    ]
+    # One prewarm at a time per worker; exit early if client left the map.
+    async with _prewarm_sem:
+        for cfg in cog_cfgs:
+            if await request.is_disconnected():
+                break
+            await _warm_one(cfg)
+    return Response(status_code=204)
+
+
 def _parse_bbox_param(bbox: str | None) -> list[float] | None:
     if not bbox:
         return None
@@ -840,8 +1138,7 @@ async def proxy_cog_tile(
 
             # Pre-flight: skip tiles that cannot intersect the watershed bbox.
             ws_geom = feature.get("geometry") or feature
-            ws_bounds = shp_shape(ws_geom).bounds  # (minx, miny, maxx, maxy)
-            ws_bbox = (ws_bounds[0], ws_bounds[1], ws_bounds[2], ws_bounds[3])
+            ws_bbox = _watershed_bbox(feature)
             tile_bbox = _tile_bounds_wgs84(z, x, y)
             if not _bbox_intersects(tile_bbox, ws_bbox):
                 return Response(
@@ -860,25 +1157,44 @@ async def proxy_cog_tile(
                     headers={"Cache-Control": "public, max-age=3600"},
                 )
 
-            # For continuous COG layers, compute a consistent watershed-level
-            # elevation range once and cache it so all tiles share the same scale.
-            elev_range = None
-            if layer_cfg and layer_cfg.render_type == "continuous":
-                elev_range = await asyncio.to_thread(
-                    _watershed_elev_range, key, http_url, ws_geom
-                )
-
+            # Cap concurrent tile renders so MapLibre tile storms cannot saturate
+            # the thread pool and starve /projects / auth (Cloudflare 502).
             try:
-                content = await asyncio.to_thread(
-                    _render_clipped_tile, http_url, z, x, y, feature, layer_cfg, elev_range
-                )
-            except Exception:
+                async with _tile_sem:
+                    elev_range = None
+                    if layer_cfg and layer_cfg.render_type == "continuous":
+                        elev_range = await asyncio.wait_for(
+                            asyncio.to_thread(
+                                _watershed_elev_range, key, http_url, ws_geom
+                            ),
+                            timeout=_TILE_RENDER_TIMEOUT_S,
+                        )
+                    try:
+                        content = await asyncio.wait_for(
+                            asyncio.to_thread(
+                                _render_clipped_tile,
+                                http_url,
+                                z,
+                                x,
+                                y,
+                                feature,
+                                layer_cfg,
+                                elev_range,
+                            ),
+                            timeout=_TILE_RENDER_TIMEOUT_S,
+                        )
+                    except Exception:
+                        content = _TRANSPARENT_TILE
+            except asyncio.TimeoutError:
                 content = _TRANSPARENT_TILE
+
             _tile_cache_set(cache_key, content)
             return Response(
                 content=content,
                 media_type="image/png",
-                headers={"Cache-Control": "no-store"},
+                # private: browser may cache; not CDN/public (contains project-specific masking).
+                # 1 h TTL keeps repeated layer switches instant without stale data issues.
+                headers={"Cache-Control": "private, max-age=3600"},
             )
 
         titiler_url = _titiler_tile_url(http_url, z, x, y, layer_cfg, clip_bbox)
@@ -905,6 +1221,32 @@ def _build_vector_layer(cfg: LayerConfig) -> VectorLayer:
         for s in cfg.choropleth_stops
     ]
     meaning = cfg.meaning or cfg.interpretation
+    dash = list(cfg.line_dasharray) if cfg.line_dasharray else None
+    if cfg.source == "watershed_hierarchy":
+        return VectorLayer(
+            id=cfg.id,
+            name=cfg.name,
+            s3_key=cfg.s3_key or "",
+            url="",
+            render_type=cfg.render_type,
+            style_column=cfg.style_column,
+            label_column=cfg.label_column,
+            line_color=cfg.line_color,
+            line_width=cfg.line_width,
+            fill_opacity=cfg.fill_opacity,
+            geometry_kind=cfg.geometry_kind,
+            legend=legend,
+            choropleth_stops=stops,
+            interpretation=meaning,
+            meaning=meaning,
+            uncertainty=cfg.uncertainty,
+            field_check=cfg.field_check,
+            analysis_type=cfg.analysis_type,
+            map_render=cfg.map_render,
+            overlay=cfg.overlay,
+            category=cfg.category,
+            line_dasharray=dash,
+        )
     try:
         url = _presigned_url_cached(cfg.s3_key)
         return VectorLayer(
@@ -915,6 +1257,10 @@ def _build_vector_layer(cfg: LayerConfig) -> VectorLayer:
             render_type=cfg.render_type,
             style_column=cfg.style_column,
             label_column=cfg.label_column,
+            line_color=cfg.line_color,
+            line_width=cfg.line_width,
+            fill_opacity=cfg.fill_opacity,
+            geometry_kind=cfg.geometry_kind,
             legend=legend,
             choropleth_stops=stops,
             interpretation=meaning,
@@ -923,7 +1269,9 @@ def _build_vector_layer(cfg: LayerConfig) -> VectorLayer:
             field_check=cfg.field_check,
             analysis_type=cfg.analysis_type,
             map_render=cfg.map_render,
+            overlay=cfg.overlay,
             category=cfg.category,
+            line_dasharray=dash,
         )
     except ClientError as exc:
         err = exc.response.get("Error", {})
@@ -935,6 +1283,10 @@ def _build_vector_layer(cfg: LayerConfig) -> VectorLayer:
             render_type=cfg.render_type,
             style_column=cfg.style_column,
             label_column=cfg.label_column,
+            line_color=cfg.line_color,
+            line_width=cfg.line_width,
+            fill_opacity=cfg.fill_opacity,
+            geometry_kind=cfg.geometry_kind,
             legend=legend,
             choropleth_stops=stops,
             interpretation=meaning,
@@ -943,7 +1295,9 @@ def _build_vector_layer(cfg: LayerConfig) -> VectorLayer:
             field_check=cfg.field_check,
             analysis_type=cfg.analysis_type,
             map_render=cfg.map_render,
+            overlay=cfg.overlay,
             category=cfg.category,
+            line_dasharray=dash,
             status="error",
             error=f"{err.get('Code', 'S3Error')}: {err.get('Message', str(exc))}",
         )
@@ -956,12 +1310,13 @@ async def list_vector_layers(
 ):
     """Return FlatGeobuf vector layer metadata. url is watershed-clipped GeoJSON endpoint."""
     enabled = set(_vector_keys())
-    if not enabled:
-        return VectorLayersResponse(vector_layers=[])
     if project_id:
         assert_diagnosis_access(user["id"], project_id)
     layers: list[VectorLayer] = []
     for cfg in get_catalog().vector_layers():
+        # Hierarchy stack is picker-only (preview_context); skip in project maps.
+        if cfg.source == "watershed_hierarchy":
+            continue
         if cfg.s3_key not in enabled:
             continue
         entry = _build_vector_layer(cfg)
@@ -969,6 +1324,36 @@ async def list_vector_layers(
         proxy_url = f"{settings.api_public_prefix}/diagnose/layers/vector/{cfg.id}/data{q}"
         layers.append(entry.model_copy(update={"url": proxy_url}))
     return VectorLayersResponse(vector_layers=layers)
+
+
+@router.get("/watershed/hierarchy")
+async def watershed_hierarchy_layers(
+    project_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """Basin / sub-basin / L7 / L12 / rivers clipped to the project AOI."""
+    assert_diagnosis_access(user["id"], project_id)
+    feature = _watershed_feature(project_id)
+    geom = feature.get("geometry") or feature
+    from app.modules.diagnose.services.preview_context import project_hierarchy_map_layers
+
+    try:
+        async with _heavy_clip_sem:
+            layers = await asyncio.wait_for(
+                asyncio.to_thread(project_hierarchy_map_layers, geom),
+                timeout=55.0,
+            )
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(
+            504, "Watershed hierarchy timed out — retry; the server may still be warming FGB caches."
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(502, f"Watershed hierarchy failed: {exc}") from exc
+    return Response(
+        content=json.dumps({"layers": layers}, separators=(",", ":")),
+        media_type="application/json",
+        headers={"Cache-Control": "private, max-age=300"},
+    )
 
 
 @router.get("/vector/{layer_id}/data")
@@ -993,9 +1378,19 @@ async def clipped_vector_layer_data(
         raise HTTPException(404, f"S3 error: {err.get('Code')} – {err.get('Message')}") from exc
 
     try:
-        geojson = await asyncio.to_thread(
-            clipped_vector_geojson_for_watershed, cfg.s3_key, vector_url, geom
-        )
+        # Cap concurrent S3 FGB reads; hard timeout under Cloudflare ~100s budget
+        # so hung clips return 503 (retryable) instead of hanging into a CF 502.
+        async with _vector_clip_sem:
+            geojson = await asyncio.wait_for(
+                asyncio.to_thread(
+                    clipped_vector_geojson_for_watershed, cfg.s3_key, vector_url, geom, cfg
+                ),
+                timeout=_VECTOR_CLIP_TIMEOUT_S,
+            )
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(
+            503, "Vector clip timed out — retry in a moment."
+        ) from exc
     except Exception as exc:
         raise HTTPException(500, f"Clip failed: {exc}") from exc
 
@@ -1026,8 +1421,11 @@ def _run_layer_analysis_sync(cfg: LayerConfig, geom: dict):
     if cfg.render_type == "outline" or not cfg.analysis_type:
         return AnalysisResult(stats={}, status="ok")
 
+    if cfg.source == "watershed_hierarchy" or cfg.analysis_type == "watershed_hierarchy":
+        return analyze_layer(cfg, geom, vector_url="hierarchy", cog_url=None)
+
     # COG layers with implemented raster analysis
-    raster_analysis = {"dem", "jrc_occurrence", "jrc_transitions"}
+    raster_analysis = {"dem", "jrc_occurrence", "jrc_transitions", "continuous_raster"}
     if cfg.source == "cog" and cfg.analysis_type not in raster_analysis:
         # LULC etc. — catalog text until zonal class-area exists
         return AnalysisResult(stats={"Status": "See map classes in the watershed"}, status="ok")
@@ -1050,6 +1448,7 @@ def _run_layer_analysis_sync(cfg: LayerConfig, geom: dict):
 @router.get("/analysis/batch", response_model=BatchAnalysisResponse)
 async def batch_layer_analysis(
     project_id: str,
+    request: Request,
     user: dict = Depends(get_current_user),
 ):
     """Preload watershed analysis for all enabled secondary layers at once."""
@@ -1064,6 +1463,8 @@ async def batch_layer_analysis(
         # Skip outline overlays (e.g. village boundaries) — no thematic evidence
         if cfg.render_type == "outline" or not cfg.analysis_type:
             continue
+        if not cfg.analysis_batch:
+            continue
         if cfg.source == "cog" and cfg.s3_key in enabled_cog:
             configs.append(cfg)
         elif cfg.source == "vector_fgb" and cfg.s3_key in enabled_vec:
@@ -1071,7 +1472,11 @@ async def batch_layer_analysis(
 
     async def _one(cfg: LayerConfig) -> LayerAnalysisResponse:
         try:
-            result = await asyncio.to_thread(_run_layer_analysis_sync, cfg, geom)
+            async with _batch_inner_sem:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(_run_layer_analysis_sync, cfg, geom),
+                    timeout=_BATCH_LAYER_TIMEOUT_S,
+                )
             return _analysis_response(cfg, result)
         except Exception as exc:
             meaning = cfg.meaning or cfg.interpretation
@@ -1087,7 +1492,25 @@ async def batch_layer_analysis(
                 error=str(exc),
             )
 
-    analyses = await asyncio.gather(*[_one(cfg) for cfg in configs])
+    # _batch_sem: at most one concurrent batch per worker.  We intentionally do
+    # NOT use _heavy_clip_sem here so that on-demand user requests (single
+    # layer analysis, hierarchy) are never blocked by a running batch.
+    # Stop scheduling more layers if the client left (navigate away) so the
+    # next /projects request is not starved into a Cloudflare 502.
+    async with _batch_sem:
+        analyses: list[LayerAnalysisResponse] = []
+
+        async def _run_all() -> None:
+            for cfg in configs:
+                if await request.is_disconnected():
+                    break
+                analyses.append(await _one(cfg))
+
+        try:
+            await asyncio.wait_for(_run_all(), timeout=_BATCH_TOTAL_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            # Partial results beat hanging until Cloudflare returns HTML 502.
+            pass
     return BatchAnalysisResponse(analyses=list(analyses))
 
 
@@ -1102,7 +1525,16 @@ async def analyze_vector_layer(
     cfg = _resolve_analysis_layer(layer_id)
     feature = _watershed_feature(project_id)
     geom = feature.get("geometry") or feature
-    result = await asyncio.to_thread(_run_layer_analysis_sync, cfg, geom)
+    try:
+        async with _heavy_clip_sem:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(_run_layer_analysis_sync, cfg, geom),
+                timeout=_ANALYSIS_TIMEOUT_S,
+            )
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(
+            503, "Layer analysis timed out — retry in a moment."
+        ) from exc
     return _analysis_response(cfg, result)
 
 

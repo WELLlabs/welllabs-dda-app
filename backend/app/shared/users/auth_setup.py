@@ -94,7 +94,7 @@ class RedirectCookieTransport(CookieTransport):
         self.post_login_redirect_url = post_login_redirect_url
 
     async def get_login_response(self, token: str) -> Response:
-        base = settings.frontend_base_path  # "" locally, "/wst" in production
+        base = settings.frontend_base_path  # "/wst" (matches kit.paths.base)
         origin = settings.public_app_origin
         if oauth_needs_name_setup.get():
             dest = f"{origin}{base}/complete-profile"

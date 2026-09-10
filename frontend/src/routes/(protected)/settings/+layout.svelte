@@ -7,7 +7,7 @@
 
 	const navItems = [
 		{ href: appPath('/settings'), label: 'Account' },
-		{ href: appPath('/settings/organizations'), label: 'Organizations' },
+		{ href: appPath('/settings/organizations'), label: 'Organisations' },
 		{ href: appPath('/settings/connectors'), label: 'Connectors' }
 	];
 

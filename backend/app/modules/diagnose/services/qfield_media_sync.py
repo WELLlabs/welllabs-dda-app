@@ -20,7 +20,7 @@ from app.modules.diagnose.services.s3_cleanup import cleanup_project_s3
 
 logger = logging.getLogger(__name__)
 
-S3_MEDIA_KEY_RE = re.compile(r"^[0-9a-f-]{36}/media/")
+S3_MEDIA_KEY_RE = s3_storage.media_key_pattern()
 ATTACHMENT_PREFIXES = ("DCIM/", "audio/", "video/", "photos/")
 
 

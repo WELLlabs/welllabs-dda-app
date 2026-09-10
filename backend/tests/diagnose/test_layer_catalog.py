@@ -7,9 +7,11 @@ from pathlib import Path
 import pytest
 
 from app.modules.diagnose.services.layer_catalog import (
+    catalog_vector_s3_keys,
     get_catalog,
     get_layer_for_key,
     load_catalog,
+    resolve_enabled_vector_keys,
 )
 
 
@@ -136,6 +138,68 @@ layers:
     assert a.titiler_colormap() != b.titiler_colormap()
 
 
+def test_notebook_gap_layers_resolve_by_s3_key():
+    catalog = get_catalog()
+
+    cropping = catalog.by_id("cropping_intensity")
+    assert cropping is not None
+    assert cropping.s3_key == "rasters/Cropping Intensity of India_cog.tif"
+    assert cropping.render_type == "continuous"
+    assert cropping.analysis_type == "continuous_raster"
+    assert cropping.continuous.get("colormap") == "viridis"
+    assert cropping.tile_strategy != "watershed_image"
+    assert len(cropping.companions) == 0
+
+    canals = catalog.by_id("canals")
+    assert canals is not None
+    assert canals.category == "Reference"
+    assert canals.s3_key == "vector/Canals.gpkg"
+    assert canals.render_type == "line"
+    assert canals.map_render is True
+    assert canals.overlay is True
+    assert canals.line_color == "#b5523a"
+    assert canals.line_width == 2.5
+    assert canals.analysis_type == "vector_length"
+
+    drainage = catalog.by_id("drainage")
+    assert drainage is not None
+    assert drainage.category == "Reference"
+    assert drainage.overlay is True
+    assert drainage.s3_key == "vector/india_rivers_level_12.fgb"
+    assert drainage.render_type == "line"
+    assert drainage.line_color == "#00306d"
+
+    assert catalog.by_id("lineaments") is None
+
+    villages = catalog.by_id("village_boundaries")
+    assert villages is not None
+    assert villages.clip_mode == "intersect"
+    assert villages.line_dasharray == (2, 1.5)
+    assert villages.line_color == "#1f2937"
+
+    literacy = catalog.by_id("literacy")
+    assert literacy is not None
+    assert literacy.render_type == "choropleth"
+    assert literacy.style_column == "pct_literate"
+    assert len(literacy.choropleth_stops) == 5
+
+
+def test_soil_label_normalization():
+    from app.modules.diagnose.services.layer_analysis import normalize_soil_label
+
+    assert normalize_soil_label("1") == "Fine/Clay texture"
+    assert normalize_soil_label("medium loam") == "Medium/Loam texture"
+    assert normalize_soil_label("coarse sand") == "Coarse/Sandy texture"
+    assert normalize_soil_label("rock") == "Rocky and non soil"
+    assert normalize_soil_label("") is None
+
+
+def test_gpkg_auto_detected_as_vector():
+    layer = get_layer_for_key("vector/Canals.gpkg")
+    assert layer is not None
+    assert layer.source == "vector_fgb"
+
+
 def test_unknown_color_name_raises(tmp_path: Path):
     path = tmp_path / "bad.yaml"
     path.write_text(
@@ -153,3 +217,16 @@ layers:
     )
     with pytest.raises(ValueError, match="Unknown color"):
         load_catalog(path)
+
+
+def test_resolve_enabled_vector_keys_defaults_to_catalog():
+    keys = catalog_vector_s3_keys()
+    assert "vector/Canals.gpkg" in keys
+    assert "vector/village_resilience.fgb" in keys
+    # Hierarchy basin/sub-basin keys are not catalog vector_fgb entries.
+    assert "vector/Basin.fgb" not in keys
+    assert resolve_enabled_vector_keys("all") == keys
+    assert resolve_enabled_vector_keys("*") == keys
+    # Empty matches prod: enable nothing until an allowlist is set.
+    assert resolve_enabled_vector_keys("") == []
+    assert resolve_enabled_vector_keys("vector/Canals.gpkg") == ["vector/Canals.gpkg"]

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import mimetypes
+import re
 from pathlib import Path
 
 import boto3
@@ -14,10 +15,20 @@ from app.shared.config import settings
 logger = logging.getLogger(__name__)
 
 PRESIGN_TTL = 3600
+_PROJECT_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
 
 
 def is_s3_enabled() -> bool:
     return bool(settings.aws_s3_bucket)
+
+
+def diagnose_root_prefix() -> str:
+    """S3 prefix for all diagnose project folders, always with trailing slash."""
+    prefix = (settings.diagnose_s3_prefix or "diagnose").strip("/")
+    return f"{prefix}/" if prefix else ""
 
 
 def s3_client():
@@ -29,16 +40,63 @@ def s3_client():
     )
 
 
+def project_prefix(project_id: str) -> str:
+    return f"{diagnose_root_prefix()}{project_id}/"
+
+
+def legacy_project_prefix(project_id: str) -> str:
+    """Pre-reorg layout: {project_id}/ at bucket root."""
+    return f"{project_id}/"
+
+
+def media_prefix(project_id: str) -> str:
+    return f"{project_prefix(project_id)}media/"
+
+
 def media_key(project_id: str, filename: str) -> str:
-    return f"{project_id}/media/{filename}"
+    return f"{media_prefix(project_id)}{filename}"
 
 
 def packages_prefix(project_id: str) -> str:
-    return f"{project_id}/packages/"
+    return f"{project_prefix(project_id)}packages/"
 
 
-def project_prefix(project_id: str) -> str:
-    return f"{project_id}/"
+def canonicalize_diagnose_key(key: str) -> str:
+    """Map legacy {uuid}/... keys to diagnose/{uuid}/... when applicable."""
+    root = diagnose_root_prefix()
+    if not root or key.startswith(root):
+        return key
+    if _PROJECT_UUID_RE.match(key.split("/", 1)[0]):
+        return f"{root}{key}"
+    return key
+
+
+def legacy_key_from_canonical(key: str) -> str:
+    """Map diagnose/{uuid}/... back to legacy {uuid}/... for reads during migration."""
+    root = diagnose_root_prefix()
+    if root and key.startswith(root):
+        return key[len(root) :]
+    return key
+
+
+def resolve_object_key(key: str) -> str:
+    """Pick the S3 key that exists, trying canonical and legacy layouts."""
+    if object_exists(key):
+        return key
+    canonical = canonicalize_diagnose_key(key)
+    if canonical != key and object_exists(canonical):
+        return canonical
+    legacy = legacy_key_from_canonical(key)
+    if legacy != key and object_exists(legacy):
+        return legacy
+    return key
+
+
+def media_key_pattern() -> re.Pattern[str]:
+    root = diagnose_root_prefix().rstrip("/")
+    if root:
+        return re.compile(rf"^(?:{re.escape(root)}/)?[0-9a-f-]{{36}}/media/", re.IGNORECASE)
+    return re.compile(r"^[0-9a-f-]{36}/media/", re.IGNORECASE)
 
 
 def object_exists(key: str) -> bool:
@@ -135,7 +193,7 @@ def sync_directory_to_s3(local_dir: Path, s3_prefix: str) -> list[str]:
 
 
 def list_top_level_prefixes() -> list[str]:
-    """Return top-level key prefixes in the bucket (e.g. project UUID folders)."""
+    """Return top-level key prefixes in the bucket (shared layers, diagnose/, etc.)."""
     if not is_s3_enabled():
         return []
     client = s3_client()
@@ -149,12 +207,53 @@ def list_top_level_prefixes() -> list[str]:
     return prefixes
 
 
+def list_diagnose_project_ids() -> list[str]:
+    """Return project UUIDs under diagnose/."""
+    if not is_s3_enabled():
+        return []
+    root = diagnose_root_prefix()
+    if not root:
+        return []
+    client = s3_client()
+    paginator = client.get_paginator("list_objects_v2")
+    ids: list[str] = []
+    for page in paginator.paginate(Bucket=settings.aws_s3_bucket, Prefix=root, Delimiter="/"):
+        for entry in page.get("CommonPrefixes", []):
+            prefix = entry.get("Prefix", "")
+            rel = prefix[len(root) :].strip("/")
+            if rel and _PROJECT_UUID_RE.match(rel):
+                ids.append(rel)
+    return ids
+
+
+def list_legacy_project_ids() -> list[str]:
+    """Return top-level UUID folders from the pre-diagnose/ layout."""
+    ids: list[str] = []
+    root = diagnose_root_prefix().rstrip("/")
+    for prefix in list_top_level_prefixes():
+        if prefix == root:
+            continue
+        if _PROJECT_UUID_RE.match(prefix):
+            ids.append(prefix)
+    return ids
+
+
+def delete_project_storage(project_id: str) -> int:
+    """Remove all S3 objects for a project (canonical and legacy layouts)."""
+    deleted = delete_prefix(project_prefix(project_id))
+    legacy = legacy_project_prefix(project_id)
+    if legacy != project_prefix(project_id):
+        deleted += delete_prefix(legacy)
+    return deleted
+
+
 def presigned_get_url(key: str, expires_in: int = PRESIGN_TTL) -> str:
     if not is_s3_enabled():
         raise RuntimeError("AWS_S3_BUCKET is not configured")
+    resolved = resolve_object_key(key)
     return s3_client().generate_presigned_url(
         "get_object",
-        Params={"Bucket": settings.aws_s3_bucket, "Key": key},
+        Params={"Bucket": settings.aws_s3_bucket, "Key": resolved},
         ExpiresIn=expires_in,
     )
 
@@ -162,17 +261,20 @@ def presigned_get_url(key: str, expires_in: int = PRESIGN_TTL) -> str:
 def get_object_bytes(key: str) -> bytes:
     if not is_s3_enabled():
         raise RuntimeError("AWS_S3_BUCKET is not configured")
-    resp = s3_client().get_object(Bucket=settings.aws_s3_bucket, Key=key)
+    resolved = resolve_object_key(key)
+    resp = s3_client().get_object(Bucket=settings.aws_s3_bucket, Key=resolved)
     return resp["Body"].read()
 
 
 def delete_object(key: str) -> None:
     if not is_s3_enabled():
         return
-    try:
-        s3_client().delete_object(Bucket=settings.aws_s3_bucket, Key=key)
-    except ClientError as exc:
-        logger.warning("Failed to delete s3://%s/%s: %s", settings.aws_s3_bucket, key, exc)
+    client = s3_client()
+    for candidate in {key, canonicalize_diagnose_key(key), legacy_key_from_canonical(key)}:
+        try:
+            client.delete_object(Bucket=settings.aws_s3_bucket, Key=candidate)
+        except ClientError as exc:
+            logger.warning("Failed to delete s3://%s/%s: %s", settings.aws_s3_bucket, candidate, exc)
 
 
 def list_keys(prefix: str) -> list[str]:

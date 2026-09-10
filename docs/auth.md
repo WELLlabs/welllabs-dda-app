@@ -30,7 +30,7 @@ Set these in `backend/.env` (see `.env.example`):
 | Variable | Purpose |
 |----------|---------|
 | `AUTH_JWT_SECRET` | JWT signing secret (≥32 characters recommended) |
-| `FRONTEND_ORIGIN` | Primary CORS / email-link origin (`http://localhost:5173`) |
+| `FRONTEND_ORIGIN` | Primary CORS / email-link origin; **also sets Google OAuth redirect URI** on deployed servers (`{origin}/wst/backend/accounts/auth/google/callback`) |
 | `SESSION_COOKIE_SECURE` | `true` behind HTTPS in production |
 | `BREVO_API_KEY` / `BREVO_SENDER_EMAIL` / `BREVO_SENDER_NAME` | Transactional email (verify / reset / welcome) |
 | `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` | Optional Google button |
@@ -49,13 +49,22 @@ Add **Authorized redirect URIs** (exact match):
 
 - `http://localhost:5173/wst/backend/accounts/auth/google/callback`
 - `http://localhost:5174/wst/backend/accounts/auth/google/callback`
-- `https://ai.welllabs.org/wst/backend/accounts/auth/google/callback` (production / CodeDeploy)
+- `https://beta.welllabs.org/wst/backend/accounts/auth/google/callback` (dev / beta)
+- `https://ai.welllabs.org/wst/backend/accounts/auth/google/callback` (production)
 
 Also add **Authorized JavaScript origins**:
 
 - `http://localhost:5173`
 - `http://localhost:5174`
+- `https://beta.welllabs.org`
 - `https://ai.welllabs.org`
+
+### Per-environment Secrets Manager
+
+| Environment | Pipeline branch | `FRONTEND_ORIGIN` in secret |
+|-------------|-----------------|----------------------------|
+| Beta (dev) | `dev` | `https://beta.welllabs.org` |
+| Production | `main` | `https://ai.welllabs.org` |
 
 ## Schema notes
 

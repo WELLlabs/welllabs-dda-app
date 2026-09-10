@@ -23,6 +23,7 @@ from app.modules.diagnose.routers import (
 )
 from app.shared.config import settings
 from app.shared.database import close_pool, init_pool
+from app.shared.oauth_redirect import request_public_app_base
 from app.shared.forwarded_host import ForwardedHostMiddleware
 from app.shared.users.db import engine as users_async_engine
 
@@ -35,7 +36,51 @@ except ImportError:  # pragma: no cover
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    init_pool(min_size=2, max_size=10)
+    # Keep the pool small — each uvicorn worker creates its own pool.
+    # min_size=0: do not block process start on Postgres (exhausted connections
+    # after a bad multi-worker deploy must not prevent /health from answering,
+    # or CodeDeploy ValidateService fails forever and HEALTH_CONSTRAINTS rolls back).
+    import logging
+    import os
+    import threading
+    import time
+
+    log = logging.getLogger("uvicorn.error")
+    try:
+        init_pool(min_size=0, max_size=5)
+    except Exception:
+        log.exception("Database pool failed to open — /health still available; DB routes will error until pool recovers")
+
+    # Only one process should warm: uvicorn workers each run lifespan.
+    warm_lock = "/tmp/welllabs-village-warm.lock"
+    should_warm = False
+    try:
+        fd = os.open(warm_lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, str(os.getpid()).encode())
+        os.close(fd)
+        should_warm = True
+    except FileExistsError:
+        try:
+            age = time.time() - os.path.getmtime(warm_lock)
+            if age > 3600:
+                os.unlink(warm_lock)
+                fd = os.open(warm_lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                os.write(fd, str(os.getpid()).encode())
+                os.close(fd)
+                should_warm = True
+        except OSError:
+            should_warm = False
+
+    if should_warm:
+        try:
+            from app.shared.watersheds import warm_village_name_index
+
+            threading.Thread(
+                target=warm_village_name_index, name="village-index-warm", daemon=True
+            ).start()
+        except Exception:
+            log.exception("Village index warm failed to start (non-fatal)")
+
     try:
         yield
     finally:
@@ -46,12 +91,12 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="DDA Product API", version="0.3.0", lifespan=lifespan)
 
 
-def _oauth_callback_login_redirect(detail: str = "") -> HTMLResponse:
+def _oauth_callback_login_redirect(request: Request, detail: str = "") -> HTMLResponse:
     """Browser-friendly redirect to login after OAuth callback errors."""
     params = "oauth_error=1"
     if detail:
         params += f"&oauth_detail={detail[:120]}"
-    login = f"{settings.public_app_base}/login?{params}"
+    login = f"{request_public_app_base(request)}/login?{params}"
     safe_meta = html.escape(login, quote=True)
     safe_js = json.dumps(login)
     return HTMLResponse(
@@ -75,7 +120,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     if "google/callback" not in request.url.path:
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
     detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
-    return _oauth_callback_login_redirect(detail)
+    return _oauth_callback_login_redirect(request, detail)
 
 # Honor X-Forwarded-* from the Vite/SvelteKit /api proxy (localhost:5173/5174)
 app.add_middleware(ForwardedHostMiddleware)

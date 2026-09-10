@@ -1,4 +1,5 @@
 <script>
+	import AppBrand from '$lib/shared/components/AppBrand.svelte';
 	import UserMenu from '$lib/shared/components/UserMenu.svelte';
 	import { appPath } from '$lib/shared/paths.js';
 
@@ -23,13 +24,12 @@
 		subtitle = '',
 		homeHref = '/home',
 		titleHref = '',
-		wide = false,
+		wide = true,
 		fullProjectTitle = false,
 		crumbs = [],
 		children
 	} = $props();
 
-	const home = $derived(appPath(homeHref));
 	const trail = $derived(
 		(crumbs?.length
 			? crumbs
@@ -39,51 +39,72 @@
 				]
 		).map((item) => (item.href ? { ...item, href: appPath(item.href) } : item))
 	);
+
+	const showSecondRow = $derived(trail.length > 0 || Boolean(children));
+	const diagnoseCrumbBar = $derived(title === 'Diagnose' || titleHref === '/diagnose');
 </script>
 
-<header class="hdr" class:hdr-wide={wide}>
+<header class="hdr" class:hdr-wide={wide} class:hdr-with-bar={showSecondRow}>
 	<div
-		class="hdr-inner mx-auto flex items-center justify-between gap-3"
+		class="hdr-inner mx-auto flex flex-col gap-2"
 		class:max-w-6xl={!wide}
 		class:max-w-none={wide}
 	>
-		<div class="brand group">
-			<a href={home} class="brand-mark" aria-label="Home">
-				<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" class="h-5 w-5">
-					<path d="M12 3c3.5 4 6 7 6 10a6 6 0 1 1-12 0c0-3 2.5-6 6-10z" stroke-linejoin="round" />
-				</svg>
-			</a>
-			<nav class="crumb" class:crumb-wrap={fullProjectTitle || crumbs?.length} aria-label="Breadcrumb">
-				<a href={home} class="brand-name font-display">Water Security Toolbox</a>
-				{#each trail as item, i (item.label + (item.href || '') + i)}
-					<span class="sep">/</span>
-					{#if item.href}
-						<a
-							href={item.href}
-							class="crumb-link font-display"
-							class:crumb-current={i === trail.length - 1}
-							title={item.label}>{item.label}</a
-						>
-					{:else}
-						<span
-							class="crumb-current font-body"
-							class:crumb-project-full={fullProjectTitle || crumbs?.length}
-							title={subtitle || item.label}>{item.label}</span
-						>
-					{/if}
-				{/each}
-			</nav>
-		</div>
+		<!-- Top: brand + About + account -->
+		<div class="flex items-center justify-between gap-3">
+			<AppBrand homeHref={homeHref} compact />
 
-		<div class="flex min-w-0 flex-1 items-center justify-end gap-2 sm:gap-3">
-			{#if children}
-				<div class="actions flex flex-wrap items-center justify-end gap-1.5">
-					{@render children()}
-				</div>
-			{/if}
-			<UserMenu variant="light" />
+			<div class="flex min-w-0 shrink-0 items-center gap-2 sm:gap-3">
+				<a href={appPath('/about')} class="action-btn">About the Toolbox</a>
+				<UserMenu variant="light" />
+			</div>
 		</div>
 	</div>
+
+	<!-- Below: breadcrumb + page actions inline -->
+	{#if showSecondRow}
+		<div class="second-row" class:second-row-diagnose={diagnoseCrumbBar}>
+			<div
+				class="second-row-inner mx-auto"
+				class:max-w-6xl={!wide}
+				class:max-w-none={wide}
+			>
+				{#if trail.length}
+					<nav
+						class="crumb"
+						class:crumb-wrap={fullProjectTitle || crumbs?.length}
+						aria-label="Breadcrumb"
+					>
+						{#each trail as item, i (item.label + (item.href || '') + i)}
+							{#if i > 0}<span class="sep">/</span>{/if}
+							{#if item.href}
+								<a
+									href={item.href}
+									class="crumb-link font-display"
+									class:crumb-current={i === trail.length - 1}
+									title={item.label}>{item.label}</a
+								>
+							{:else}
+								<span
+									class="crumb-current font-body"
+									class:crumb-project-full={fullProjectTitle || crumbs?.length}
+									title={subtitle || item.label}>{item.label}</span
+								>
+							{/if}
+						{/each}
+					</nav>
+				{:else}
+					<span></span>
+				{/if}
+
+				{#if children}
+					<div class="actions flex flex-wrap items-center justify-end gap-1.5">
+						{@render children()}
+					</div>
+				{/if}
+			</div>
+		</div>
+	{/if}
 </header>
 
 <style>
@@ -91,58 +112,73 @@
 		position: sticky;
 		top: 0;
 		z-index: 40;
-		padding: 0.85rem 0;
+		padding: 0.75rem 0 0.65rem;
 		border-bottom: 1px solid rgba(20, 40, 60, 0.08);
-		background: rgba(255, 255, 255, 0.72);
+		background: rgba(255, 255, 255, 0.78);
 		backdrop-filter: blur(14px);
+	}
+	.hdr-with-bar {
+		padding-bottom: 0;
 	}
 
 	.hdr-inner {
-		padding-left: 1.5rem;
-		padding-right: 1.5rem;
-	}
-	@media (min-width: 768px) {
-		.hdr-inner {
-			padding-left: 2.5rem;
-			padding-right: 2.5rem;
-		}
-	}
-	.hdr-wide .hdr-inner {
+		width: 100%;
 		padding-left: 0.75rem;
 		padding-right: 1.5rem;
 	}
 	@media (min-width: 768px) {
-		.hdr-wide .hdr-inner {
+		.hdr-inner {
 			padding-left: 1.5rem;
 			padding-right: 2.5rem;
 		}
 	}
 
-	.brand {
-		display: inline-flex;
+	.second-row {
+		margin-top: 0.65rem;
+		border-top: 1px solid rgba(20, 40, 60, 0.06);
+	}
+
+	.second-row-inner {
+		display: flex;
 		align-items: center;
-		gap: 0.7rem;
+		justify-content: space-between;
+		gap: 0.75rem 1rem;
+		flex-wrap: wrap;
 		min-width: 0;
-		flex: 1 1 auto;
+		width: 100%;
+		padding: 0.55rem 0.75rem 0.6rem;
 	}
-	.brand-mark {
-		display: grid;
-		place-items: center;
-		height: 2.25rem;
-		width: 2.25rem;
-		flex: none;
-		border-radius: 12px;
-		color: #1b75e0;
-		border: 1px solid color-mix(in srgb, #1b75e0 28%, transparent);
-		background: color-mix(in srgb, #1b75e0 12%, white);
-		transition:
-			transform 0.3s ease,
-			box-shadow 0.3s ease;
-		text-decoration: none;
+	@media (min-width: 768px) {
+		.second-row-inner {
+			padding-left: 1.5rem;
+			padding-right: 2.5rem;
+		}
 	}
-	.brand:hover .brand-mark {
-		transform: rotate(-6deg) scale(1.05);
-		box-shadow: 0 10px 22px -12px rgba(15, 179, 163, 0.6);
+
+	.second-row-diagnose {
+		margin-top: 0.55rem;
+		background:
+			linear-gradient(
+				180deg,
+				rgba(125, 195, 255, 0.1) 0%,
+				rgba(242, 247, 252, 0.98) 42%,
+				rgba(242, 247, 252, 0.98) 58%,
+				rgba(125, 195, 255, 0.09) 100%
+			);
+		border-top-color: rgba(125, 195, 255, 0.12);
+	}
+	.second-row-diagnose .sep {
+		color: color-mix(in srgb, #1b75e0 35%, #b3bcc5);
+	}
+	.second-row-diagnose .crumb-link {
+		color: #3969a7;
+	}
+	.second-row-diagnose .crumb-link:hover {
+		color: #1a2530;
+	}
+	.second-row-diagnose .crumb-link.crumb-current,
+	.second-row-diagnose .crumb-current {
+		color: #1a2530;
 	}
 
 	.crumb {
@@ -150,29 +186,17 @@
 		align-items: baseline;
 		gap: 0.45rem;
 		min-width: 0;
+		flex: 1 1 auto;
 		overflow: hidden;
 		white-space: nowrap;
 	}
-	.brand-name {
-		font-size: 1.15rem;
-		letter-spacing: 0.04em;
-		background: linear-gradient(100deg, #1b75e0, #1b75e0);
-		-webkit-background-clip: text;
-		background-clip: text;
-		color: transparent;
-		text-decoration: none;
-		flex: none;
-	}
-	.brand-name:hover {
-		opacity: 0.85;
-	}
 	.sep {
 		color: #b3bcc5;
-		font-size: 1rem;
+		font-size: 0.95rem;
 		flex: none;
 	}
 	.crumb-link {
-		font-size: 1.05rem;
+		font-size: 0.95rem;
 		font-weight: 500;
 		color: #6b7885;
 		text-decoration: none;
@@ -182,7 +206,7 @@
 	}
 	.crumb-link.crumb-current,
 	.crumb-current {
-		font-size: 1.05rem;
+		font-size: 0.95rem;
 		font-weight: 700;
 		color: #1a2530;
 		overflow: hidden;
@@ -205,6 +229,7 @@
 		line-height: 1.25;
 	}
 
+	.action-btn,
 	.actions :global(button),
 	.actions :global(a.action-btn) {
 		cursor: pointer;
@@ -217,11 +242,13 @@
 		font-weight: 500;
 		color: #1a2530;
 		text-decoration: none;
+		white-space: nowrap;
 		transition:
 			background 0.15s ease,
 			border-color 0.15s ease,
 			opacity 0.15s ease;
 	}
+	.action-btn:hover,
 	.actions :global(button:hover:not(:disabled)),
 	.actions :global(a.action-btn:hover) {
 		background: rgba(15, 179, 163, 0.08);

@@ -72,8 +72,15 @@ END $$;
 ALTER TABLE mel_forms DROP CONSTRAINT IF EXISTS mel_forms_project_id_xml_form_id_key;
 ALTER TABLE mel_forms DROP CONSTRAINT IF EXISTS mel_forms_plan_id_xml_form_id_key;
 
-ALTER TABLE mel_forms
-    ADD CONSTRAINT mel_forms_plan_id_xml_form_id_key UNIQUE (plan_id, xml_form_id);
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'mel_forms_plan_id_xml_form_id_key'
+    ) THEN
+        ALTER TABLE mel_forms
+            ADD CONSTRAINT mel_forms_plan_id_xml_form_id_key UNIQUE (plan_id, xml_form_id);
+    END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS mel_forms_plan_id_idx ON mel_forms (plan_id);
 

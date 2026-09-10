@@ -3,12 +3,25 @@
 	import { onMount } from 'svelte';
 	import ModuleHeader from '$lib/shared/components/ModuleHeader.svelte';
 	import LocationPicker from '$lib/shared/components/LocationPicker.svelte';
+	import SearchableSelect from '$lib/shared/components/SearchableSelect.svelte';
 	import WatershedThumb from '$lib/shared/components/WatershedThumb.svelte';
 	import { itemPath } from '$lib/shared/slug.js';
 	import { session } from '$lib/shared/session.svelte.js';
 	import FieldNoteIcon from '$lib/modules/diagnose/components/icons/FieldNoteIcon.svelte';
 	import ObservationZoneIcon from '$lib/modules/diagnose/components/icons/ObservationZoneIcon.svelte';
-	import { createProject, deleteProject, fetchProjects, lookupWatershed } from '$lib/modules/diagnose/api';
+	import { parseAoiFile } from '$lib/modules/diagnose/aoi-parse.js';
+	import {
+		createProject,
+		deleteProject,
+		fetchProjects,
+		fetchVillageDistricts,
+		fetchVillageStates,
+		fetchVillagesByDistrict,
+		fetchWatershedPreviewContext,
+		lookupWatershed,
+		watershedsFromGeometry,
+		watershedsFromVillage
+	} from '$lib/modules/diagnose/api';
 
 	let projects = $state([]);
 	let loading = $state(true);
@@ -18,17 +31,77 @@
 	let name = $state('');
 	let lng = $state(77.2);
 	let lat = $state(28.6);
+	/** @type {'point' | 'village' | 'custom'} */
+	let selectMode = $state('point');
 	let watershedPreview = $state(null);
 	let previewLoading = $state(false);
+	/** @type {'all' | string} — 'all' intersecting micros, or one L12 watershed_id */
+	let microChoice = $state('all');
+	/** @type {Array<object>} */
+	let previewContextLayers = $state([]);
+	let contextLoading = $state(false);
 	let creating = $state(false);
 	let deletingId = $state(null);
+	/** Prevents rapid multi-open which stacks map boots and triggers CF 502s. */
+	let openingId = $state(null);
 	let mounted = $state(false);
+	/** @type {AbortController | null} */
+	let villageAbort = null;
+	/** @type {AbortController | null} */
+	let previewAbort = null;
+	/** @type {AbortController | null} */
+	let pointAbort = null;
+	let previewGen = 0;
+
+	let villageState = $state('');
+	let villageDistrict = $state('');
+	let villageId = $state('');
+	/** @type {string[]} */
+	let stateOptions = $state([]);
+	/** @type {string[]} */
+	let districtOptions = $state([]);
+	/** @type {Array<{ id: string, name: string }>} */
+	let villageOptions = $state([]);
+	/** @type {Map<string, string[]>} */
+	const districtCache = new Map();
+	/** @type {Map<string, Array<{ id: string, name: string }>>} */
+	const villageCache = new Map();
+	let cascadeLoading = $state('');
+	let cascadeError = $state('');
+	let uploadError = $state('');
+	let uploadName = $state('');
+	let coordError = $state('');
+	let coordInput = $state('');
+
+	const stateSelectOptions = $derived(
+		stateOptions.map((s) => ({ value: s, label: titleCase(s) }))
+	);
+	const districtSelectOptions = $derived(
+		districtOptions.map((d) => ({ value: d, label: titleCase(d) }))
+	);
+	const villageSelectOptions = $derived(
+		villageOptions.map((v) => ({ value: String(v.id), label: titleCase(v.name) }))
+	);
+
+	function titleCase(s) {
+		return String(s || '')
+			.split(/\s+/)
+			.map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
+			.join(' ');
+	}
 
 	onMount(() => {
 		loadProjects();
+		void ensureStatesLoaded();
 		mounted = true;
 		document.addEventListener('click', closeMenu);
-		return () => document.removeEventListener('click', closeMenu);
+		return () => {
+			document.removeEventListener('click', closeMenu);
+			// Cancel village resolve / preview-context so leaving create UI
+			// cannot leave GIS work running and 502 the next page.
+			abortInFlightLoads();
+			mounted = false;
+		};
 	});
 
 	function handlePointer(event) {
@@ -42,11 +115,11 @@
 		openMenuId = null;
 	}
 
-	async function loadProjects() {
+	async function loadProjects({ fresh = false } = {}) {
 		loading = true;
 		error = '';
 		try {
-			const data = await fetchProjects();
+			const data = await fetchProjects({ fresh });
 			projects = data.projects ?? [];
 		} catch (err) {
 			error = String(err);
@@ -55,45 +128,453 @@
 		}
 	}
 
-	async function previewWatershed() {
+	function setMode(mode) {
+		selectMode = mode;
+		watershedPreview = null;
+		microChoice = 'all';
+		previewContextLayers = [];
+		previewLoading = false;
+		contextLoading = false;
+		cascadeError = '';
+		uploadError = '';
+		uploadName = '';
+		coordError = '';
+		if (mode === 'point') {
+			coordInput = formatCoordInput(lat, lng);
+		}
+		if (mode === 'village') {
+			ensureStatesLoaded();
+		} else {
+			resetVillageCascade();
+		}
+	}
+
+	const multiMicroParts = $derived(
+		Array.isArray(watershedPreview?.parts) && watershedPreview.parts.length > 1
+			? watershedPreview.parts
+			: []
+	);
+
+	/**
+	 * Apply one-micro vs all-intersecting clip onto the preview payload.
+	 * @param {any} base
+	 * @param {'all' | string} choice
+	 */
+	function withMicroChoice(base, choice) {
+		if (!base || base.error) return base;
+		const parts = Array.isArray(base.parts) ? base.parts : [];
+		if (parts.length <= 1) return base;
+
+		if (choice === 'all' && base.all_geometry) {
+			return {
+				...base,
+				geometry: base.all_geometry,
+				watershed_id: base.all_watershed_id ?? base.watershed_id,
+				watershed_name: base.all_watershed_name ?? base.watershed_name,
+				bounds: base.all_bounds ?? base.bounds
+			};
+		}
+
+		const part = parts.find((p) => String(p.watershed_id) === String(choice));
+		if (!part?.geometry) return base;
+		return {
+			...base,
+			geometry: part.geometry,
+			watershed_id: part.watershed_id,
+			watershed_name: part.watershed_name,
+			bounds: part.bounds ?? base.bounds
+		};
+	}
+
+	/**
+	 * @param {any} result
+	 * @param {'all' | 'point'} defaultMode — village defaults to all; point defaults to clicked L12
+	 */
+	function setWatershedPreview(result, defaultMode = 'all') {
+		const parts = Array.isArray(result?.parts) ? result.parts : [];
+		let choice = 'all';
+		if (parts.length > 1) {
+			if (defaultMode === 'point' && result.watershed_id) {
+				choice = String(result.watershed_id);
+			} else {
+				choice = 'all';
+			}
+		} else if (parts.length === 1) {
+			choice = String(parts[0].watershed_id ?? 'all');
+		}
+		microChoice = choice;
+		const enriched =
+			parts.length > 1 && !result.all_geometry && result.geometry
+				? {
+						...result,
+						all_geometry: result.geometry,
+						all_watershed_id: result.watershed_id,
+						all_watershed_name: result.watershed_name,
+						all_bounds: result.bounds
+					}
+				: result;
+		watershedPreview = withMicroChoice(enriched, choice);
+	}
+
+	function onMicroChoiceChange(choice) {
+		microChoice = choice;
+		if (!watershedPreview || watershedPreview.error) return;
+		watershedPreview = withMicroChoice(watershedPreview, choice);
+		if (watershedPreview.geometry) void loadPreviewContext(watershedPreview.geometry);
+	}
+
+	function abortInFlightLoads() {
+		villageAbort?.abort();
+		previewAbort?.abort();
+		pointAbort?.abort();
+		villageAbort = null;
+		previewAbort = null;
+		pointAbort = null;
+		previewGen += 1;
+		contextLoading = false;
+	}
+
+	async function loadPreviewContext(geometry) {
+		if (!geometry) {
+			previewContextLayers = [];
+			return;
+		}
+		previewAbort?.abort();
+		previewAbort = new AbortController();
+		const { signal } = previewAbort;
+		const gen = ++previewGen;
+		contextLoading = true;
+		try {
+			// Basin / sub-basin / L7 first (fast), then rivers (often the slow GPKG).
+			const fast = await fetchWatershedPreviewContext(geometry, {
+				signal,
+				includeRivers: false
+			});
+			if (gen !== previewGen || signal.aborted) return;
+			previewContextLayers = fast.layers ?? [];
+			const full = await fetchWatershedPreviewContext(geometry, {
+				signal,
+				includeRivers: true
+			});
+			if (gen !== previewGen || signal.aborted) return;
+			previewContextLayers = full.layers ?? previewContextLayers;
+		} catch (err) {
+			if (signal.aborted || (err instanceof Error && err.name === 'AbortError')) return;
+			console.error('Preview context failed', err);
+		} finally {
+			if (gen === previewGen) contextLoading = false;
+		}
+	}
+
+	function resetVillageCascade() {
+		abortInFlightLoads();
+		villageState = '';
+		villageDistrict = '';
+		villageId = '';
+		districtOptions = [];
+		villageOptions = [];
+		cascadeError = '';
+	}
+
+	async function ensureStatesLoaded() {
+		if (stateOptions.length) return;
+		cascadeLoading = 'states';
+		cascadeError = '';
+		try {
+			stateOptions = await fetchVillageStates();
+		} catch (err) {
+			cascadeError = String(err);
+		} finally {
+			cascadeLoading = '';
+		}
+	}
+
+	async function onStateChange(state) {
+		abortInFlightLoads();
+		villageState = state;
+		villageDistrict = '';
+		villageId = '';
+		districtOptions = [];
+		villageOptions = [];
+		watershedPreview = null;
+		previewContextLayers = [];
+		if (!state) return;
+		cascadeError = '';
+		const cached = districtCache.get(state);
+		if (cached) {
+			districtOptions = cached;
+			return;
+		}
+		cascadeLoading = 'districts';
+		try {
+			const rows = await fetchVillageDistricts(state);
+			districtCache.set(state, rows);
+			if (villageState === state) districtOptions = rows;
+		} catch (err) {
+			cascadeError = String(err);
+		} finally {
+			cascadeLoading = '';
+		}
+	}
+
+	async function onDistrictChange(district) {
+		abortInFlightLoads();
+		villageDistrict = district;
+		villageId = '';
+		villageOptions = [];
+		watershedPreview = null;
+		previewContextLayers = [];
+		if (!district || !villageState) return;
+		cascadeError = '';
+		const cacheKey = `${villageState}::${district}`;
+		const cached = villageCache.get(cacheKey);
+		if (cached) {
+			villageOptions = cached;
+			return;
+		}
+		cascadeLoading = 'villages';
+		try {
+			const rows = await fetchVillagesByDistrict(villageState, district);
+			villageCache.set(cacheKey, rows);
+			if (villageState && villageDistrict === district) villageOptions = rows;
+		} catch (err) {
+			cascadeError = String(err);
+		} finally {
+			cascadeLoading = '';
+		}
+	}
+
+	async function onVillageChange(id) {
+		villageId = id;
+		if (!id) {
+			abortInFlightLoads();
+			watershedPreview = null;
+			microChoice = 'all';
+			previewContextLayers = [];
+			return;
+		}
+		const hit = villageOptions.find((v) => v.id === id);
+		previewLoading = true;
+		microChoice = 'all';
+		cascadeError = '';
+		villageAbort?.abort();
+		previewAbort?.abort();
+		villageAbort = new AbortController();
+		const { signal } = villageAbort;
+		try {
+			const result = await watershedsFromVillage({ villageId: id, signal });
+			if (signal.aborted) return;
+			setWatershedPreview(result, 'all');
+			if (result.seed_lng != null) lng = result.seed_lng;
+			if (result.seed_lat != null) lat = result.seed_lat;
+			if (!name.trim() && hit?.name) name = titleCase(hit.name);
+			const geom = watershedPreview?.geometry;
+			if (geom) {
+				previewContextLayers = [];
+				queueMicrotask(() => {
+					void loadPreviewContext(geom);
+				});
+			}
+		} catch (err) {
+			if (signal.aborted || (err instanceof Error && err.name === 'AbortError')) return;
+			watershedPreview = { error: String(err) };
+			previewContextLayers = [];
+		} finally {
+			if (!signal.aborted) previewLoading = false;
+		}
+	}
+
+	function formatCoordInput(latVal, lon) {
+		return `${Number(latVal).toFixed(5)}, ${Number(lon).toFixed(5)}`;
+	}
+
+	/** @param {string} text */
+	function parseLatLngPair(text) {
+		const raw = String(text).trim();
+		if (!raw) return { error: 'Enter latitude and longitude.' };
+		const parts = raw.split(/[,;\s]+/).filter(Boolean);
+		if (parts.length !== 2) {
+			return { error: 'Use latitude, longitude — e.g. 12.9716, 77.5946' };
+		}
+		const a = Number.parseFloat(parts[0]);
+		const b = Number.parseFloat(parts[1]);
+		if (!Number.isFinite(a) || !Number.isFinite(b)) {
+			return { error: 'Enter valid decimal numbers.' };
+		}
+		let latVal = a;
+		let lon = b;
+		// Accept longitude, latitude if the first value cannot be a latitude.
+		if (Math.abs(a) > 90 && Math.abs(b) <= 90) {
+			lon = a;
+			latVal = b;
+		}
+		if (latVal < -90 || latVal > 90) {
+			return { error: 'Latitude must be between −90 and 90.' };
+		}
+		if (lon < -180 || lon > 180) {
+			return { error: 'Longitude must be between −180 and 180.' };
+		}
+		return { lat: latVal, lng: lon };
+	}
+
+	async function previewWatershedFromPoint() {
+		coordInput = formatCoordInput(lat, lng);
 		previewLoading = true;
 		watershedPreview = null;
+		microChoice = 'all';
+		previewContextLayers = [];
+		pointAbort?.abort();
+		pointAbort = new AbortController();
+		const { signal } = pointAbort;
 		try {
-			watershedPreview = await lookupWatershed(lng, lat);
+			const result = await lookupWatershed(lng, lat, { signal });
+			if (signal.aborted) return;
+			setWatershedPreview({ ...result, source: 'point' }, 'point');
+			if (watershedPreview?.geometry) void loadPreviewContext(watershedPreview.geometry);
 		} catch (err) {
+			if (err?.name === 'AbortError' || signal.aborted) return;
+			watershedPreview = { error: String(err) };
+		} finally {
+			if (!signal.aborted) previewLoading = false;
+		}
+	}
+
+	function applyManualCoordinates() {
+		coordError = '';
+		const parsed = parseLatLngPair(coordInput);
+		if (parsed.error) {
+			coordError = parsed.error;
+			return;
+		}
+		lat = parsed.lat;
+		lng = parsed.lng;
+		void previewWatershedFromPoint();
+	}
+
+	function onCoordKeydown(event) {
+		if (event.key === 'Enter') {
+			event.preventDefault();
+			applyManualCoordinates();
+		}
+	}
+
+	async function onAoiFileChange(event) {
+		uploadError = '';
+		uploadName = '';
+		const file = event.currentTarget?.files?.[0];
+		event.currentTarget.value = '';
+		if (!file) return;
+		previewLoading = true;
+		watershedPreview = null;
+		previewContextLayers = [];
+		try {
+			const { geometry, name: aoiName } = await parseAoiFile(file);
+			uploadName = aoiName;
+			const result = await watershedsFromGeometry(geometry, aoiName);
+			watershedPreview = result;
+			if (result.seed_lng != null) lng = result.seed_lng;
+			if (result.seed_lat != null) lat = result.seed_lat;
+			if (result.geometry) void loadPreviewContext(result.geometry);
+		} catch (err) {
+			uploadError = String(err);
 			watershedPreview = { error: String(err) };
 		} finally {
 			previewLoading = false;
 		}
 	}
 
-	function openProject(project) {
+	function openProject(project, { boot = 'opening' } = {}) {
+		// One navigation at a time — opening several projects quickly stacks
+		// prewarm/batch on the API and causes Cloudflare 502s on the next open.
+		if (openingId) return;
+		openingId = project.id;
+		abortInFlightLoads();
+		try {
+			sessionStorage.setItem('diagnose:project-boot', boot);
+		} catch {
+			/* ignore */
+		}
 		goto(itemPath('/diagnose', project, projects));
 	}
 
+	function previewOk() {
+		return Boolean(watershedPreview && !watershedPreview.error && watershedPreview.geometry);
+	}
+
 	async function handleCreate() {
-		if (!name.trim()) return;
+		if (!name.trim() || !previewOk()) return;
 		creating = true;
 		error = '';
+		// Free workers that may still be clipping preview layers.
+		abortInFlightLoads();
 		try {
-			const project = await createProject(name.trim(), lng, lat);
+			sessionStorage.setItem('diagnose:project-boot', 'creating');
+		} catch {
+			/* ignore */
+		}
+		try {
+			const project = await createProject({
+				name: name.trim(),
+				source: selectMode,
+				lng: watershedPreview.seed_lng ?? lng,
+				lat: watershedPreview.seed_lat ?? lat,
+				geometry: watershedPreview.geometry,
+				watershed_id: watershedPreview.watershed_id,
+				watershed_name: watershedPreview.watershed_name
+			});
 			showCreate = false;
 			name = '';
 			watershedPreview = null;
-			await loadProjects();
-			openProject(project);
+			selectMode = 'point';
+			await loadProjects({ fresh: true });
+			openProject(project, { boot: 'creating' });
 		} catch (err) {
 			error = String(err);
-		} finally {
 			creating = false;
+			try {
+				sessionStorage.removeItem('diagnose:project-boot');
+			} catch {
+				/* ignore */
+			}
 		}
+		// Keep creating=true until navigation unmounts this page.
 	}
 
 	function openCreate() {
 		showCreate = true;
 		error = '';
 		watershedPreview = null;
+		microChoice = 'all';
+		previewContextLayers = [];
+		selectMode = 'point';
+		coordError = '';
+		coordInput = formatCoordInput(lat, lng);
+		resetVillageCascade();
+		uploadError = '';
+		uploadName = '';
 	}
+
+	const mapHint = $derived(
+		selectMode === 'point'
+			? 'Click the map or enter coordinates (latitude, longitude). If the point sits in a village with several micro watersheds, choose one or all.'
+			: selectMode === 'village'
+				? 'Choose state → district → village. Use the options on the left to clip to one micro or all intersecting. Blue dashed outline is the selected L12 clip.'
+				: 'Upload a polygon AOI (GeoJSON, KML, or GPX polygon). That shape becomes the clip boundary.'
+	);
+
+	/** Human-readable hierarchy level for the active clip. */
+	const clipLevelLabel = $derived.by(() => {
+		const preview = watershedPreview;
+		if (!preview || preview.error) return null;
+		if (preview.source === 'custom' || preview.watershed_id === 'custom') {
+			return 'Custom AOI';
+		}
+		const n = Array.isArray(preview.parts) ? preview.parts.length : 0;
+		if (microChoice === 'all' && n > 1) {
+			return `Micro watersheds (L12) · ${n} units`;
+		}
+		return 'Micro watershed (L12)';
+	});
 
 	function formatProjectDate(iso) {
 		const d = new Date(iso);
@@ -133,7 +614,7 @@
 		error = '';
 		try {
 			await deleteProject(project.id);
-			await loadProjects();
+			await loadProjects({ fresh: true });
 		} catch (err) {
 			error = String(err);
 		} finally {
@@ -143,72 +624,298 @@
 </script>
 
 <div class="relative min-h-screen bg-transparent font-body">
+	{#if creating}
+		<div
+			class="fixed inset-0 z-[100] flex flex-col items-center justify-center gap-4 bg-white/95 px-6 backdrop-blur-sm"
+			role="status"
+			aria-live="polite"
+			aria-busy="true"
+		>
+			<div
+				class="h-10 w-10 animate-spin rounded-full border-2 border-brand-navy/20 border-t-brand-blue"
+				aria-hidden="true"
+			></div>
+			<p class="m-0 font-headline text-lg font-semibold text-brand-navy">Creating project…</p>
+			<p class="m-0 max-w-sm text-center font-body text-sm text-brand-steel">
+				Saving your watershed, then preparing map layers.
+			</p>
+		</div>
+	{/if}
 	<ModuleHeader title="Diagnose" titleHref="/diagnose" subtitle="Select a project or create a new one to begin mapping." />
 
 	<main class="relative z-10 flex-1 overflow-auto p-6">
 		{#if loading}
 			<p class="text-brand-steel">Loading projects…</p>
 		{:else if showCreate}
-			<div class="mx-auto max-w-2xl rounded-xl bg-white p-6 shadow-sm">
-				<h2 class="m-0 mb-4 font-headline text-lg font-semibold text-brand-navy">New project</h2>
+			<div class="create-shell mx-auto flex min-h-[calc(100vh-7.5rem)] w-full max-w-[1600px] flex-col overflow-hidden rounded-xl bg-white shadow-sm md:flex-row">
+				<aside class="create-side flex w-full flex-col gap-4 overflow-y-auto border-brand-navy/10 p-5 md:w-1/4 md:border-r">
+					<h2 class="m-0 font-headline text-lg font-semibold text-brand-navy">New project</h2>
 
-				<label class="mb-1 block font-body text-sm font-medium text-brand-navy" for="proj-name"
-					>Project name</label
-				>
-				<input
-					id="proj-name"
-					type="text"
-					class="mb-4 w-full rounded border border-brand-navy/20 px-3 py-2 font-body"
-					bind:value={name}
-					placeholder="e.g. North basin survey"
-				/>
+					<label class="block font-body text-sm font-medium text-brand-navy" for="proj-name"
+						>Project name</label
+					>
+					<input
+						id="proj-name"
+						type="text"
+						class="w-full rounded border border-brand-navy/20 px-3 py-2 font-body"
+						bind:value={name}
+						placeholder="e.g. North basin survey"
+					/>
 
-				<div class="mb-4 h-80">
-					<LocationPicker bind:lng bind:lat onPick={previewWatershed} />
-				</div>
+					<div class="flex flex-wrap gap-2" role="tablist" aria-label="Watershed selection mode">
+						{#each [
+							{ id: 'point', label: 'Map click' },
+							{ id: 'village', label: 'Village' },
+							{ id: 'custom', label: 'Upload AOI' }
+						] as mode}
+							<button
+								type="button"
+								role="tab"
+								aria-selected={selectMode === mode.id}
+								class="mode-tab"
+								class:active={selectMode === mode.id}
+								onclick={() => setMode(mode.id)}
+							>
+								{mode.label}
+							</button>
+						{/each}
+					</div>
 
-				<div class="mb-4 rounded-lg bg-brand-sky/20 p-3 font-body text-sm">
-					{#if previewLoading}
-						<p class="m-0 text-brand-steel">Looking up watershed…</p>
-					{:else if watershedPreview?.error}
-						<p class="m-0 text-red-600">{watershedPreview.error}</p>
-					{:else if watershedPreview}
-						<p class="m-0 font-medium text-brand-navy">Watershed: {watershedPreview.watershed_name}</p>
-						<p class="m-0 mt-1 text-brand-steel">ID: {watershedPreview.watershed_id}</p>
-					{:else}
-						<p class="m-0 text-brand-steel">
-							Click the map to detect the watershed at that location.
-						</p>
+					{#if selectMode === 'point'}
+						<div class="grid gap-2">
+							<div>
+								<label class="mb-1 block font-body text-sm font-medium text-brand-navy" for="coord-input"
+									>Coordinates (lat, lng)</label
+								>
+								<input
+									id="coord-input"
+									type="text"
+									inputmode="decimal"
+									autocomplete="off"
+									class="w-full rounded border border-brand-navy/20 px-3 py-2 font-body"
+									bind:value={coordInput}
+									onkeydown={onCoordKeydown}
+									placeholder="e.g. 12.9716, 77.5946"
+								/>
+							</div>
+							<button
+								type="button"
+								class="cursor-pointer rounded bg-brand-blue px-4 py-2 font-body text-sm text-white disabled:opacity-60"
+								disabled={previewLoading}
+								onclick={applyManualCoordinates}
+							>
+								{previewLoading ? 'Finding…' : 'Find watershed'}
+							</button>
+						</div>
+						{#if coordError}
+							<p class="m-0 text-xs text-red-600">{coordError}</p>
+						{/if}
+					{:else if selectMode === 'village'}
+						<div class="grid gap-3">
+							<SearchableSelect
+								id="village-state"
+								label="State"
+								placeholder="Select state…"
+								options={stateSelectOptions}
+								bind:value={villageState}
+								loading={cascadeLoading === 'states'}
+								disabled={cascadeLoading === 'states'}
+								onChange={onStateChange}
+							/>
+							<SearchableSelect
+								id="village-district"
+								label="District"
+								placeholder="Select district…"
+								options={districtSelectOptions}
+								bind:value={villageDistrict}
+								loading={cascadeLoading === 'districts'}
+								disabled={!villageState || cascadeLoading === 'districts'}
+								onChange={onDistrictChange}
+							/>
+							<SearchableSelect
+								id="village-name"
+								label="Village"
+								placeholder="Select village…"
+								options={villageSelectOptions}
+								bind:value={villageId}
+								loading={cascadeLoading === 'villages'}
+								disabled={!villageDistrict || cascadeLoading === 'villages'}
+								emptyText="No villages in this district"
+								onChange={onVillageChange}
+							/>
+						</div>
+						{#if cascadeError}
+							<p class="m-0 text-xs text-red-600">{cascadeError}</p>
+						{/if}
+					{:else if selectMode === 'custom'}
+						<div>
+							<label class="mb-1 block font-body text-sm font-medium text-brand-navy" for="aoi-file"
+								>AOI file</label
+							>
+							<input
+								id="aoi-file"
+								type="file"
+								accept=".geojson,.json,.kml,.gpx,application/geo+json,application/json,application/vnd.google-earth.kml+xml"
+								class="block w-full font-body text-sm"
+								onchange={onAoiFileChange}
+							/>
+							<p class="m-0 mt-1 text-xs text-brand-steel">
+								GeoJSON, KML, or GPX polygon. The uploaded shape is used as the clip boundary.
+							</p>
+							{#if uploadName}
+								<p class="m-0 mt-1 text-xs text-brand-navy">Loaded: {uploadName}</p>
+							{/if}
+							{#if uploadError}
+								<p class="m-0 mt-1 text-xs text-red-600">{uploadError}</p>
+							{/if}
+						</div>
 					{/if}
-				</div>
 
-				{#if error}
-					<p class="mb-3 text-sm text-red-600">{error}</p>
-				{/if}
+					<div class="rounded-lg bg-brand-sky/20 p-3 font-body text-sm">
+						{#if previewLoading}
+							<p class="m-0 text-brand-steel">Resolving clip area…</p>
+						{:else if watershedPreview?.error}
+							<p class="m-0 text-red-600">{watershedPreview.error}</p>
+						{:else if watershedPreview}
+							<p class="m-0 text-[11px] font-semibold uppercase tracking-wide text-brand-navy/55">
+								Clip level
+							</p>
+							<p class="m-0 mt-0.5 font-medium text-brand-navy">{clipLevelLabel}</p>
+							<p class="m-0 mt-2 text-[11px] font-semibold uppercase tracking-wide text-brand-navy/55">
+								Watershed ID
+							</p>
+							<p class="m-0 mt-0.5 break-all font-mono text-sm text-brand-navy">
+								{watershedPreview.watershed_id}
+							</p>
+							{#if watershedPreview.watershed_name && String(watershedPreview.watershed_name) !== String(watershedPreview.watershed_id)}
+								<p class="m-0 mt-2 text-[11px] font-semibold uppercase tracking-wide text-brand-navy/55">
+									Name
+								</p>
+								<p class="m-0 mt-0.5 text-sm text-brand-steel">{watershedPreview.watershed_name}</p>
+							{/if}
+							{#if watershedPreview.village_name}
+								<p class="m-0 mt-2 text-brand-steel">
+									Village: {watershedPreview.village_name}
+									{#if watershedPreview.village_geometry}
+										<span class="text-brand-navy"> — grey dotted outline on the map</span>
+									{/if}
+								</p>
+							{/if}
+							{#if multiMicroParts.length}
+								<div class="mt-3 space-y-2 border-t border-brand-navy/10 pt-3">
+									<p class="m-0 text-xs font-medium uppercase tracking-wide text-brand-navy">
+										Clip area ({multiMicroParts.length} micro watersheds)
+									</p>
+									<label class="flex cursor-pointer items-start gap-2 text-sm text-brand-navy">
+										<input
+											type="radio"
+											name="micro-choice"
+											class="mt-1"
+											checked={microChoice === 'all'}
+											onchange={() => onMicroChoiceChange('all')}
+										/>
+										<span>
+											<span class="font-medium">All intersecting micros</span>
+											<span class="block text-xs text-brand-steel">
+												Union of every L12 that intersects the village (map clip).
+											</span>
+										</span>
+									</label>
+									{#each multiMicroParts as part (part.watershed_id)}
+										<label class="flex cursor-pointer items-start gap-2 text-sm text-brand-navy">
+											<input
+												type="radio"
+												name="micro-choice"
+												class="mt-1"
+												checked={String(microChoice) === String(part.watershed_id)}
+												onchange={() => onMicroChoiceChange(String(part.watershed_id))}
+											/>
+											<span>
+												<span class="font-medium">{part.watershed_name || 'Micro watershed'}</span>
+												<span class="block font-mono text-[11px] text-brand-steel">
+													{part.watershed_id}
+												</span>
+											</span>
+										</label>
+									{/each}
+								</div>
+							{:else if watershedPreview.parts?.length === 1}
+								<p class="m-0 mt-1 text-brand-steel">
+									1 micro watershed (L12)
+									{#if watershedPreview.village_geometry}
+										— grey dotted outline is the village boundary.
+									{/if}
+								</p>
+							{/if}
+							{#if contextLoading}
+								<p class="m-0 mt-1 text-brand-steel">Loading rivers / basin context…</p>
+							{/if}
+						{:else}
+							<p class="m-0 text-brand-steel">{mapHint}</p>
+						{/if}
+					</div>
 
-				<div class="flex gap-2">
-					<button
-						class="cursor-pointer rounded bg-brand-blue px-4 py-2 font-body text-white disabled:opacity-60"
-						disabled={creating || !name.trim()}
-						onclick={handleCreate}
-					>
-						{creating ? 'Creating…' : 'Create project'}
-					</button>
-					<button
-						class="cursor-pointer rounded bg-brand-steel px-4 py-2 font-body text-white hover:bg-brand-navy"
-						onclick={() => (showCreate = false)}
-					>
-						Cancel
-					</button>
-				</div>
+					{#if error}
+						<p class="m-0 text-sm text-red-600">{error}</p>
+					{/if}
+
+					<div class="mt-auto flex flex-wrap gap-2 pt-2">
+						<button
+							class="cursor-pointer rounded bg-brand-blue px-4 py-2 font-body text-white disabled:opacity-60"
+							disabled={creating || !name.trim() || !previewOk()}
+							onclick={handleCreate}
+						>
+							{creating ? 'Creating…' : 'Create project'}
+						</button>
+						<button
+							class="cursor-pointer rounded bg-brand-steel px-4 py-2 font-body text-white hover:bg-brand-navy"
+							onclick={() => (showCreate = false)}
+						>
+							Cancel
+						</button>
+					</div>
+				</aside>
+
+				<section class="create-map flex min-h-[24rem] w-full flex-1 flex-col p-4 md:w-3/4 md:flex-none md:self-stretch">
+					<LocationPicker
+						bind:lng
+						bind:lat
+						onPick={selectMode === 'point' ? previewWatershedFromPoint : undefined}
+						clipGeometry={watershedPreview?.geometry ?? null}
+						villageGeometry={watershedPreview?.village_geometry ?? null}
+						villageName={watershedPreview?.village_name ?? null}
+						parts={watershedPreview?.parts ?? null}
+						selectedPartId={multiMicroParts.length ? microChoice : null}
+						contextLayers={previewContextLayers}
+						interactiveClick={selectMode === 'point'}
+						showMarker={selectMode === 'point'}
+						hint={mapHint}
+					/>
+				</section>
 			</div>
 		{:else}
 			{#if error}
 				<p class="mb-4 text-sm text-red-600">{error}</p>
 			{/if}
 
+			{#if openingId}
+				<div
+					class="mb-4 flex items-center gap-3 rounded-xl border border-brand-blue/20 bg-brand-sky/15 px-4 py-3 font-body text-sm text-brand-navy"
+					role="status"
+					aria-live="polite"
+				>
+					<span
+						class="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-brand-navy/20 border-t-brand-blue"
+						aria-hidden="true"
+					></span>
+					<span>Opening project… wait until it loads before opening another.</span>
+				</div>
+			{/if}
+
 			<div
 				class="grid gap-6"
+				class:pointer-events-none={!!openingId}
+				class:opacity-60={!!openingId}
 				style="grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr));"
 			>
 				<button
@@ -216,6 +923,7 @@
 					class="card card-new group"
 					class:in={mounted}
 					style="--accent: #1b75e0; --delay: 0ms;"
+					disabled={!!openingId}
 					onpointermove={handlePointer}
 					onclick={openCreate}
 				>
@@ -242,12 +950,16 @@
 					<div
 						class="card group"
 						class:in={mounted}
+						class:ring-2={openingId === project.id}
+						class:ring-brand-blue={openingId === project.id}
 						style="--accent: #1b75e0; --delay: {(i + 1) * 70}ms;"
 						role="button"
-						tabindex="0"
+						tabindex={openingId ? -1 : 0}
+						aria-disabled={!!openingId}
 						onpointermove={handlePointer}
 						onclick={() => openProject(project)}
 						onkeydown={(e) => {
+							if (openingId) return;
 							if (e.key === 'Enter' || e.key === ' ') {
 								e.preventDefault();
 								openProject(project);
@@ -552,6 +1264,27 @@
 	}
 	.menu-item-danger:hover {
 		background: #fef2f2;
+	}
+
+	.mode-tab {
+		cursor: pointer;
+		border-radius: 999px;
+		border: 1px solid rgba(0, 48, 109, 0.2);
+		background: white;
+		padding: 0.4rem 0.9rem;
+		font-family: inherit;
+		font-size: 0.8125rem;
+		color: #56646f;
+	}
+	.mode-tab.active {
+		border-color: #1b75e0;
+		background: color-mix(in srgb, #1b75e0 12%, white);
+		color: #00306d;
+		font-weight: 600;
+	}
+
+	.create-map :global(.maplibregl-map) {
+		min-height: 100%;
 	}
 
 	@media (prefers-reduced-motion: reduce) {

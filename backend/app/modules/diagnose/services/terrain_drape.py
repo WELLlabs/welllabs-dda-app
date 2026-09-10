@@ -14,7 +14,7 @@ from rasterio.transform import from_bounds
 from shapely.geometry import shape
 
 from app.modules.diagnose.services.layer_analysis import (
-    _clip_to_watershed,
+    _clip_vector_to_watershed,
     _find_column,
     _normalize_gw,
     _normalize_rank,
@@ -341,11 +341,13 @@ def _prepare_style_column(gdf, layer_cfg: LayerConfig):
     gdf = gdf.copy()
     atype = layer_cfg.analysis_type or ""
 
-    if column in gdf.columns and gdf[column].notna().any():
+    if (
+        atype != "wiser_rank"
+        and column in gdf.columns
+        and gdf[column].notna().any()
+    ):
         if atype == "wiser_gw_stress":
             gdf[column] = gdf[column].apply(_normalize_gw)
-        elif atype == "wiser_rank":
-            gdf[column] = gdf[column].apply(_normalize_rank)
         return gdf, column
 
     if atype == "wiser_gw_stress":
@@ -358,18 +360,14 @@ def _prepare_style_column(gdf, layer_cfg: LayerConfig):
         if col:
             gdf[column] = gdf[col].apply(_normalize_gw)
     elif atype == "wiser_rank":
-        # Match frontend: each WISER rank layer has its own source column
-        if column == "__wiser_irrigation_access_class":
-            preferred = ("Irr_access", column)
-        elif column == "__wiser_kharif_resilience_class":
-            preferred = ("Kharif_res", column)
-        elif column == "__wiser_rabi_resilience_class":
-            preferred = ("Rabi_res", column)
-        else:
-            preferred = (column, "Irr_access", "Kharif_res", "Rabi_res")
-        col = _find_column(gdf, *preferred)
+        # Always prefer the layer-specific source field over a prefilled style_column.
+        from app.modules.diagnose.services.layer_analysis import wiser_rank_source_columns
+
+        col = _find_column(gdf, *wiser_rank_source_columns(column))
         if col:
             gdf[column] = gdf[col].apply(_normalize_rank)
+        elif column in gdf.columns:
+            gdf[column] = gdf[column].apply(_normalize_rank)
     elif atype == "aquifers":
         col = _find_column(gdf, "aquifer", "Major_Aqui", "aquifers")
         if col:
@@ -384,6 +382,27 @@ def _prepare_style_column(gdf, layer_cfg: LayerConfig):
                 gdf[column] = ((gdf[sc].fillna(0) + gdf[st].fillna(0)) / pop_v) * 100
             else:
                 gdf[column] = np.nan
+    elif atype == "demographics_literacy" or column == "pct_literate":
+        if column not in gdf.columns or gdf[column].isna().all():
+            literate = _find_column(gdf, "Total_Lite", "total_lite", "Total_Liter")
+            pop = _find_column(gdf, "Total_Popu", "TOT_P", "population")
+            if literate and pop:
+                pop_v = gdf[pop].replace(0, np.nan)
+                gdf[column or "pct_literate"] = (gdf[literate].fillna(0) / pop_v) * 100
+            else:
+                gdf[column or "pct_literate"] = np.nan
+    elif atype == "vector_soil" or column == "__soil_texture_class":
+        col = _find_column(
+            gdf,
+            column or "__soil_texture_class",
+            "Texture",
+            search_terms=("texture", "soil", "type", "class", "desc", "grid", "code"),
+        )
+        target = column or "__soil_texture_class"
+        if col:
+            from app.modules.diagnose.services.layer_analysis import normalize_soil_label
+
+            gdf[target] = gdf[col].apply(normalize_soil_label)
     elif column and column not in gdf.columns:
         # leave missing — rasterize will use default
         pass
@@ -403,7 +422,7 @@ def render_vector_drape(
     west, south, east, north = bounds
     bbox = _watershed_bbox(watershed_geom)
     gdf = _read_vector_gdf_bbox(s3_key, bbox)
-    clipped = _clip_to_watershed(gdf, watershed_geom)
+    clipped = _clip_vector_to_watershed(gdf, watershed_geom, layer_cfg)
     if clipped.empty:
         return _png_rgba(np.zeros((rows, cols, 4), dtype=np.uint8))
 
@@ -729,7 +748,7 @@ def render_drape_grid(
     if layer_cfg.source == "vector_fgb":
         bbox = _watershed_bbox(watershed_geom)
         gdf = _read_vector_gdf_bbox(layer_cfg.s3_key, bbox)
-        clipped = _clip_to_watershed(gdf, watershed_geom)
+        clipped = _clip_vector_to_watershed(gdf, watershed_geom, layer_cfg)
         empty = {
             "values": [[None] * cols for _ in range(rows)],
             "colorscale": [[0.0, "#cccccc"], [1.0, "#cccccc"]],

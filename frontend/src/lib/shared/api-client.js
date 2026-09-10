@@ -5,15 +5,43 @@ async function parseErrorMessage(res) {
 	if (text.includes('error code: 1101') || text.includes('Worker threw exception')) {
 		return (
 			'Cloudflare Worker error (1101): POST requests to the API are blocked. ' +
-			'An admin must disable or fix the Worker on ai.welllabs.org (see devops/cloudflare/README.md).'
+			'An admin must disable or fix the Worker on beta.welllabs.org (see devops/cloudflare/README.md).'
 		);
+	}
+	if (
+		res.status === 502 ||
+		res.status === 503 ||
+		res.status === 504 ||
+		/bad gateway|504: gateway time-out|cloudflare|service unavailable/i.test(text)
+	) {
+		if (text.trimStart().startsWith('<!') || /cf-error-details|Bad gateway/i.test(text)) {
+			return (
+				`Upstream API error (${res.status}): the server timed out or crashed while ` +
+				'resolving this location. Try another nearby point, or retry in a moment.'
+			);
+		}
+		// JSON 503 from our own hard timeouts — clearer than Cloudflare HTML.
+		if (res.status === 503) {
+			try {
+				const json = JSON.parse(text);
+				if (json.detail) {
+					return typeof json.detail === 'string' ? json.detail : JSON.stringify(json.detail);
+				}
+			} catch {
+				/* fall through */
+			}
+			return 'Server is busy — retry in a moment.';
+		}
 	}
 	let message = text || res.statusText;
 	try {
 		const json = JSON.parse(text);
 		if (json.detail) message = typeof json.detail === 'string' ? json.detail : JSON.stringify(json.detail);
 	} catch {
-		// keep raw text
+		// keep raw text — but never dump full HTML pages into the UI
+		if (text.trimStart().startsWith('<!')) {
+			message = `Request failed (${res.status} ${res.statusText || 'error'})`;
+		}
 	}
 	return message;
 }
@@ -22,10 +50,14 @@ async function parseErrorMessage(res) {
  * Build a `request(path, init)` helper scoped to a module's API base path
  * (e.g. `/api/diagnose`), with consistent JSON + error handling.
  * @param {string} basePath
+ * @param {{ retries?: number, retryDelayMs?: number }} [defaults]
  */
-export function createApiClient(basePath) {
+export function createApiClient(basePath, defaults = {}) {
+	const defaultRetries = defaults.retries ?? 0;
+	const defaultDelay = defaults.retryDelayMs ?? 700;
+
 	return async function request(path, init = {}) {
-		const { headers, ...rest } = init;
+		const { headers, retries = defaultRetries, retryDelayMs = defaultDelay, ...rest } = init;
 		/** @type {RequestInit} */
 		const opts = {
 			credentials: 'include',
@@ -34,12 +66,37 @@ export function createApiClient(basePath) {
 		if (headers !== undefined) {
 			opts.headers = headers;
 		}
-		const res = await fetch(`${basePath}${path}`, opts);
-		if (!res.ok) {
-			throw new Error(await parseErrorMessage(res));
+
+		let lastError = null;
+		const attempts = Math.max(1, Number(retries) + 1);
+		for (let attempt = 0; attempt < attempts; attempt++) {
+			try {
+				const res = await fetch(`${basePath}${path}`, opts);
+				if (!res.ok) {
+					const message = await parseErrorMessage(res);
+					const retryable = res.status === 502 || res.status === 503 || res.status === 504;
+					if (retryable && attempt < attempts - 1 && !opts.signal?.aborted) {
+						await new Promise((r) => setTimeout(r, retryDelayMs * (attempt + 1)));
+						continue;
+					}
+					throw new Error(message);
+				}
+				if (res.status === 204) return undefined;
+				return res.json();
+			} catch (err) {
+				lastError = err;
+				if (err?.name === 'AbortError' || opts.signal?.aborted) throw err;
+				const msg = err instanceof Error ? err.message : String(err);
+				const retryable =
+					/502|503|504|timed out|Bad gateway|Failed to fetch|NetworkError/i.test(msg);
+				if (retryable && attempt < attempts - 1) {
+					await new Promise((r) => setTimeout(r, retryDelayMs * (attempt + 1)));
+					continue;
+				}
+				throw err;
+			}
 		}
-		if (res.status === 204) return undefined;
-		return res.json();
+		throw lastError ?? new Error('Request failed');
 	};
 }
 

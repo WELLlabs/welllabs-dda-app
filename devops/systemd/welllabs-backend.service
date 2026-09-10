@@ -26,6 +26,9 @@ ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=5
 
+# Cold import (GDAL/rasterio) + 2 workers can exceed the default 90s start budget
+# on a thrashing host after a failed deploy — that fails CodeDeploy health.
+TimeoutStartSec=180
 # Packaging / QField sync can be long-running
 TimeoutStopSec=60
 

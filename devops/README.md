@@ -22,7 +22,8 @@ devops/
 ```
 
 Root `appspec.yml` wires the four hooks. Pipeline name (dev):
-`well-labs-dda-product-dev-pipeline` (ap-south-1). Push to `dev` triggers deploy.
+`well-labs-dda-product-dev-pipeline` (ap-south-1). Push to `dev` triggers deploy to
+**https://beta.welllabs.org/wst** (prod is `main` → **https://ai.welllabs.org/wst**).
 
 ## Production URL map
 
@@ -38,10 +39,11 @@ Root `appspec.yml` wires the four hooks. Pipeline name (dev):
 on this host crashes **POST** to `/wst/api/*` (error 1101). Details:
 [cloudflare/README.md](cloudflare/README.md).
 
-Google OAuth redirect URI:
+Google OAuth redirect URIs (register both in Google Cloud Console):
 
 ```
-https://ai.welllabs.org/wst/backend/accounts/auth/google/callback
+https://beta.welllabs.org/wst/backend/accounts/auth/google/callback   # dev secret
+https://ai.welllabs.org/wst/backend/accounts/auth/google/callback     # prod secret
 ```
 
 Env on the host (from Secrets Manager + defaults in `after_install.sh`):

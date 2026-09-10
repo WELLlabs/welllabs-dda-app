@@ -35,25 +35,24 @@
 		await session.logout();
 		goto(appPath('/'));
 	}
-
 </script>
 
 {#if session.user}
 	<div class="relative" bind:this={menuEl}>
-		<button
-			type="button"
-			class="user"
-			onclick={toggle}
-			aria-label="Account menu"
-		>
-			<span class="avatar">{(session.user.name ?? 'DD').trim().split(/\s+/)
-			.map((p) => p[0])
-			.slice(0, 2)
-			.join('')
-			.toUpperCase()}</span>
+		<button type="button" class="user" onclick={toggle} aria-label="Account menu">
+			<span class="avatar"
+				>{(session.user.name ?? 'DD')
+					.trim()
+					.split(/\s+/)
+					.map((p) => p[0])
+					.slice(0, 2)
+					.join('')
+					.toUpperCase()}</span
+			>
 			<span class="hidden text-left sm:block">
-				<span class="block font-body text-[13px] leading-tight user-name">{session.user.name || 'Guest'}</span>
-				
+				<span class="user-name block font-body text-[13px] leading-tight"
+					>{session.user.name || 'Guest'}</span
+				>
 			</span>
 			<svg
 				viewBox="0 0 24 24"
@@ -68,20 +67,13 @@
 
 		{#if open}
 			<div class="menu">
-				<button
-					type="button"
-					class="menu-item"
-					onclick={() => nav('/settings/organizations')}
-				>
-					Organizations
+				<button type="button" class="menu-item" onclick={() => nav('/settings/organizations')}>
+					Organisations
 				</button>
-				<button
-					type="button"
-					class="menu-item"
-					onclick={() => nav('/settings/connectors')}
-				>
+				<button type="button" class="menu-item" onclick={() => nav('/settings/connectors')}>
 					Connectors
 				</button>
+				<button type="button" class="menu-item" onclick={() => nav('/settings')}> Settings </button>
 				<div class="menu-sep"></div>
 				<button type="button" class="menu-item danger" onclick={handleSignOut}>Sign out</button>
 			</div>
@@ -99,7 +91,9 @@
 		border: 1px solid transparent;
 		background: none;
 		cursor: pointer;
-		transition: border-color 0.25s ease, background 0.25s ease;
+		transition:
+			border-color 0.25s ease,
+			background 0.25s ease;
 	}
 
 	.user:hover {
@@ -111,10 +105,6 @@
 		color: #1a2530;
 	}
 
-	.user-role {
-		color: #7a8794;
-	}
-
 	.chev {
 		color: #7a8794;
 		transition: transform 0.25s ease;
@@ -123,67 +113,52 @@
 	.avatar {
 		display: grid;
 		place-items: center;
-		height: 2.1rem;
-		width: 2.1rem;
-		border-radius: 10px;
-		font-family: var(--font-mono, monospace);
-		font-size: 12px;
-		font-weight: 600;
-		color: #ffffff;
-		background: linear-gradient(135deg, #1b75e0, #1b75e0);
-		box-shadow: 0 6px 16px -8px rgba(124, 92, 230, 0.55);
+		height: 2rem;
+		width: 2rem;
+		border-radius: 9999px;
+		background: color-mix(in srgb, #1b75e0 16%, white);
+		color: #1b75e0;
+		font-size: 0.7rem;
+		font-weight: 700;
+		letter-spacing: 0.02em;
 	}
 
 	.menu {
 		position: absolute;
 		right: 0;
-		top: calc(100% + 0.5rem);
-		min-width: 11rem;
-		padding: 0.4rem;
-		border-radius: 14px;
-		border: 1px solid rgba(20, 40, 60, 0.08);
-		background: #ffffff;
-		box-shadow: 0 20px 45px -20px rgba(20, 40, 60, 0.35);
-		animation: pop 0.18s ease;
-	}
-
-	@keyframes pop {
-		from {
-			opacity: 0;
-			transform: translateY(-6px) scale(0.98);
-		}
-		to {
-			opacity: 1;
-			transform: none;
-		}
+		top: calc(100% + 0.4rem);
+		z-index: 50;
+		min-width: 11.5rem;
+		overflow: hidden;
+		border-radius: 12px;
+		border: 1px solid rgba(20, 40, 60, 0.1);
+		background: white;
+		box-shadow: 0 16px 40px -24px rgba(20, 40, 60, 0.45);
+		padding: 0.35rem;
 	}
 
 	.menu-item {
 		display: block;
 		width: 100%;
-		padding: 0.5rem 0.7rem;
 		border: 0;
-		border-radius: 9px;
-		background: transparent;
-		font-family: var(--font-body, sans-serif);
-		font-size: 13px;
+		background: none;
+		border-radius: 8px;
+		padding: 0.55rem 0.7rem;
 		text-align: left;
-		color: #24303a;
-		transition: background 0.2s ease;
+		font-family: inherit;
+		font-size: 0.8125rem;
+		color: #1a2530;
 		cursor: pointer;
 	}
-
 	.menu-item:hover {
 		background: rgba(20, 40, 60, 0.05);
 	}
-
 	.menu-item.danger {
-		color: #d64545;
+		color: #b42318;
 	}
-
 	.menu-sep {
 		height: 1px;
-		margin: 0.3rem 0;
+		margin: 0.3rem 0.4rem;
 		background: rgba(20, 40, 60, 0.08);
 	}
 </style>

@@ -5,6 +5,24 @@ echo "=== ApplicationStart: Zero-downtime reload ==="
 # Last-resort: never leave origin without nginx if this script exits early.
 trap 'nginx -t 2>/dev/null && systemctl start nginx 2>/dev/null || true' EXIT
 
+wait_for_backend_health() {
+    local max_attempts="${1:-24}"
+    local interval="${2:-5}"
+    local attempt=1
+    while [ "$attempt" -le "$max_attempts" ]; do
+        RESPONSE=$(curl -s -w $'\n%{http_code}' --max-time 5 http://127.0.0.1:8080/health 2>/dev/null || printf '\n000')
+        HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+        HEALTH_BODY=$(echo "$RESPONSE" | sed '$d')
+        echo "  Backend health attempt $attempt/$max_attempts → HTTP $HTTP_CODE body=${HEALTH_BODY}"
+        if [ "$HTTP_CODE" -eq 200 ] && echo "$HEALTH_BODY" | grep -q '"ok"'; then
+            return 0
+        fi
+        sleep "$interval"
+        attempt=$((attempt + 1))
+    done
+    return 1
+}
+
 ensure_nginx() {
     echo "→ Ensuring Nginx is running with latest config..."
     if ! nginx -t; then
@@ -42,15 +60,31 @@ echo "→ Restarting FastAPI backend (uvicorn)..."
 if ! systemctl is-enabled --quiet welllabs-backend.service; then
     systemctl enable welllabs-backend.service
 fi
-systemctl restart welllabs-backend.service
 
-sleep 10
-if ! systemctl is-active --quiet welllabs-backend.service; then
-    echo "ERROR: Backend failed to start. Journal logs:"
-    journalctl -u welllabs-backend.service --no-pager -n 50
+# Hard reset: a wedged prior deploy (e.g. workers=4 + exhausted Postgres) leaves
+# orphan uvicorn processes holding :8080 and DB connections. Soft restart alone
+# then fails health → CodeDeploy HEALTH_CONSTRAINTS → rollback to the bad build.
+echo "  Stopping backend and clearing orphans on :8080..."
+systemctl stop welllabs-backend.service 2>/dev/null || true
+sleep 2
+fuser -k 8080/tcp 2>/dev/null || true
+pkill -f 'uvicorn app.main:app' 2>/dev/null || true
+rm -f /tmp/welllabs-village-warm.lock
+sleep 1
+
+systemctl start welllabs-backend.service
+
+if ! wait_for_backend_health 36 5; then
+    echo "ERROR: Backend did not become healthy on :8080/health. Journal logs:"
+    journalctl -u welllabs-backend.service --no-pager -n 80
     exit 1
 fi
-echo "  ✓ Backend is active."
+if ! systemctl is-active --quiet welllabs-backend.service; then
+    echo "ERROR: Backend service is not active after health check. Journal logs:"
+    journalctl -u welllabs-backend.service --no-pager -n 80
+    exit 1
+fi
+echo "  ✓ Backend is healthy."
 
 # ──────────────────────────────────────
 # Frontend: Node.js / SvelteKit

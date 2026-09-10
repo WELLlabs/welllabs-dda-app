@@ -13,6 +13,7 @@
 	},
 	"devDependencies": {
 		"@sveltejs/adapter-auto": "^7.0.1",
+		"@sveltejs/adapter-node": "^5.2.11",
 		"@sveltejs/kit": "^2.63.0",
 		"@sveltejs/vite-plugin-svelte": "^7.1.2",
 		"@tailwindcss/vite": "^4.3.1",
@@ -25,14 +26,15 @@
 		"svelte": "^5.56.1",
 		"tailwindcss": "^4.3.1",
 		"vite": "^8.0.16",
-		"vitest": "^4.1.10",
-		"@sveltejs/adapter-node": "^5.2.11"
+		"vitest": "^4.1.10"
 	},
 	"dependencies": {
 		"@mapbox/mapbox-gl-draw": "^1.5.1",
+		"@tmcw/togeojson": "^7.1.2",
 		"d3": "^7.9.0",
 		"flatgeobuf": "^4.4.0",
 		"maplibre-gl": "^5.24.0",
+		"marked": "^18.0.12",
 		"motion": "^12.42.2",
 		"qrcode": "^1.5.4"
 	}

@@ -5,8 +5,10 @@
 	import MapView from '$lib/modules/diagnose/components/MapView.svelte';
 	import PackageProgressPanel from '$lib/shared/components/PackageProgressPanel.svelte';
 	import ModuleHeader from '$lib/shared/components/ModuleHeader.svelte';
+	import { onDestroy } from 'svelte';
 	import {
 		fetchProjects,
+		fetchProject,
 		packageToQfieldStream,
 		syncFromQfieldStream
 	} from '$lib/modules/diagnose/api';
@@ -33,24 +35,38 @@
 	let showPanel = $state(false);
 	/** @type {AbortController | null} */
 	let opAbort = null;
+	/** @type {AbortController | null} */
+	let loadAbort = null;
+	let loadGen = 0;
 
 	async function loadProject(slugValue) {
+		const gen = ++loadGen;
+		loadAbort?.abort();
+		loadAbort = new AbortController();
+		const { signal } = loadAbort;
+
 		loading = true;
 		loadError = '';
 		currentProject = null;
 		try {
-			const data = await fetchProjects();
+			// Slim list for slug→id only (no full-precision watershed geoms).
+			const data = await fetchProjects({ signal });
+			if (signal.aborted || gen !== loadGen) return;
 			const match = findBySlug(data.projects ?? [], slugValue);
 			if (!match) {
 				loadError = 'Project not found';
 				return;
 			}
-			// fetchProjects() already returns the full project shape (_SELECT).
-			currentProject = match;
+			// Full project (precise watershed_geometry) for the map.
+			currentProject = await fetchProject(match.id, { signal });
 		} catch (err) {
-			loadError = String(err);
+			if (err?.name === 'AbortError' || signal.aborted || gen !== loadGen) return;
+			const raw = err instanceof Error ? err.message : String(err);
+			loadError = /502|503|504|Upstream|Cloudflare|timed out|Failed to fetch/i.test(raw)
+				? 'The server was busy finishing the previous project. Wait a moment and try again.'
+				: raw;
 		} finally {
-			loading = false;
+			if (gen === loadGen) loading = false;
 		}
 	}
 
@@ -58,8 +74,19 @@
 		loadProject(slug);
 	});
 
+	onDestroy(() => {
+		loadAbort?.abort();
+		opAbort?.abort();
+	});
+
 	function backToProjects() {
+		loadAbort?.abort();
 		goto(appPath('/diagnose'));
+	}
+
+	function retryLoad() {
+		loadError = '';
+		loadProject(slug);
 	}
 
 	function dismissPanel() {
@@ -179,18 +206,39 @@
 </svelte:head>
 
 {#if loading}
-	<div class="flex h-screen items-center justify-center bg-white font-body text-brand-steel">
-		Loading project…
+	<div
+		class="flex h-screen flex-col items-center justify-center gap-4 bg-white px-6 font-body"
+		role="status"
+		aria-live="polite"
+	>
+		<div
+			class="h-10 w-10 animate-spin rounded-full border-2 border-brand-navy/20 border-t-brand-blue"
+			aria-hidden="true"
+		></div>
+		<p class="m-0 font-headline text-lg font-semibold text-brand-navy">Loading project…</p>
+		<p class="m-0 text-sm text-brand-steel">Fetching project details</p>
 	</div>
 {:else if loadError || !currentProject}
-	<div class="flex h-screen flex-col items-center justify-center gap-4 bg-white font-body">
-		<p class="m-0 text-brand-navy">{loadError || 'Project not found'}</p>
-		<button
-			class="cursor-pointer rounded bg-brand-blue px-4 py-2 font-body text-white hover:bg-brand-deep"
-			onclick={backToProjects}
-		>
-			← Back to projects
-		</button>
+	<div class="flex h-screen flex-col items-center justify-center gap-4 bg-white px-6 font-body">
+		<p class="m-0 max-w-md text-center text-brand-navy">{loadError || 'Project not found'}</p>
+		<div class="flex flex-wrap items-center justify-center gap-2">
+			{#if loadError}
+				<button
+					type="button"
+					class="cursor-pointer rounded bg-brand-blue px-4 py-2 font-body text-white hover:bg-brand-deep"
+					onclick={retryLoad}
+				>
+					Retry
+				</button>
+			{/if}
+			<button
+				type="button"
+				class="cursor-pointer rounded border border-brand-navy/20 bg-white px-4 py-2 font-body text-brand-navy hover:bg-brand-sky/20"
+				onclick={backToProjects}
+			>
+				← Back to projects
+			</button>
+		</div>
 	</div>
 {:else}
 	<div class="relative flex h-screen flex-col bg-white font-body">
@@ -205,7 +253,7 @@
 			<button type="button" disabled={packaging || syncing} onclick={handlePackage}>
 				{packaging ? 'Packaging…' : 'Package to QField'}
 			</button>
-			<button type="button" class="primary" disabled={packaging || syncing} onclick={handleSync}>
+			<button type="button" disabled={packaging || syncing} onclick={handleSync}>
 				{syncing ? 'Syncing…' : 'Sync from QField'}
 			</button>
 		</ModuleHeader>

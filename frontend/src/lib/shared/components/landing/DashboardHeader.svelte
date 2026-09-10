@@ -1,4 +1,5 @@
 <script>
+	import AppBrand from '$lib/shared/components/AppBrand.svelte';
 	import UserMenu from '$lib/shared/components/UserMenu.svelte';
 	import { appPath } from '$lib/shared/paths.js';
 
@@ -7,21 +8,15 @@
 </script>
 
 <header class="hdr">
-	<div class="mx-auto flex max-w-6xl items-center justify-between px-6 md:px-10">
-		<!-- brand -->
-		<a href={appPath('/home')} class="brand group">
-			<span class="brand-mark">
-				<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" class="h-5 w-5">
-					<path d="M12 3c3.5 4 6 7 6 10a6 6 0 1 1-12 0c0-3 2.5-6 6-10z" stroke-linejoin="round" />
-				</svg>
-			</span>
-			<span class="brand-text">
-				<span class="brand-name font-display">Water Security Toolbox</span>
-			</span>
-		</a>
+	<div class="hdr-inner flex w-full items-center justify-between gap-3">
+		<AppBrand homeHref="/home" compact />
 
-		<!-- user -->
-		<UserMenu variant="light" />
+		<div class="flex min-w-0 shrink-0 items-center gap-2 sm:gap-3">
+			<div class="actions flex flex-wrap items-center justify-end gap-1.5">
+				<a href={appPath('/about')} class="action-btn">About the Toolbox</a>
+			</div>
+			<UserMenu variant="light" />
+		</div>
 	</div>
 </header>
 
@@ -30,35 +25,41 @@
 		position: sticky;
 		top: 0;
 		z-index: 40;
-		padding: 0.85rem 0;
+		padding: 0.75rem 0;
 		border-bottom: 1px solid rgba(20, 40, 60, 0.08);
-		background: rgba(255, 255, 255, 0.72);
+		background: rgba(255, 255, 255, 0.78);
 		backdrop-filter: blur(14px);
 	}
 
-	.brand { display: inline-flex; align-items: center; gap: 0.7rem; }
-	.brand-mark {
-		display: grid;
-		place-items: center;
-		height: 2.25rem;
-		width: 2.25rem;
-		border-radius: 12px;
-		color: #1b75e0;
-		border: 1px solid color-mix(in srgb, #1b75e0 28%, transparent);
-		background: color-mix(in srgb, #1b75e0 12%, white);
-		transition: transform 0.3s ease, box-shadow 0.3s ease;
+	.hdr-inner {
+		padding-left: 0.75rem;
+		padding-right: 1.5rem;
 	}
-	.brand:hover .brand-mark {
-		transform: rotate(-6deg) scale(1.05);
-		box-shadow: 0 10px 22px -12px rgba(15, 179, 163, 0.6);
+	@media (min-width: 768px) {
+		.hdr-inner {
+			padding-left: 1.5rem;
+			padding-right: 2.5rem;
+		}
 	}
-	.brand-text { display: flex; flex-direction: column; line-height: 1; }
-	.brand-name {
-		font-size: 1.15rem;
-		letter-spacing: 0.04em;
-		background: linear-gradient(100deg, #1b75e0, #1b75e0);
-		-webkit-background-clip: text;
-		background-clip: text;
-		color: transparent;
+
+	.actions :global(a.action-btn) {
+		cursor: pointer;
+		border-radius: 0.5rem;
+		border: 1px solid rgba(20, 40, 60, 0.12);
+		background: white;
+		padding: 0.4rem 0.75rem;
+		font-family: inherit;
+		font-size: 0.8125rem;
+		font-weight: 500;
+		color: #1a2530;
+		text-decoration: none;
+		white-space: nowrap;
+		transition:
+			background 0.15s ease,
+			border-color 0.15s ease;
+	}
+	.actions :global(a.action-btn:hover) {
+		background: rgba(15, 179, 163, 0.08);
+		border-color: color-mix(in srgb, #1b75e0 35%, transparent);
 	}
 </style>

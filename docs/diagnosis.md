@@ -8,10 +8,13 @@ hypotheses, geotagged field notes, and offline sync via QField Cloud.
 
 ### Watershed-Scoped Projects
 
-- A user creates a diagnosis project by clicking a point on the map
-- The backend looks up the watershed boundary at that coordinate using a FlatGeobuf/GPKG file on S3 (`WATERSHEDS_FGB_KEY`)
-- The project is tied to the detected watershed polygon, which defines its spatial extent
-- The watershed geometry is stored in PostGIS and used to clip raster tiles, scope vector queries, and drive analysis
+- A user creates a diagnosis project by selecting a **clip area** (the polygon used to clip layers and scope analysis)
+- Three create modes on `/diagnose` → New project:
+  1. **Map click** — point-in-polygon against HydroBASINS Level-12 (`WATERSHEDS_FGB_KEY` on S3)
+  2. **Village** — searchable State → District → Village cascade from `vector/villages.fgb`. Preview shows the village boundary and each intersecting Level-12 basin in its own colour; create stores the **union** as the clip AOI
+  3. **Upload AOI** — GeoJSON / KML / GPX **polygon** becomes the clip boundary (`source=custom`; not a catalog basin id)
+- The create map shows a live preview of the clip polygon (and individual basin outlines for village unions)
+- Create is blocked until a successful preview; geometry is stored on `diagnosis.watershed_geom` in PostGIS
 
 ### Interactive Map (2D)
 
@@ -37,13 +40,13 @@ Layer enablement is env-driven; styling and analysis copy live in
 
 | Env | Role |
 |-----|------|
-| `COG_LAYERS` | Comma-separated COG keys (e.g. LULC, DEM, JRC occurrence/transition) |
-| `VECTOR_LAYERS` | Comma-separated FlatGeobuf keys (aquifers, gw_stress, village_resilience, villages) |
+| `COG_LAYERS` | Comma-separated COG keys (LULC, DEM, JRC occurrence/transition, cropping intensity) |
+| `VECTOR_LAYERS` | Comma-separated vector keys (`.fgb` or `.gpkg`: aquifers, gw_stress, village_resilience, villages, canals, lineaments, stream network) |
 
 Typical catalog entries today:
 
-- **Raster:** LULC 250k, DEM, JRC surface water occurrence / transitions
-- **Vector:** Aquifers, WISER groundwater stress, irrigation access / kharif / rabi resilience, baseline population, marginalized % SC/ST
+- **Raster:** LULC 250k, DEM, JRC surface water occurrence / transitions, cropping intensity
+- **Vector:** Aquifers, WISER groundwater stress, irrigation access / kharif / rabi resilience, baseline population, marginalized % SC/ST, overall literacy, canals, stream network, lineaments
 
 Each layer can declare `analysis_type`, legend classes or choropleth stops, meaning, uncertainty, and field-check text. The map preloads batch analysis for the watershed and shows evidence stats in the sidebar.
 
@@ -63,7 +66,7 @@ Each layer can declare `analysis_type`, legend classes or choropleth stops, mean
 ### Field Notes
 
 - Geotagged points with title, text, optional photo/audio, optional hypothesis link
-- Media uploaded multipart and stored in S3 under `{project_id}/media/`
+- Media uploaded multipart and stored in S3 under `diagnose/{project_id}/media/`
 - Delete cleans up S3 media
 
 ### COG Raster Tiles

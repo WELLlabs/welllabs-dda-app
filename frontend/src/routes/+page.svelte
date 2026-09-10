@@ -4,8 +4,6 @@
 	import Nav from '$lib/shared/components/landing/Nav.svelte';
 	import LandingBackground from '$lib/shared/components/landing/LandingBackground.svelte';
 	import Hero from '$lib/shared/components/landing/Hero.svelte';
-	import WorkspacePanels from '$lib/shared/components/landing/WorkspacePanels.svelte';
-	import MetricsOverview from '$lib/shared/components/landing/MetricsOverview.svelte';
 	import Footer from '$lib/shared/components/landing/Footer.svelte';
 
 	onMount(() => {
@@ -34,7 +32,10 @@
 
 <svelte:head>
 	<title>Water Security Toolbox</title>
-	<meta name="description" content="One workspace. Every watershed. Every decision." />
+	<meta
+		name="description"
+		content="Science-led, community-driven watershed management. Diagnose watershed problems, design optimal solutions, and assess impact simply."
+	/>
 </svelte:head>
 
 <LandingBackground />
@@ -43,14 +44,7 @@
 
 <main class="relative z-10 bg-transparent">
 	<Hero />
-
 	<div data-reveal>
-		<WorkspacePanels />
+		<Footer />
 	</div>
-
-	<div data-reveal>
-		<MetricsOverview />
-	</div>
-
-	<Footer />
 </main>

@@ -31,6 +31,15 @@ class ChoroplethStop:
 
 
 @dataclass(frozen=True)
+class LayerCompanion:
+    """Vector layer drawn automatically when a primary layer is selected (PDF report pairing)."""
+
+    id: str
+    line_color: str | None = None
+    line_width: float | None = None
+
+
+@dataclass(frozen=True)
 class LayerAnalysis:
     id: str
     type: str
@@ -44,7 +53,7 @@ class LayerConfig:
     s3_key: str
     name: str
     source: str  # cog | vector_fgb
-    render_type: str  # categorical | continuous | choropleth | outline
+    render_type: str  # categorical | continuous | choropleth | outline | line
     nodata: int | float | None
     classes: tuple[LegendEntry, ...]
     analysis: tuple[LayerAnalysis, ...]
@@ -52,13 +61,24 @@ class LayerConfig:
     style_column: str | None = None
     label_column: str | None = None  # outline / label layers (e.g. village name)
     choropleth_stops: tuple[ChoroplethStop, ...] = ()
+    line_color: str | None = None
+    line_width: float = 1.5
+    fill_opacity: float = 0.65
+    geometry_kind: str = "polygon"  # polygon | line
     interpretation: str = ""
     meaning: str = ""
     uncertainty: str = ""
     field_check: str = ""
     analysis_type: str | None = None
     map_render: bool = True  # False → analysis-only, FGB not streamed to browser
+    overlay: bool = False  # True → sidebar overlay toggles (villages, canals, streams)
     category: str | None = None  # Sidebar group (Clinton report categories)
+    tile_strategy: str = "tiles"  # tiles | watershed_image (non-COG national rasters)
+    analysis_batch: bool = True  # False → skip slow layers in batch preload
+    # clip = cut geometries to watershed; intersect = keep full features that touch AOI
+    clip_mode: str = "clip"
+    line_dasharray: tuple[float, ...] | None = None
+    companions: tuple[LayerCompanion, ...] = ()
 
     def titiler_colormap(self) -> dict[str, str]:
         """String-keyed colormap for Titiler / rio-tiler (nodata → transparent)."""
@@ -92,6 +112,10 @@ class LayerConfig:
                 for s in self.choropleth_stops
             ]
         if self.render_type == "continuous":
+            return []
+        if self.render_type == "line" and not self.classes:
+            if self.line_color:
+                return [LegendEntry(label=self.name, color=self.line_color, value=self.name)]
             return []
         out: list[LegendEntry] = []
         for entry in self.classes:
@@ -133,7 +157,7 @@ class LayerCatalog:
         return tuple(l for l in self.layers if l.source == "cog")
 
     def vector_layers(self) -> tuple[LayerConfig, ...]:
-        return tuple(l for l in self.layers if l.source == "vector_fgb")
+        return tuple(l for l in self.layers if l.source in ("vector_fgb", "watershed_hierarchy"))
 
 
 def _hex_to_rgba(hex_color: str) -> tuple[int, int, int, int]:
@@ -217,13 +241,25 @@ def _parse_layer(raw: dict[str, Any], palette: dict[str, str]) -> LayerConfig:
             )
         )
 
-    source = str(raw.get("source") or ("vector_fgb" if str(raw.get("s3_key", "")).endswith(".fgb") else "cog"))
+    source = str(raw.get("source") or "")
+    if not source:
+        s3_key = str(raw.get("s3_key") or "")
+        if s3_key.endswith((".fgb", ".gpkg")):
+            source = "vector_fgb"
+        else:
+            source = "cog"
     style_column = render.get("column")
     if style_column is not None:
         style_column = str(style_column)
     label_column = render.get("label_column")
     if label_column is not None:
         label_column = str(label_column)
+
+    line_color_raw = render.get("line_color")
+    line_color = _resolve_color(str(line_color_raw), palette) if line_color_raw else None
+    line_width = float(render.get("line_width") or 1.5)
+    fill_opacity = float(render.get("fill_opacity") or render.get("opacity") or 0.65)
+    geometry_kind = str(render.get("geometry") or ("line" if render_type == "line" else "polygon"))
 
     map_render_raw = raw.get("map_render")
     # strip any inline YAML comment before evaluating
@@ -235,9 +271,51 @@ def _parse_layer(raw: dict[str, Any], palette: dict[str, str]) -> LayerConfig:
     else:
         map_render = bool(map_render_raw)
 
+    overlay_raw = raw.get("overlay")
+    if isinstance(overlay_raw, str):
+        overlay_raw = overlay_raw.split("#")[0].strip().lower()
+        overlay = overlay_raw in ("true", "1", "yes")
+    elif overlay_raw is None:
+        overlay = render_type == "outline"
+    else:
+        overlay = bool(overlay_raw)
+
+    tile_strategy = str(raw.get("tile_strategy") or render.get("tile_strategy") or "tiles")
+    analysis_batch_raw = raw.get("analysis_batch")
+    if isinstance(analysis_batch_raw, str):
+        analysis_batch_raw = analysis_batch_raw.split("#")[0].strip().lower()
+        analysis_batch = analysis_batch_raw not in ("false", "0", "no")
+    elif analysis_batch_raw is None:
+        analysis_batch = True
+    else:
+        analysis_batch = bool(analysis_batch_raw)
+
+    clip_mode = str(raw.get("clip_mode") or render.get("clip_mode") or "clip").strip().lower()
+    if clip_mode not in ("clip", "intersect"):
+        clip_mode = "clip"
+
+    dash_raw = render.get("line_dasharray")
+    line_dasharray: tuple[float, ...] | None = None
+    if isinstance(dash_raw, (list, tuple)) and dash_raw:
+        try:
+            line_dasharray = tuple(float(v) for v in dash_raw)
+        except (TypeError, ValueError):
+            line_dasharray = None
+
+    companions: list[LayerCompanion] = []
+    for item in raw.get("companions") or []:
+        comp_color_raw = item.get("line_color")
+        companions.append(
+            LayerCompanion(
+                id=str(item["id"]),
+                line_color=_resolve_color(str(comp_color_raw), palette) if comp_color_raw else None,
+                line_width=float(item["line_width"]) if item.get("line_width") is not None else None,
+            )
+        )
+
     return LayerConfig(
         id=str(raw["id"]),
-        s3_key=str(raw["s3_key"]),
+        s3_key=str(raw.get("s3_key") or ""),
         name=str(raw.get("name") or raw["id"]),
         source=source,
         render_type=render_type,
@@ -248,13 +326,23 @@ def _parse_layer(raw: dict[str, Any], palette: dict[str, str]) -> LayerConfig:
         style_column=style_column,
         label_column=label_column,
         choropleth_stops=choropleth_stops,
+        line_color=line_color,
+        line_width=line_width,
+        fill_opacity=fill_opacity,
+        geometry_kind=geometry_kind,
         interpretation=str(raw.get("interpretation") or raw.get("meaning") or "").strip(),
         meaning=str(raw.get("meaning") or raw.get("interpretation") or "").strip(),
         uncertainty=str(raw.get("uncertainty") or "").strip(),
         field_check=str(raw.get("field_check") or "").strip(),
         analysis_type=(str(raw["analysis_type"]) if raw.get("analysis_type") else None),
         map_render=map_render,
+        overlay=overlay,
         category=(str(raw["category"]).strip() if raw.get("category") else None),
+        tile_strategy=tile_strategy,
+        analysis_batch=analysis_batch,
+        clip_mode=clip_mode,
+        line_dasharray=line_dasharray,
+        companions=tuple(companions),
     )
 
 
@@ -294,3 +382,63 @@ def display_name_for_key(s3_key: str) -> str:
 
 def get_vector_catalog() -> tuple[LayerConfig, ...]:
     return get_catalog().vector_layers()
+
+
+def catalog_vector_s3_keys() -> list[str]:
+    """Unique vector s3_keys from layers.yaml (excludes watershed_hierarchy)."""
+    keys: list[str] = []
+    seen: set[str] = set()
+    for layer in get_catalog().vector_layers():
+        if layer.source != "vector_fgb" or not layer.s3_key:
+            continue
+        if layer.s3_key in seen:
+            continue
+        seen.add(layer.s3_key)
+        keys.append(layer.s3_key)
+    return keys
+
+
+def catalog_cog_s3_keys() -> list[str]:
+    """Unique COG s3_keys from layers.yaml."""
+    keys: list[str] = []
+    seen: set[str] = set()
+    for layer in get_catalog().cog_layers():
+        if not layer.s3_key or layer.s3_key in seen:
+            continue
+        seen.add(layer.s3_key)
+        keys.append(layer.s3_key)
+    return keys
+
+
+def _parse_layer_key_csv(raw: str) -> list[str]:
+    return [part.strip() for part in (raw or "").split(",") if part.strip()]
+
+
+def resolve_enabled_vector_keys(raw: str | None = None) -> list[str]:
+    """VECTOR_LAYERS allowlist. Explicit "all"/"*" → every layers.yaml vector key.
+
+    Empty string disables all catalog vectors (matches prod). Basin / Sub basin /
+    L7 hierarchy FGBs are not catalog vector entries — picker uses preview_context
+    (and WATERSHEDS_FGB_KEY for L12 AOI).
+    """
+    from app.shared.config import settings
+
+    value = settings.vector_layers if raw is None else raw
+    text = (value or "").strip()
+    if text.lower() in {"*", "all"}:
+        return catalog_vector_s3_keys()
+    return _parse_layer_key_csv(text)
+
+
+def resolve_enabled_cog_keys(raw: str | None = None) -> list[str]:
+    """COG_LAYERS allowlist. Explicit "all"/"*" → every layers.yaml COG key.
+
+    Empty string disables all catalog COGs (matches prod).
+    """
+    from app.shared.config import settings
+
+    value = settings.cog_layers if raw is None else raw
+    text = (value or "").strip()
+    if text.lower() in {"*", "all"}:
+        return catalog_cog_s3_keys()
+    return _parse_layer_key_csv(text)

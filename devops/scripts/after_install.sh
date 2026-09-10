@@ -258,12 +258,40 @@ else
 fi
 
 if [ -d "$RELEASE_DIR/backend/db/migrations" ]; then
-  echo "Applying db/migrations/*.sql (idempotent)..."
+  echo "Applying db/migrations/*.sql (idempotent; refusing DROP TABLE users)..."
+  USERS_BEFORE=$("${PSQL[@]}" -tAc "SELECT count(*)::text FROM users" 2>/dev/null | tr -d '[:space:]' || echo "0")
+  DIAG_BEFORE=$("${PSQL[@]}" -tAc "SELECT count(*)::text FROM diagnosis" 2>/dev/null | tr -d '[:space:]' || echo "0")
+  echo "  Pre-migration counts — users=${USERS_BEFORE} diagnosis=${DIAG_BEFORE}"
+
   for migration in "$RELEASE_DIR/backend/db/migrations/"*.sql; do
     [ -f "$migration" ] || continue
+    # Hard stop: never let CodeDeploy wipe accounts/projects via DROP TABLE users.
+    # Ignore SQL comments so docstrings cannot false-positive.
+    if grep -viE '^[[:space:]]*--' "$migration" \
+      | grep -qiE 'DROP[[:space:]]+TABLE[[:space:]]+(IF[[:space:]]+EXISTS[[:space:]]+)?[[:space:]]*users\b'; then
+      echo "ERROR: $(basename "$migration") contains DROP TABLE users."
+      echo "Refusing to apply — this would destroy beta/prod accounts and cascade memberships."
+      echo "Set ALLOW_DESTRUCTIVE_DB=1 only for a deliberate one-shot cutover with a verified backup."
+      if [ "${ALLOW_DESTRUCTIVE_DB:-}" != "1" ]; then
+        exit 1
+      fi
+      echo "WARNING: ALLOW_DESTRUCTIVE_DB=1 set — proceeding with destructive migration"
+    fi
     echo "  → $(basename "$migration")"
     "${PSQL[@]}" -f "$migration"
   done
+
+  USERS_AFTER=$("${PSQL[@]}" -tAc "SELECT count(*)::text FROM users" 2>/dev/null | tr -d '[:space:]' || echo "0")
+  DIAG_AFTER=$("${PSQL[@]}" -tAc "SELECT count(*)::text FROM diagnosis" 2>/dev/null | tr -d '[:space:]' || echo "0")
+  echo "  Post-migration counts — users=${USERS_AFTER} diagnosis=${DIAG_AFTER}"
+  if [ "${USERS_BEFORE}" -gt 0 ] && [ "${USERS_AFTER}" -lt "${USERS_BEFORE}" ]; then
+    echo "ERROR: user row count dropped (${USERS_BEFORE} → ${USERS_AFTER}). Aborting deploy."
+    exit 1
+  fi
+  if [ "${DIAG_BEFORE}" -gt 0 ] && [ "${DIAG_AFTER}" -lt "${DIAG_BEFORE}" ]; then
+    echo "ERROR: diagnosis row count dropped (${DIAG_BEFORE} → ${DIAG_AFTER}). Aborting deploy."
+    exit 1
+  fi
 fi
 
 deactivate

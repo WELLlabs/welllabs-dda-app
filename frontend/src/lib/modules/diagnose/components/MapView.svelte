@@ -55,8 +55,59 @@
 		'Social & Demographic Profile'
 	];
 
+	const OVERLAY_LAYER_IDS = new Set(['village_boundaries', 'canals', 'drainage']);
+	/** @type {{ title: string, items: Array<{ label: string, color: string, continuous?: boolean }> }} */
+	let retainedLegend = $state({ title: '', items: [] });
+	/** Cancel in-flight batch when leaving the map (reload / navigate). */
+	let mapDataAbort = new AbortController();
+	/** Serialize post-open heavy loads so batch never stampede workers. */
+	let postOpenLoadGen = 0;
+	const BOOT_KEY = 'diagnose:project-boot';
+	/** @type {'creating' | 'opening'} */
+	let bootMode = $state('opening');
+	let projectBooting = $state(true);
+	let bootPercent = $state(0);
+	let bootStep = $state('Starting…');
+	let bootError = $state('');
+	/** Whether background loading (vectors, analysis) is still in progress. */
+	let bgLoading = $state(false);
+	/**
+	 * AbortController only for the background /analysis/batch call.
+	 * Aborted on every on-demand layer-click so the server's _batch_sem slot
+	 * is freed immediately and the user request can proceed without a 502.
+	 */
+	let bgBatchAbort = new AbortController();
+	/**
+	 * AbortController for in-flight vector /data fetches.
+	 * Aborted each time the user selects a different secondary layer so stale
+	 * FGB clips are cancelled immediately — prevents rapid toggling from
+	 * flooding the backend thread pool and returning 502s.
+	 */
+	let vectorSelectAbort = new AbortController();
+
+	function readBootMode() {
+		try {
+			const v = sessionStorage.getItem(BOOT_KEY);
+			sessionStorage.removeItem(BOOT_KEY);
+			if (v === 'creating') return 'creating';
+		} catch {
+			/* ignore */
+		}
+		return 'opening';
+	}
+
+	function setBoot(percent, step) {
+		bootPercent = Math.min(100, Math.max(0, Math.round(percent)));
+		bootStep = step;
+		status = step;
+	}
+
 	function isOverlayLayer(layer) {
-		return layer?.render_type === 'outline' || layer?.category === 'Reference';
+		return (
+			layer?.overlay === true ||
+			OVERLAY_LAYER_IDS.has(layer?.id) ||
+			layer?.render_type === 'outline'
+		);
 	}
 
 	const UUID_RE =
@@ -98,18 +149,59 @@
 		showSelectedHypothesisMenu = false;
 	}
 
-	function showOnlySecondaryLayer(layerId) {
+	const WISER_RANK_LAYER_IDS = new Set([
+		'irrigation_access_wiser',
+		'kharif_resilience_wiser',
+		'rabi_resilience_wiser'
+	]);
+
+	async function showOnlySecondaryLayer(layerId) {
+		// Project AOI outline stays visible under thematic layers.
+		setWatershedOutlineVisible(true);
+
+		// Hard-hide every thematic vector/COG layer first so WISER siblings never stack.
+		// COG layers use opacity (not visibility) so MapLibre keeps streaming their tiles.
+		if (map) {
+			for (const layer of map.getStyle()?.layers || []) {
+				const id = layer.id;
+				if (
+					id.startsWith('vec-') &&
+					(id.endsWith('-fill') ||
+						id.endsWith('-line') ||
+						id.endsWith('-line-halo') ||
+						id.endsWith('-label'))
+				) {
+					const overlay = overlayLayers.some((o) => id.startsWith(`vec-${o.id}-`));
+					if (!overlay) setLayerVisibility(id, false);
+				} else if (id.startsWith('cog-')) {
+					if (map.getLayer(id)) map.setPaintProperty(id, 'raster-opacity', 0);
+				}
+			}
+			// Explicitly clear WISER rank siblings (shared FGB → easy to leave stacked).
+			for (const wid of WISER_RANK_LAYER_IDS) {
+				if (wid === layerId) continue;
+				setLayerVisibility(`vec-${wid}-fill`, false);
+				setLayerVisibility(`vec-${wid}-line`, false);
+				cogVisibility = { ...cogVisibility, [wid]: false };
+			}
+		}
+
 		for (const l of secondaryLayers) {
-			// Overlay layers (village boundaries) keep their own eye-toggle state
+			// Overlays (village boundaries, canals, streams) keep their own eye-toggle state
 			if (isOverlayLayer(l)) continue;
 			const visible = l.id === layerId && l.map_render !== false;
 			cogVisibility = { ...cogVisibility, [l.id]: visible };
 			if (l.kind === 'vector') {
 				setLayerVisibility(`vec-${l.id}-fill`, visible);
 				setLayerVisibility(`vec-${l.id}-line`, visible);
+				setLayerVisibility(`vec-${l.id}-line-halo`, visible);
 				setLayerVisibility(`vec-${l.id}-label`, visible);
 			} else {
-				setLayerVisibility(`cog-${l.id}`, visible);
+				// COG: opacity instead of visibility — tiles keep streaming while "hidden"
+				const cogId = `cog-${l.id}`;
+				if (map?.getLayer(cogId)) {
+					map.setPaintProperty(cogId, 'raster-opacity', visible ? 0.85 : 0);
+				}
 			}
 		}
 	}
@@ -126,16 +218,26 @@
 				void reloadHypotheses();
 			}
 		} else if (layer?.kind === 'secondary') {
+			// Abort any stale vector /data fetch from the previously selected layer.
+			// This cancels the network request so the backend thread is freed
+			// immediately rather than finishing a clip nobody will see.
+			vectorSelectAbort.abort();
+			vectorSelectAbort = new AbortController();
+
 			if (mapReady) {
 				const meta = secondaryLayers.find((l) => l.id === layer.id);
 				if (meta?.kind === 'vector' && meta.map_render !== false) {
-					await ensureVectorLayerOnMap(meta);
+					await ensureVectorLayerOnMap(meta, { signal: vectorSelectAbort.signal });
 				}
 				if (isOverlayLayer(meta)) {
 					// Overlays are visibility-toggled only; selecting opens the right panel
 					return;
 				}
-				showOnlySecondaryLayer(layer.id);
+				// watershed_image / COG sources are registered at boot — showing them is an
+				// opacity flip. Never leave a sticky "Loading …" status when analysis is
+				// already cached (ensureLayerAnalysis returns early and used to skip Ready).
+				await showOnlySecondaryLayer(layer.id);
+				status = 'Ready';
 				void ensureLayerAnalysis(layer.id);
 			}
 		}
@@ -334,6 +436,27 @@
 		return apiPath(`/diagnose/layers/cog/${layerId}/tiles/WebMercatorQuad/{z}/{x}/{y}?${params.toString()}`);
 	}
 
+	function cogWatershedImageUrl(layer) {
+		if (layer.watershed_image_url) {
+			return resolveApiUrl(layer.watershed_image_url);
+		}
+		const params = new URLSearchParams();
+		params.set('project_id', project.id);
+		return resolveApiUrl(
+			apiPath(`/diagnose/layers/cog/${layer.id}/watershed-image?${params.toString()}`)
+		);
+	}
+
+	function watershedImageCoordinates(bounds) {
+		const [west, south, east, north] = bounds;
+		return [
+			[west, north],
+			[east, north],
+			[east, south],
+			[west, south]
+		];
+	}
+
 	function removeCogLayers() {
 		if (!map) return;
 		for (const layer of cogLayers) {
@@ -356,6 +479,8 @@
 			const labelId = `vec-${layer.id}-label`;
 			const sourceId = `vec-${layer.id}`;
 			if (map.getLayer(labelId)) map.removeLayer(labelId);
+			const haloId = `${lineId}-halo`;
+			if (map.getLayer(haloId)) map.removeLayer(haloId);
 			if (map.getLayer(lineId)) map.removeLayer(lineId);
 			if (map.getLayer(fillId)) map.removeLayer(fillId);
 			if (map.getSource(sourceId)) map.removeSource(sourceId);
@@ -364,10 +489,97 @@
 	}
 
 	function rebuildSecondaryList(cogs, vectors) {
-		return [
-			...cogs.map((l) => ({ ...l, kind: 'cog' })),
-			...vectors.map((l) => ({ ...l, kind: 'vector' }))
-		];
+		const otherVectors = [];
+		const seen = new Set();
+		const wiserRankSeen = new Set();
+		for (const l of vectors || []) {
+			if (!l?.id || seen.has(l.id)) continue;
+			// Hierarchy stack removed from project maps (slow FGB clips).
+			if (l.id === 'watershed' || l.source === 'watershed_hierarchy') continue;
+			seen.add(l.id);
+			// Guard against catalog/env double-registration of the same WISER rank view.
+			if (WISER_RANK_LAYER_IDS.has(l.id)) {
+				if (wiserRankSeen.has(l.id)) continue;
+				wiserRankSeen.add(l.id);
+			}
+			otherVectors.push({ ...l, kind: 'vector' });
+		}
+		const cogOut = [];
+		for (const l of cogs || []) {
+			if (!l?.id || seen.has(l.id)) continue;
+			seen.add(l.id);
+			cogOut.push({ ...l, kind: 'cog' });
+		}
+		return [...cogOut, ...otherVectors];
+	}
+
+	/** Matplotlib-style CSS gradients for continuous rasters (matches notebook colorbars). */
+	const CONTINUOUS_GRADIENTS = {
+		viridis:
+			'linear-gradient(90deg, #440154, #31688e, #35b779, #6ece58, #fde725)',
+		gist_earth:
+			'linear-gradient(90deg, #153878, #5da04b, #8b6914, #dab69f, #ffffff)',
+		terrain:
+			'linear-gradient(90deg, #333399, #79b3d9, #a3c68a, #d2b48c, #ffffff)'
+	};
+
+	function continuousLegendGradient(layer) {
+		const cmap =
+			layer?.colormap ||
+			(layer?.id === 'cropping_intensity'
+				? 'viridis'
+				: layer?.id === 'dem'
+					? 'gist_earth'
+					: 'terrain');
+		return CONTINUOUS_GRADIENTS[cmap] || CONTINUOUS_GRADIENTS.viridis;
+	}
+
+	function continuousLegendLabels(layer) {
+		if (layer?.id === 'cropping_intensity') {
+			return { low: 'Low intensity', high: 'High intensity' };
+		}
+		if (layer?.id === 'dem') {
+			return { low: 'Lower elevation', high: 'Higher elevation' };
+		}
+		return { low: 'Low', high: 'High' };
+	}
+
+	function applyLineOverlayStyle(layer) {
+		if (!layer || layer.render_type !== 'line') return;
+		const lineId = `vec-${layer.id}-line`;
+		const haloId = `${lineId}-halo`;
+		if (!map?.getLayer(lineId)) return;
+		const color = layer.line_color || '#1c75e9';
+		const width = layer.line_width ?? 2;
+		applyCanalLineStyle(lineId, haloId, {
+			color,
+			width,
+			halo: layer.id === 'canals'
+		});
+	}
+
+	async function setOverlayVisibility(layer, visible) {
+		if (!layer?.id) return;
+		if (visible && layer.kind === 'vector' && layer.map_render !== false) {
+			await ensureVectorLayerOnMap(layer);
+			applyLineOverlayStyle(layer);
+		}
+		toggleCog(layer.id, visible);
+		if (visible) applyLayerStackOrder();
+	}
+
+	function applyCanalLineStyle(lineId, haloId, { color, width, halo = true }) {
+		if (!map?.getLayer(lineId)) return;
+		map.setPaintProperty(lineId, 'line-color', color);
+		map.setPaintProperty(lineId, 'line-width', width);
+		map.setPaintProperty(lineId, 'line-opacity', 1);
+		if (halo && map.getLayer(haloId)) {
+			map.setPaintProperty(haloId, 'line-color', '#ffffff');
+			map.setPaintProperty(haloId, 'line-width', width + 2.5);
+			map.setPaintProperty(haloId, 'line-opacity', 0.92);
+		} else if (map.getLayer(haloId)) {
+			map.setPaintProperty(haloId, 'line-width', 0);
+		}
 	}
 
 	function matchColorExpression(column, classes, fallback = '#e6e9eb') {
@@ -399,16 +611,24 @@
 		return matchColorExpression(column, layer.legend);
 	}
 
+	function vectorLineColor(layer) {
+		const column = layer.style_column;
+		if (!column) return layer.line_color || '#1c75e9';
+		return matchColorExpression(column, layer.legend, layer.line_color || '#e6e9eb');
+	}
+
 	/** Legend entries actually present in watershed features (or full for COG). */
 	function legendFromFeatures(layer, features) {
 		if (!layer) return [];
 		if (layer.render_type === 'continuous') {
-			// Match rio-tiler gist_earth used by DEM tiles + QField packaging
-			return [
-				{ label: 'Lower elevation', color: '#153878', continuous: true },
-				{ label: 'Mid elevation', color: '#5da04b', continuous: true },
-				{ label: 'Higher elevation', color: '#dab69f', continuous: true }
-			];
+			const cmap =
+				layer.colormap ||
+				(layer.id === 'cropping_intensity'
+					? 'viridis'
+					: layer.id === 'dem'
+						? 'gist_earth'
+						: 'terrain');
+			return [{ label: cmap, color: continuousLegendGradient(layer), continuous: true }];
 		}
 		if (layer.kind === 'cog' || !features?.length) {
 			return layer.legend || [];
@@ -434,8 +654,36 @@
 	const mapLegendItems = $derived.by(() => {
 		if (selectedLayer?.kind !== 'secondary') return [];
 		const layer = secondaryLayers.find((l) => l.id === selectedLayer.id);
-		if (!layer) return [];
+		if (!layer || isOverlayLayer(layer)) return [];
 		return layerActiveLegend[layer.id] || layer.legend || [];
+	});
+
+	const displayedMapLegend = $derived.by(() => {
+		if (mapMode !== 'flat') return null;
+		if (selectedLayer?.kind === 'secondary' && mapLegendItems.length) {
+			const layer = secondaryLayers.find((l) => l.id === selectedLayer.id);
+			return { title: layer?.name ?? 'Legend', items: mapLegendItems };
+		}
+		if (
+			selectedLayer?.kind === 'primary' &&
+			activePrimaryTab === 'observation-zones' &&
+			retainedLegend.items.length
+		) {
+			return retainedLegend;
+		}
+		return null;
+	});
+
+	$effect(() => {
+		if (selectedLayer?.kind === 'secondary' && mapLegendItems.length) {
+			const layer = secondaryLayers.find((l) => l.id === selectedLayer.id);
+			if (layer && !isOverlayLayer(layer)) {
+				retainedLegend = {
+					title: layer.name ?? 'Legend',
+					items: mapLegendItems.map((item) => ({ ...item }))
+				};
+			}
+		}
 	});
 
 	let container;
@@ -461,10 +709,22 @@
 	let showZonesLayer = $state(true);
 	let showFieldNotesLayer = $state(true);
 	let mapReady = $state(false);
+	/** @type {maplibregl.Popup | null} */
+	let villageHoverPopup = null;
+	/** @type {Set<string>} */
+	let villageHoverBound = new Set();
 	let cogLayers = $state([]);
 	let vectorLayers = $state([]);
 	let secondaryLayers = $state([]);
-	const overlayLayers = $derived(secondaryLayers.filter((l) => isOverlayLayer(l)));
+	const overlayLayers = $derived.by(() => {
+		const order = ['village_boundaries', 'canals', 'drainage'];
+		const overlays = secondaryLayers.filter((l) => isOverlayLayer(l));
+		return overlays.sort((a, b) => {
+			const ai = order.indexOf(a.id);
+			const bi = order.indexOf(b.id);
+			return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+		});
+	});
 	const thematicLayers = $derived(secondaryLayers.filter((l) => !isOverlayLayer(l)));
 	const thematicCategoryGroups = $derived.by(() => {
 		const byCat = new Map();
@@ -561,6 +821,16 @@
 	let didDrag = false;
 
 	onMount(async () => {
+		mapDataAbort = new AbortController();
+		bgBatchAbort = new AbortController();
+		vectorSelectAbort = new AbortController();
+		postOpenLoadGen = 0;
+		bootMode = readBootMode();
+		projectBooting = true;
+		bootPercent = 0;
+		bootStep = bootMode === 'creating' ? 'Saving project…' : 'Starting…';
+		bootError = '';
+		bgLoading = false;
 		map = new maplibregl.Map({
 			container,
 			transformRequest: (url, resourceType) => {
@@ -610,54 +880,133 @@
 
 		map.on('load', async () => {
 			mapReady = true;
+			projectBooting = true;
+			bootError = '';
+			bgLoading = false;
+			const loadGen = ++postOpenLoadGen;
 			map.setPitch(0);
 			map.setBearing(0);
 			map.setMaxBounds(null);
 			applyBasemapVisibility(BASE_LAYERS.osm.id, baseLayer === 'osm');
 			applyBasemapVisibility(BASE_LAYERS.esri.id, baseLayer === 'esri');
-			await ensureFieldNotePinIcon();
-			loadWatershedBoundary();
-			initDrawPreview();
-			updateDrawSizes();
-			ensureDrawPreviewOnTop();
+
 			try {
+				// ── Fast critical path (< 500 ms) ──────────────────────────────
+				// Register COG tile sources + vector catalog. Tile layers stream
+				// lazily from Titiler; we don't wait for any clip work here.
+				await ensureFieldNotePinIcon();
+				if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
+
+				loadWatershedBoundary();
+				initDrawPreview();
+				updateDrawSizes();
+				ensureDrawPreviewOnTop();
+
 				await loadCogLayers();
+				if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
+
+				// Fire-and-forget: pre-warm backend COG caches. Abort when leaving the map
+				// so prewarm does not keep the worker busy after navigate-away.
+				fetch(
+					resolveApiUrl(
+						apiPath(`/diagnose/layers/cog/prewarm?project_id=${encodeURIComponent(project.id)}`)
+					),
+					{ credentials: 'include', signal: mapDataAbort.signal }
+				).catch(() => {});
+
 				await loadVectorLayers();
-				await preloadAllSecondaryData();
+				if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
+
+				// Pick the default layer and make it visible now.
+				// COG layers (LULC, DEM…) will start streaming tiles immediately.
+				// Project AOI outline is always shown under thematic layers.
+				if (thematicLayers.length > 0) {
+					const prefer = thematicLayers[0].id;
+					selectedLayer = { kind: 'secondary', id: prefer };
+					await showOnlySecondaryLayer(prefer);
+					void ensureLayerAnalysis(prefer);
+				} else if (secondaryLayers.length > 0) {
+					selectedLayer = { kind: 'secondary', id: secondaryLayers[0].id };
+					await showOnlySecondaryLayer(secondaryLayers[0].id);
+				} else {
+					selectedLayer = { kind: 'primary', id: 'observation-zones' };
+					activePrimaryTab = 'observation-zones';
+				}
+
+				ensureDrawPreviewOnTop();
+				requestAnimationFrame(() => map?.resize());
+
+				// ── Dismiss overlay now — map is usable ─────────────────────────
+				projectBooting = false;
+				status = 'Ready';
+
+				// ── Heavy background work — non-blocking ───────────────────────
+				bgLoading = true;
+				void (async () => {
+					try {
+						if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
+
+						// ── Vector preload ─────────────────────────────────────────────
+						// Fetch all THEMATIC vector layers sequentially in the background.
+						// Overlays (canals, rivers) are excluded — their FGBs are large
+						// national files whose clips take 10-30 s and would exhaust the
+						// backend's _vector_clip_sem, causing 502s on user-initiated clicks.
+						// Populates vectorGeoJsonByKey so user clicks find cached data → instant.
+						// Sequential (1 at a time) so _vector_clip_sem slot 1 is used for
+						// preload while slots 2-3 remain free for simultaneous user clicks.
+						void (async () => {
+							const vectorsToPreload = secondaryLayers.filter(
+								(l) =>
+									l.kind === 'vector' &&
+									l.map_render !== false &&
+									l.url &&
+									!isOverlayLayer(l) // skip canals, rivers, village-boundary overlays
+							);
+							for (const layer of vectorsToPreload) {
+								if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) break;
+								const cacheKey = layer.s3_key || layer.url || layer.id;
+								if (vectorGeoJsonByKey[cacheKey]) continue; // already fetched by user click
+								try {
+									const data = await fetchClippedGeoJSON(layer.url, {
+										signal: mapDataAbort.signal
+									});
+									vectorGeoJsonByKey = { ...vectorGeoJsonByKey, [cacheKey]: data };
+								} catch {
+									// best-effort — don't abort the preload loop on one failure
+								}
+								// Small pause between sequential clips so a user click always gets
+								// prompt access to the remaining _vector_clip_sem capacity.
+								await new Promise((r) => setTimeout(r, 300));
+							}
+						})();
+
+						// Batch layer analysis — delayed so first layer clicks stay fast.
+						await new Promise((r) => setTimeout(r, 2500));
+						if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
+						await preloadAllSecondaryData();
+						if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
+
+						await Promise.allSettled([
+							reloadObservationZones(),
+							reloadFieldNotes(),
+							reloadHypotheses()
+						]);
+					} catch (err) {
+						if (err?.name !== 'AbortError' && !mapDataAbort.signal.aborted) {
+							console.warn('Background load error (non-fatal):', err);
+						}
+					} finally {
+						if (loadGen === postOpenLoadGen) bgLoading = false;
+					}
+				})();
 			} catch (err) {
-				status = `Layers unavailable: ${err instanceof Error ? err.message : String(err)}`;
+				if (err?.name === 'AbortError' || mapDataAbort.signal.aborted) return;
+				console.error('Project bootstrap failed', err);
+				bootError = err instanceof Error ? err.message : String(err);
+				status = `Load failed: ${bootError}`;
+				projectBooting = false;
+				bgLoading = false;
 			}
-			try {
-				await reloadObservationZones();
-			} catch (err) {
-				console.error('Failed to load observation zones', err);
-				status = `Could not load observation zones: ${err instanceof Error ? err.message : String(err)}`;
-			}
-			try {
-				await reloadFieldNotes();
-			} catch (err) {
-				console.error('Failed to load field notes', err);
-				status = `Could not load field notes: ${err instanceof Error ? err.message : String(err)}`;
-			}
-			try {
-				await reloadHypotheses();
-			} catch (err) {
-				console.error('Failed to load hypotheses', err);
-				status = `Could not load hypotheses: ${err instanceof Error ? err.message : String(err)}`;
-			}
-			if (thematicLayers.length > 0) {
-				await selectLayer({ kind: 'secondary', id: thematicLayers[0].id });
-			} else if (secondaryLayers.length > 0) {
-				await selectLayer({ kind: 'secondary', id: secondaryLayers[0].id });
-			} else {
-				await selectLayer({ kind: 'primary', id: 'observation-zones' });
-			}
-			ensureDrawPreviewOnTop();
-			status =
-				status.startsWith('Layers unavailable') || status.startsWith('Could not load')
-					? status
-					: 'Ready';
-			requestAnimationFrame(() => map?.resize());
 		});
 
 		map.on('zoom', () => {
@@ -693,7 +1042,13 @@
 	});
 
 	onDestroy(() => {
+		postOpenLoadGen += 1;
+		mapDataAbort.abort();
+		bgBatchAbort.abort();
+		vectorSelectAbort.abort();
+		bgLoading = false;
 		fieldNotePinReady = false;
+		villageHoverPopup?.remove();
 		map?.remove();
 	});
 
@@ -880,27 +1235,27 @@
 		const drawing = zoneDraw;
 		const cursor = drawing ? cursorLngLat : null;
 
-		const ring = cursor && drawing ? [...coords, cursor] : [...coords];
-		if (ring.length >= 2) {
-			features.push({
-				type: 'Feature',
-				properties: { kind: 'line' },
-				geometry: { type: 'LineString', coordinates: [...ring, ring[0]] }
-			});
-		}
-		if (ring.length >= 3) {
-			features.push({
-				type: 'Feature',
-				properties: { kind: 'fill' },
-				geometry: { type: 'Polygon', coordinates: [[...ring, ring[0]]] }
-			});
-		}
-		if (drawing && cursor && coords.length >= 1) {
-			features.push({
-				type: 'Feature',
-				properties: { kind: 'dash' },
-				geometry: { type: 'LineString', coordinates: [coords[coords.length - 1], cursor] }
-			});
+			const ring = cursor && drawing ? [...coords, cursor] : [...coords];
+			if (ring.length >= 2) {
+				features.push({
+					type: 'Feature',
+					properties: { kind: 'line' },
+					geometry: { type: 'LineString', coordinates: [...ring, ring[0]] }
+				});
+			}
+			if (ring.length >= 3) {
+				features.push({
+					type: 'Feature',
+					properties: { kind: 'fill' },
+					geometry: { type: 'Polygon', coordinates: [[...ring, ring[0]]] }
+				});
+			}
+			if (drawing && cursor && coords.length >= 1) {
+				features.push({
+					type: 'Feature',
+					properties: { kind: 'dash' },
+					geometry: { type: 'LineString', coordinates: [coords[coords.length - 1], cursor] }
+				});
 		}
 
 		if (pendingPoint) {
@@ -1001,7 +1356,7 @@
 							created_at: f.properties?.created_at ?? ''
 						};
 					closeSelectedZone();
-					status = 'Field note selected';
+						status = 'Field note selected';
 						return;
 					}
 				}
@@ -1109,8 +1464,13 @@
 		if (visible) setBaseLayer('esri');
 	}
 
+	function setWatershedOutlineVisible(visible) {
+		setLayerVisibility('watershed-fill', visible);
+		setLayerVisibility('watershed-line', visible);
+	}
+
 	function setLayerVisibility(layerId, visible) {
-		if (!map.getLayer(layerId)) return;
+		if (!map?.getLayer(layerId)) return;
 		map.setLayoutProperty(layerId, 'visibility', visible ? 'visible' : 'none');
 	}
 
@@ -1130,23 +1490,35 @@
 		applyLayerStackOrder();
 	}
 
+	function moveVectorLayerStack(layerId) {
+		const fillId = `vec-${layerId}-fill`;
+		const lineId = `vec-${layerId}-line`;
+		const haloId = `${lineId}-halo`;
+		const labelId = `vec-${layerId}-label`;
+		if (map.getLayer(fillId)) map.moveLayer(fillId);
+		if (map.getLayer(haloId)) map.moveLayer(haloId);
+		if (map.getLayer(lineId)) map.moveLayer(lineId);
+		if (map.getLayer(labelId)) map.moveLayer(labelId);
+	}
+
 	function applyLayerStackOrder() {
 		if (!mapReady) return;
+		// Thematic layers first (under overlays).
 		for (const layer of secondaryLayers) {
+			if (isOverlayLayer(layer)) continue;
 			if (layer.kind === 'cog') {
 				const id = `cog-${layer.id}`;
 				if (map.getLayer(id)) map.moveLayer(id);
 			} else {
-				const fillId = `vec-${layer.id}-fill`;
-				const lineId = `vec-${layer.id}-line`;
-				const labelId = `vec-${layer.id}-label`;
-				if (map.getLayer(fillId)) map.moveLayer(fillId);
-				if (map.getLayer(lineId)) map.moveLayer(lineId);
-				if (map.getLayer(labelId)) map.moveLayer(labelId);
+				moveVectorLayerStack(layer.id);
 			}
 		}
 		if (map.getLayer('watershed-fill')) map.moveLayer('watershed-fill');
 		if (map.getLayer('watershed-line')) map.moveLayer('watershed-line');
+		// Reference overlays (villages / canals / streams) above thematic layers.
+		for (const layer of overlayLayers) {
+			moveVectorLayerStack(layer.id);
+		}
 		for (const key of primaryLayerOrder) {
 			if (key === 'hypotheses') continue;
 			const ids =
@@ -1305,52 +1677,83 @@
 				status = 'No secondary layers configured (set COG_LAYERS / VECTOR_LAYERS in .env)';
 				return;
 			}
-		for (const layer of cog_layers) {
-			if (layer.status === 'error') {
+			for (const layer of cog_layers) {
+				if (layer.status === 'error') {
 				status = `${layer.name} error: ${layer.error ?? 'unknown'}`;
 				cogVisibility = { ...cogVisibility, [layer.id]: false };
-				continue;
-			}
+					continue;
+				}
 			cogVisibility = { ...cogVisibility, [layer.id]: false };
-			const sourceId = `cog-${layer.id}`;
-			const tileUrl = cogTileUrl(layer.id);
-			map.addSource(sourceId, {
-				type: 'raster',
-				tiles: [tileUrl],
-				tileSize: 256,
-				minzoom: 7,
-				maxzoom: 14,
-				...(watershedBounds ? { bounds: watershedBounds } : {})
-			});
-			const beforeId = map.getLayer('watershed-fill') ? 'watershed-fill' : undefined;
-			map.addLayer(
-				{
-					id: sourceId,
-					type: 'raster',
-					source: sourceId,
-					layout: { visibility: 'none' },
-					paint: { 'raster-opacity': 0.85 }
-				},
-				beforeId
-			);
+				const sourceId = `cog-${layer.id}`;
+				const beforeId = map.getLayer('watershed-fill') ? 'watershed-fill' : undefined;
+				if (layer.tile_strategy === 'watershed_image' && watershedBounds) {
+					map.addSource(sourceId, {
+						type: 'image',
+						url: cogWatershedImageUrl(layer),
+						coordinates: watershedImageCoordinates(watershedBounds)
+					});
+					map.addLayer(
+						{
+							id: sourceId,
+							type: 'raster',
+							source: sourceId,
+							// Keep visibility: visible so the browser pre-fetches this image now.
+							// Opacity 0 = invisible; flip to 0.85 when user selects the layer.
+							layout: { visibility: 'visible' },
+							paint: { 'raster-opacity': 0 }
+						},
+						beforeId
+					);
+				} else {
+					const tileUrl = cogTileUrl(layer.id);
+					map.addSource(sourceId, {
+						type: 'raster',
+						tiles: [tileUrl],
+						tileSize: 256,
+						minzoom: 7,
+						maxzoom: 14,
+						...(watershedBounds ? { bounds: watershedBounds } : {})
+					});
+					map.addLayer(
+						{
+							id: sourceId,
+							type: 'raster',
+							source: sourceId,
+							// Keep visibility: visible so MapLibre pre-fetches viewport tiles now.
+							// Opacity 0 = invisible; flip to 0.85 when user selects the layer.
+							layout: { visibility: 'visible' },
+							paint: { 'raster-opacity': 0 }
+						},
+						beforeId
+					);
+				}
 		}
-			ensureCogAboveBasemaps();
-			ensureDrawPreviewOnTop();
+				ensureCogAboveBasemaps();
+				ensureDrawPreviewOnTop();
 			fitToWatershed();
 		} catch (err) {
 			status = `Raster layers unavailable: ${err instanceof Error ? err.message : String(err)}`;
 		}
 	}
 
-	function enrichVillageProperties(features, needPctScst) {
-		if (!needPctScst) return features;
+	function enrichVillageProperties(features, layer) {
+		const needPctScst =
+			layer?.analysis_type === 'demographics_marginalized' || layer?.style_column === 'pct_scst';
+		const needPctLiterate =
+			layer?.analysis_type === 'demographics_literacy' || layer?.style_column === 'pct_literate';
+		if (!needPctScst && !needPctLiterate) return features;
 		return features.map((f) => {
 			const p = { ...(f.properties || {}) };
-			if (p.pct_scst == null || p.pct_scst === '') {
+			if (needPctScst && (p.pct_scst == null || p.pct_scst === '')) {
 				const pop = Number(p.Total_Popu ?? p.total_popu ?? 0);
 				const sc = Number(p.Total_SC_P ?? p.total_sc_p ?? 0);
 				const st = Number(p.Total_ST_P ?? p.total_st_p ?? 0);
 				p.pct_scst = pop > 0 ? ((sc + st) / pop) * 100 : 0;
+			}
+			if (needPctLiterate && (p.pct_literate == null || p.pct_literate === '')) {
+				const pop = Number(p.Total_Popu ?? p.total_popu ?? 0);
+				const literate = Number(p.Total_Lite ?? p.total_lite ?? 0);
+				p.pct_literate = pop > 0 ? (literate / pop) * 100 : 0;
 			}
 			return { ...f, properties: p };
 		});
@@ -1406,7 +1809,13 @@
 
 		return features.map((f) => {
 			const p = { ...(f.properties || {}) };
-			if (p[column] != null && p[column] !== '') {
+			// WISER rank layers share village_resilience.fgb — always re-derive from the
+			// layer-specific source column so a wrong backend fill cannot make them identical.
+			if (
+				atype !== 'wiser_rank' &&
+				p[column] != null &&
+				p[column] !== ''
+			) {
 				return { ...f, properties: p };
 			}
 
@@ -1426,12 +1835,12 @@
 			} else if (atype === 'wiser_rank') {
 				const preferred =
 					column === '__wiser_irrigation_access_class'
-						? ['Irr_access', column]
+						? ['Irr_access']
 						: column === '__wiser_kharif_resilience_class'
-							? ['Kharif_res', column]
+							? ['Kharif_res']
 							: column === '__wiser_rabi_resilience_class'
-								? ['Rabi_res', column]
-								: [column, 'Irr_access', 'Kharif_res', 'Rabi_res'];
+								? ['Rabi_res']
+								: ['Irr_access', 'Kharif_res', 'Rabi_res'];
 				const raw = pickProp(p, preferred);
 				const key = String(raw ?? '')
 					.trim()
@@ -1440,18 +1849,125 @@
 			} else if (atype === 'aquifers') {
 				const raw = pickProp(p, ['aquifer', 'Major_Aqui', 'aquifers']);
 				p[column] = raw != null ? String(raw) : 'Other';
+			} else if (atype === 'demographics_literacy' || column === 'pct_literate') {
+				const raw = pickProp(p, ['pct_literate', 'Total_Lite', 'total_lite']);
+				if (raw != null && raw !== '') {
+					p[column] = Number(raw);
+				} else {
+					const pop = Number(pickProp(p, ['Total_Popu', 'total_popu']) ?? 0);
+					const literate = Number(pickProp(p, ['Total_Lite', 'total_lite']) ?? 0);
+					p[column] = pop > 0 ? (literate / pop) * 100 : 0;
+				}
 			}
 
 			return { ...f, properties: p };
 		});
 	}
 
-	async function fetchClippedGeoJSON(url) {
-		const response = await fetch(resolveApiUrl(url), { credentials: 'include' });
-		if (!response.ok) {
-			throw new Error(`Failed to fetch vector layer (${response.status})`);
+	async function fetchClippedGeoJSON(url, { signal: callerSignal } = {}) {
+		const resolved = resolveApiUrl(url);
+		// Combine caller signal (per-selection abort) with the page-level abort.
+		// When either fires the fetch is cancelled immediately.
+		const signal = callerSignal ?? mapDataAbort.signal;
+		let lastError = null;
+		// At most one retry — reload storms were freezing beta.
+		for (let attempt = 0; attempt < 2; attempt++) {
+			try {
+				if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+				const response = await fetch(resolved, { credentials: 'include', signal });
+				if (!response.ok) {
+					const retryable =
+						response.status === 502 || response.status === 503 || response.status === 504;
+					lastError = new Error(`Failed to fetch vector layer (${response.status})`);
+					if (retryable && attempt < 1) {
+						await new Promise((r) => setTimeout(r, 1000));
+						continue;
+					}
+					throw lastError;
+				}
+				return response.json();
+			} catch (err) {
+				if (err?.name === 'AbortError') throw err;
+				lastError = err;
+				const msg = err instanceof Error ? err.message : String(err);
+				if (/502|503|504|Failed to fetch|NetworkError/i.test(msg) && attempt < 1) {
+					await new Promise((r) => setTimeout(r, 1000));
+					continue;
+				}
+				throw err;
+			}
 		}
-		return response.json();
+		throw lastError ?? new Error('Failed to fetch vector layer');
+	}
+
+	function villageLabelFromProps(props, labelColumn) {
+		if (!props) return '';
+		const keys = [
+			labelColumn,
+			'Village Na',
+			'Village Name',
+			'village_name',
+			'name',
+			'NAME'
+		].filter(Boolean);
+		for (const k of keys) {
+			const v = props[k];
+			if (v != null && String(v).trim()) return String(v).trim();
+		}
+		return '';
+	}
+
+	function escapeHtml(text) {
+		return String(text)
+			.replace(/&/g, '&amp;')
+			.replace(/</g, '&lt;')
+			.replace(/>/g, '&gt;')
+			.replace(/"/g, '&quot;');
+	}
+
+	function bindVillageHover(layer, fillId, lineId, labelColumn) {
+		if (!map || layer?.id !== 'village_boundaries') return;
+		const key = `${fillId}|${lineId}`;
+		if (villageHoverBound.has(key)) return;
+		villageHoverBound.add(key);
+
+		if (!villageHoverPopup) {
+			villageHoverPopup = new maplibregl.Popup({
+				closeButton: false,
+				closeOnClick: false,
+				offset: 10,
+				className: 'village-hover-popup'
+			});
+		}
+
+		const layers = [fillId, lineId].filter((id) => map.getLayer(id));
+		const onMove = (e) => {
+			if (!map.getLayer(fillId)) return;
+			const vis = map.getLayoutProperty(fillId, 'visibility');
+			if (vis === 'none') {
+				villageHoverPopup?.remove();
+				return;
+			}
+			const hit = map.queryRenderedFeatures(e.point, { layers });
+			const feat = hit[0];
+			const label = villageLabelFromProps(feat?.properties, labelColumn);
+			if (!label) {
+				villageHoverPopup?.remove();
+				return;
+			}
+			map.getCanvas().style.cursor = 'pointer';
+			villageHoverPopup
+				.setLngLat(e.lngLat)
+				.setHTML(`<strong>${escapeHtml(label)}</strong>`)
+				.addTo(map);
+		};
+		const onLeave = () => {
+			villageHoverPopup?.remove();
+		};
+		for (const id of layers) {
+			map.on('mousemove', id, onMove);
+			map.on('mouseleave', id, onLeave);
+		}
 	}
 
 	/** Metadata only — geometries load on demand when the user selects a layer. */
@@ -1476,36 +1992,40 @@
 		}
 	}
 
-	async function ensureVectorLayerOnMap(layer) {
-		if (!map || !layer?.id) return;
+	async function ensureVectorLayerOnMap(layer, { force = false, signal } = {}) {
+		if (!map || !layer?.id) return false;
 		const sourceId = `vec-${layer.id}`;
-		if (map.getSource(sourceId)) return;
-		if (!layer.url || layer.map_render === false) return;
+		if (map.getSource(sourceId) && !force) {
+			const cached = map.getSource(sourceId)?._data;
+			const n = cached?.features?.length ?? vectorGeoJsonByKey[layer.url || layer.id]?.features?.length;
+			if (n == null || n > 0) return true;
+			force = true;
+		}
+		if (!layer.url || layer.map_render === false) return false;
 
 		status = `Loading ${layer.name}…`;
 		let data;
-		// Reuse watershed-clipped GeoJSON already fetched for the same S3 key
-		// (e.g. village_boundaries / baseline_population / marginalized_scst).
-		const cacheKey = layer.s3_key || layer.url;
-		if (cacheKey && vectorGeoJsonByKey[cacheKey]) {
+		// Reuse watershed-clipped GeoJSON for the same S3 key (prod behaviour) —
+		// WISER siblings + village overlays share one clip; paint is re-bound below.
+		const cacheKey = layer.s3_key || layer.url || layer.id;
+		if (!force && cacheKey && vectorGeoJsonByKey[cacheKey]) {
 			data = vectorGeoJsonByKey[cacheKey];
 		} else {
 			try {
-				data = await fetchClippedGeoJSON(layer.url);
+				data = await fetchClippedGeoJSON(layer.url, { signal });
 			} catch (fetchErr) {
+				// Silently drop AbortErrors — user navigated away before clip finished.
+				if (fetchErr?.name === 'AbortError') return false;
 				console.error(`Failed to load ${layer.name}:`, fetchErr);
 				status = `${layer.name} failed: ${fetchErr instanceof Error ? fetchErr.message : String(fetchErr)}`;
-				return;
+				return false;
 			}
 			if (cacheKey) {
 				vectorGeoJsonByKey = { ...vectorGeoJsonByKey, [cacheKey]: data };
 			}
 		}
 
-		let features = enrichVillageProperties(
-			data.features ?? [],
-			layer.analysis_type === 'demographics_marginalized' || layer.style_column === 'pct_scst'
-		);
+		let features = enrichVillageProperties(data.features ?? [], layer);
 		features = normalizeVectorFeatures(features, layer);
 		data = { type: 'FeatureCollection', features };
 		layerActiveLegend = {
@@ -1518,32 +2038,100 @@
 		const labelId = `${sourceId}-label`;
 		const beforeId = map.getLayer('watershed-fill') ? 'watershed-fill' : undefined;
 		const isOutline = layer.render_type === 'outline';
-		const fillColor = isOutline ? '#000000' : vectorFillColor(layer);
+		const isLine = layer.render_type === 'line' || layer.geometry_kind === 'line';
+		const fillColor = isOutline ? '#1f2937' : vectorFillColor(layer);
 		const labelColumn = layer.label_column || 'Village Na';
+		const fillOpacity = layer.fill_opacity ?? 0.65;
+
+		if (map.getSource(sourceId)) {
+			map.getSource(sourceId).setData(data);
+			// Re-bind paint so WISER siblings never keep another layer's match expression.
+			if (map.getLayer(fillId) && !isLine) {
+				map.setPaintProperty(fillId, 'fill-color', fillColor);
+				map.setPaintProperty(fillId, 'fill-opacity', isOutline ? 0.04 : fillOpacity);
+			}
+			if (map.getLayer(lineId) && isLine && layer.style_column) {
+				map.setPaintProperty(lineId, 'line-color', vectorLineColor(layer));
+			}
+			applyLayerStackOrder();
+			ensureDrawPreviewOnTop();
+			return true;
+		}
 
 		map.addSource(sourceId, { type: 'geojson', data });
-		map.addLayer(
-			{
-				id: fillId,
-				type: 'fill',
-				source: sourceId,
-				layout: { visibility: 'none' },
-				paint: {
-					'fill-color': fillColor,
-					'fill-opacity': isOutline ? 0 : 0.65
-				}
-			},
-			beforeId
-		);
+		if (!isLine) {
+			map.addLayer(
+				{
+					id: fillId,
+					type: 'fill',
+					source: sourceId,
+					layout: { visibility: 'none' },
+					paint: {
+						'fill-color': fillColor,
+						// Slight opacity so hover hit-testing works on village polygons.
+						'fill-opacity': isOutline ? 0.04 : fillOpacity
+					}
+				},
+				beforeId
+			);
+		}
+		if (isLine && layer.id === 'canals') {
+			map.addLayer(
+				{
+					id: `${lineId}-halo`,
+					type: 'line',
+					source: sourceId,
+					layout: { visibility: 'none' },
+					paint: {
+						'line-color': '#ffffff',
+						'line-width': (layer.line_width ?? 2) + 2.5,
+						'line-opacity': 0.92
+					}
+				},
+				beforeId
+			);
+		}
+		// Thin white underlay so grey dashed village edges stay readable on basemap / fills.
+		if (isOutline) {
+			map.addLayer(
+				{
+					id: `${lineId}-halo`,
+					type: 'line',
+					source: sourceId,
+					layout: { visibility: 'none' },
+					paint: {
+						'line-color': '#ffffff',
+						'line-width': (layer.line_width ?? 2.75) + 2,
+						'line-opacity': 0.95
+					}
+				},
+				beforeId
+			);
+		}
 		map.addLayer(
 			{
 				id: lineId,
 				type: 'line',
 				source: sourceId,
 				layout: { visibility: 'none' },
-				paint: isOutline
-					? { 'line-color': '#0f172a', 'line-width': 1.25, 'line-opacity': 0.9 }
-					: { 'line-color': '#334155', 'line-width': 0.6, 'line-opacity': 0.5 }
+				paint: isLine
+					? {
+							'line-color': layer.style_column
+								? vectorLineColor(layer)
+								: layer.line_color || '#1c75e9',
+							'line-width': layer.line_width ?? 1.5,
+							'line-opacity': 0.9
+						}
+					: isOutline
+						? {
+								'line-color': layer.line_color || '#1f2937',
+								'line-width': layer.line_width ?? 2.75,
+								'line-opacity': 1,
+								...(Array.isArray(layer.line_dasharray) && layer.line_dasharray.length
+									? { 'line-dasharray': layer.line_dasharray }
+									: { 'line-dasharray': [2, 1.5] })
+							}
+						: { 'line-color': '#334155', 'line-width': 0.6, 'line-opacity': 0.5 }
 			},
 			beforeId
 		);
@@ -1562,7 +2150,7 @@
 							['to-string', ['get', 'Village Na']],
 							''
 						],
-						'text-size': 11,
+						'text-size': 12,
 						'text-font': ['Open Sans Regular', 'Arial Unicode MS Regular'],
 						'text-max-width': 10,
 						'text-anchor': 'center',
@@ -1571,24 +2159,32 @@
 						'text-padding': 2
 					},
 					paint: {
-						'text-color': '#0f172a',
+						'text-color': '#111827',
 						'text-halo-color': '#ffffff',
-						'text-halo-width': 1.75
+						'text-halo-width': 2.25
 					}
 				},
 				beforeId
 			);
+			// Village name hover is create-flow only; not used after project creation.
 		}
 		applyLayerStackOrder();
 		ensureDrawPreviewOnTop();
 		status = 'Ready';
+		return !!map.getSource(sourceId);
+	}
+
+	function vectorSourceReady(layer) {
+		if (!map || !layer?.id) return false;
+		// Source must exist on the map; empty FeatureCollections are OK for sparse AOIs.
+		return !!map.getSource(`vec-${layer.id}`);
 	}
 
 	async function preloadAllSecondaryData() {
 		if (!project?.id) return;
-		status = 'Loading watershed analysis…';
+		if (!mapDataAbort.signal.aborted) status = 'Loading watershed analysis…';
 
-		// Seed COG legends (full catalog; class filter needs raster sampling later)
+		// Seed COG legends (full catalog)
 		for (const layer of secondaryLayers.filter((l) => l.kind === 'cog')) {
 			layerActiveLegend = {
 				...layerActiveLegend,
@@ -1603,7 +2199,13 @@
 			layerAnalysisLoading = Object.fromEntries(
 				thematicLayers.map((l) => [l.id, true])
 			);
-			const { analyses } = await fetchBatchLayerAnalysis(project.id);
+			// Use bgBatchAbort (not mapDataAbort) so a user-initiated layer click
+			// can abort *only* the background batch, freeing the server's _batch_sem
+			// without cancelling vector loading.
+			const { analyses } = await fetchBatchLayerAnalysis(project.id, {
+				signal: bgBatchAbort.signal
+			});
+			if (bgBatchAbort.signal.aborted || mapDataAbort.signal.aborted) return;
 			const next = { ...layerAnalysis };
 			for (const a of analyses || []) {
 				next[a.layer_id] = a;
@@ -1611,6 +2213,7 @@
 			layerAnalysis = next;
 			analysisPreloadDone = true;
 		} catch (err) {
+			if (err?.name === 'AbortError' || bgBatchAbort.signal.aborted || mapDataAbort.signal.aborted) return;
 			console.error('Batch analysis failed', err);
 			// Clear loading flags so on-demand fetch is not blocked
 			layerAnalysisLoading = Object.fromEntries(
@@ -1629,9 +2232,10 @@
 			layerAnalysisLoading = Object.fromEntries(
 				secondaryLayers.map((l) => [l.id, false])
 			);
+			// Always clear sticky "Loading watershed analysis…" — including on abort
+			// when the user already has map + evidence visible.
+			if (!mapDataAbort.signal.aborted) status = 'Ready';
 		}
-
-		status = 'Ready';
 	}
 
 	function hasLoadedAnalysis(entry) {
@@ -1645,12 +2249,24 @@
 		const meta = secondaryLayers.find((l) => l.id === layerId);
 		if (!meta || isOverlayLayer(meta)) return;
 		if (hasLoadedAnalysis(layerAnalysis[layerId]) || layerAnalysisLoading[layerId]) return;
+
+		// Cancel any in-flight background batch so the server's _batch_sem slot is
+		// freed before this on-demand request arrives.  Create a fresh controller so
+		// the batch can restart after the user's request completes.
+		bgBatchAbort.abort();
+		bgBatchAbort = new AbortController();
+
 		layerAnalysisLoading = { ...layerAnalysisLoading, [layerId]: true };
 		try {
 			const isCog = meta.kind === 'cog';
-			const result = await fetchLayerAnalysis(layerId, project.id, { isCog });
+			const result = await fetchLayerAnalysis(layerId, project.id, {
+				isCog,
+				signal: mapDataAbort.signal
+			});
+			if (mapDataAbort.signal.aborted) return;
 			layerAnalysis = { ...layerAnalysis, [layerId]: result };
 		} catch (err) {
+			if (err?.name === 'AbortError' || mapDataAbort.signal.aborted) return;
 			layerAnalysis = {
 				...layerAnalysis,
 				[layerId]: {
@@ -1667,6 +2283,9 @@
 			};
 		} finally {
 			layerAnalysisLoading = { ...layerAnalysisLoading, [layerId]: false };
+			if (!mapDataAbort.signal.aborted && selectedLayer?.id === layerId) {
+				status = 'Ready';
+			}
 		}
 	}
 
@@ -1762,41 +2381,41 @@
 			};
 		});
 		const zoneLayers = [
-			{
+				{
 				id: 'zones-fill',
-				type: 'fill',
+					type: 'fill',
 				source: 'zones',
-				paint: {
+					paint: {
 					'fill-color': ['coalesce', ['get', 'color'], OBSERVATION_ZONE_COLOR],
-					'fill-opacity': 0.4
-				}
-			},
-			{
-				id: 'zones-line',
-				type: 'line',
-				source: 'zones',
-				paint: {
-					'line-color': ['coalesce', ['get', 'color'], OBSERVATION_ZONE_COLOR],
-					'line-width': LINE_WIDTH
-				}
-			},
-			{
-				id: 'zones-label',
-				type: 'symbol',
-				source: 'zones',
-				layout: {
-					'text-field': ['get', 'text'],
-					'text-size': 11,
-					'text-anchor': 'center',
-					'text-allow-overlap': true
+						'fill-opacity': 0.4
+					}
 				},
-				paint: {
-					'text-color': '#ffffff',
+				{
+				id: 'zones-line',
+					type: 'line',
+				source: 'zones',
+					paint: {
+					'line-color': ['coalesce', ['get', 'color'], OBSERVATION_ZONE_COLOR],
+						'line-width': LINE_WIDTH
+					}
+				},
+				{
+				id: 'zones-label',
+					type: 'symbol',
+				source: 'zones',
+					layout: {
+						'text-field': ['get', 'text'],
+						'text-size': 11,
+						'text-anchor': 'center',
+						'text-allow-overlap': true
+					},
+					paint: {
+						'text-color': '#ffffff',
 					'text-halo-color': ['coalesce', ['get', 'color'], OBSERVATION_ZONE_COLOR],
-					'text-halo-width': 8,
-					'text-halo-blur': 0
+						'text-halo-width': 8,
+						'text-halo-blur': 0
+					}
 				}
-			}
 		];
 		removeGeoJsonSource('zones', ['zones-label', 'zones-line', 'zones-fill']);
 		addGeoJsonSource('zones', { type: 'FeatureCollection', features }, zoneLayers, 'id');
@@ -2204,14 +2823,31 @@
 	}
 
 	function toggleCog(id, visible) {
-		cogVisibility = { ...cogVisibility, [id]: visible };
 		const meta = secondaryLayers.find((l) => l.id === id);
 		if (meta?.kind === 'vector') {
+			// WISER rank layers (irrigation / kharif / rabi) all render the same
+			// village_resilience.fgb with different style columns.  Enabling one via
+			// the eye-toggle must auto-disable its siblings so they never stack.
+			if (visible && WISER_RANK_LAYER_IDS.has(id)) {
+				for (const wid of WISER_RANK_LAYER_IDS) {
+					if (wid === id) continue;
+					cogVisibility = { ...cogVisibility, [wid]: false };
+					setLayerVisibility(`vec-${wid}-fill`, false);
+					setLayerVisibility(`vec-${wid}-line`, false);
+					setLayerVisibility(`vec-${wid}-line-halo`, false);
+					setLayerVisibility(`vec-${wid}-label`, false);
+				}
+			}
+			cogVisibility = { ...cogVisibility, [id]: visible };
 			setLayerVisibility(`vec-${id}-fill`, visible);
+			setLayerVisibility(`vec-${id}-line-halo`, visible);
 			setLayerVisibility(`vec-${id}-line`, visible);
 			setLayerVisibility(`vec-${id}-label`, visible);
 		} else {
-			setLayerVisibility(`cog-${id}`, visible);
+			// COG: use opacity so tiles keep streaming even when eye-toggled off
+			cogVisibility = { ...cogVisibility, [id]: visible };
+			const cogId = `cog-${id}`;
+			if (map?.getLayer(cogId)) map.setPaintProperty(cogId, 'raster-opacity', visible ? 0.85 : 0);
 		}
 	}
 
@@ -2231,9 +2867,29 @@
 	}
 </script>
 
-<div class="flex h-full min-h-0 w-full">
+<div class="relative flex h-full min-h-0 w-full">
+	{#if bootError}
+		<div
+			class="absolute inset-x-0 top-0 z-[80] flex items-center gap-2 bg-red-600 px-4 py-2 text-sm text-white"
+			role="alert"
+		>
+			<span class="flex-1 truncate">{bootError}</span>
+			<button
+				type="button"
+				class="shrink-0 underline opacity-80 hover:opacity-100"
+				onclick={() => (bootError = '')}
+			>Dismiss</button>
+		</div>
+	{/if}
+	{#if bgLoading}
+		<div class="absolute inset-x-0 top-0 z-[70] h-0.5 overflow-hidden" aria-hidden="true">
+			<div class="h-full w-full origin-left animate-[indeterminate_1.6s_ease-in-out_infinite] bg-brand-blue"></div>
+		</div>
+	{/if}
 	<aside
 		class="layer-sidebar flex shrink-0 flex-col overflow-hidden bg-white font-body"
+		class:pointer-events-none={projectBooting}
+		class:opacity-40={projectBooting}
 		style:width="{sidebarWidth}px"
 	>
 		<div class="border-b border-brand-navy/10 px-3 py-4">
@@ -2253,52 +2909,49 @@
 		<div class="min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-4">
 			{#if overlayLayers.length > 0}
 				<h3 class="sidebar-section-title font-headline text-[11px] font-semibold tracking-[0.08em] text-brand-navy/55 uppercase">
-					Village boundaries
-				</h3>
+					Overlays
+			</h3>
 				<div class="layer-list mb-5 flex flex-col gap-1.5">
 					{#each overlayLayers as layer (layer.id)}
-						<div
+				<div
 							class="layer-row"
-							class:layer-row-selected={selectedLayer?.kind === 'secondary' && selectedLayer.id === layer.id}
+					class:layer-row-selected={selectedLayer?.kind === 'secondary' && selectedLayer.id === layer.id}
 							role="listitem"
-						>
-							<button
-								type="button"
+				>
+					<button
+						type="button"
 								class="layer-eye"
 								disabled={layer.status === 'error' || layer.map_render === false}
 								title={layer.map_render === false ? 'Map rendering disabled — dataset too large' : undefined}
-								aria-label={(cogVisibility[layer.id] ?? false) ? 'Hide village boundaries' : 'Show village boundaries'}
+								aria-label={(cogVisibility[layer.id] ?? false) ? `Hide ${layer.name}` : `Show ${layer.name}`}
 								onclick={async (e) => {
 									e.stopPropagation();
 									const next = !(cogVisibility[layer.id] ?? false);
-									if (next && layer.kind === 'vector' && layer.map_render !== false) {
-										await ensureVectorLayerOnMap(layer);
-									}
-									toggleCog(layer.id, next);
+									await setOverlayVisibility(layer, next);
 								}}
 							>
 								{#if cogVisibility[layer.id] ?? false}
-									<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
-										<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-										<circle cx="12" cy="12" r="3" />
-									</svg>
-								{:else}
-									<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
-										<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
-										<path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
-										<path d="M1 1l22 22" />
-										<path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
-									</svg>
-								{/if}
-							</button>
-							<button
-								type="button"
+							<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
+								<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+								<circle cx="12" cy="12" r="3" />
+							</svg>
+						{:else}
+							<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
+								<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+								<path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+								<path d="M1 1l22 22" />
+								<path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
+							</svg>
+						{/if}
+					</button>
+					<button
+						type="button"
 								class="layer-label"
-								title={layer.name}
-								onclick={() => selectLayer({ kind: 'secondary', id: layer.id })}
-							>
-								{layer.name}
-							</button>
+						title={layer.name}
+						onclick={() => selectLayer({ kind: 'secondary', id: layer.id })}
+					>
+						{layer.name}
+					</button>
 						</div>
 						{#if layer.error}
 							<p class="m-0 mb-1 truncate px-2 text-xs text-red-600" title={layer.error}>{layer.error}</p>
@@ -2331,11 +2984,11 @@
 										>
 											{layer.name}
 										</button>
-									</div>
-									{#if layer.error}
+				</div>
+				{#if layer.error}
 										<p class="m-0 mb-1 truncate px-2 text-xs text-red-600" title={layer.error}>{layer.error}</p>
-									{/if}
-								{/each}
+				{/if}
+			{/each}
 							</div>
 						</div>
 					{/each}
@@ -2346,23 +2999,23 @@
 				Primary layers
 			</h3>
 			<div class="layer-list flex flex-col gap-1.5">
-				{#each primaryLayerOrder as layerId, index (layerId)}
-					<div
+			{#each primaryLayerOrder as layerId, index (layerId)}
+				<div
 						class="layer-row"
 						class:layer-row-selected={activePrimaryTab === layerId && selectedLayer?.kind === 'primary'}
-						class:layer-row-dragging={dragReorder.category === 'primary' && dragReorder.index === index}
+					class:layer-row-dragging={dragReorder.category === 'primary' && dragReorder.index === index}
 						class:layer-row-over={dragReorder.category === 'primary' && dragOverIndex === index && dragReorder.index !== index}
 						draggable="true"
 						role="listitem"
 						ondragstart={(e) => onRowDragStart('primary', index, e)}
 						ondragend={endLayerDrag}
-						ondragover={onLayerDragOver}
+					ondragover={onLayerDragOver}
 						ondragenter={(e) => onLayerDragEnter('primary', index, e)}
-						ondrop={(e) => onLayerDrop('primary', index, e)}
-					>
-						{#if layerId === 'observation-zones'}
-							<button
-								type="button"
+					ondrop={(e) => onLayerDrop('primary', index, e)}
+				>
+					{#if layerId === 'observation-zones'}
+						<button
+							type="button"
 								data-no-drag
 								class="layer-eye"
 								aria-label={showZonesLayer ? 'Hide zones on map' : 'Show zones on map'}
@@ -2372,30 +3025,30 @@
 								}}
 							>
 								{#if showZonesLayer}
-									<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
-										<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-										<circle cx="12" cy="12" r="3" />
-									</svg>
-								{:else}
-									<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
-										<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
-										<path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
-										<path d="M1 1l22 22" />
-										<path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
-									</svg>
-								{/if}
-							</button>
-							<button
-								type="button"
+								<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
+									<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+									<circle cx="12" cy="12" r="3" />
+								</svg>
+							{:else}
+								<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
+									<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+									<path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+									<path d="M1 1l22 22" />
+									<path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
+								</svg>
+							{/if}
+						</button>
+						<button
+							type="button"
 								class="layer-label layer-label-icon"
 								onclick={() => selectPrimaryTab('observation-zones')}
-							>
-								<ObservationZoneIcon size="sm" />
-								<span class="truncate">{PRIMARY_LAYER_LABELS[layerId]}</span>
-							</button>
+						>
+							<ObservationZoneIcon size="sm" />
+							<span class="truncate">{PRIMARY_LAYER_LABELS[layerId]}</span>
+						</button>
 						{:else if layerId === 'field-notes'}
-							<button
-								type="button"
+						<button
+							type="button"
 								data-no-drag
 								class="layer-eye"
 								aria-label={showFieldNotesLayer ? 'Hide notes on map' : 'Show notes on map'}
@@ -2403,29 +3056,29 @@
 									e.stopPropagation();
 									toggleFieldNotesLayer(!showFieldNotesLayer);
 								}}
-							>
-								{#if showFieldNotesLayer}
-									<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
-										<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-										<circle cx="12" cy="12" r="3" />
-									</svg>
-								{:else}
-									<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
-										<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
-										<path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
-										<path d="M1 1l22 22" />
-										<path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
-									</svg>
-								{/if}
-							</button>
-							<button
-								type="button"
+						>
+							{#if showFieldNotesLayer}
+								<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
+									<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+									<circle cx="12" cy="12" r="3" />
+								</svg>
+							{:else}
+								<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
+									<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+									<path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+									<path d="M1 1l22 22" />
+									<path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
+								</svg>
+							{/if}
+						</button>
+						<button
+							type="button"
 								class="layer-label layer-label-icon"
 								onclick={() => selectPrimaryTab('field-notes')}
-							>
-								<FieldNoteIcon size="sm" />
-								<span class="truncate">{PRIMARY_LAYER_LABELS[layerId]}</span>
-							</button>
+						>
+							<FieldNoteIcon size="sm" />
+							<span class="truncate">{PRIMARY_LAYER_LABELS[layerId]}</span>
+						</button>
 						{:else if layerId === 'hypotheses'}
 							<span class="layer-eye-spacer" aria-hidden="true"></span>
 							<button
@@ -2439,16 +3092,16 @@
 						{/if}
 						<span class="layer-drag-handle" aria-hidden="true" title="Drag to reorder">
 							<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="h-4 w-4">
-								<circle cx="9" cy="6" r="1.4" fill="currentColor" />
-								<circle cx="15" cy="6" r="1.4" fill="currentColor" />
-								<circle cx="9" cy="12" r="1.4" fill="currentColor" />
-								<circle cx="15" cy="12" r="1.4" fill="currentColor" />
-								<circle cx="9" cy="18" r="1.4" fill="currentColor" />
-								<circle cx="15" cy="18" r="1.4" fill="currentColor" />
-							</svg>
+							<circle cx="9" cy="6" r="1.4" fill="currentColor" />
+							<circle cx="15" cy="6" r="1.4" fill="currentColor" />
+							<circle cx="9" cy="12" r="1.4" fill="currentColor" />
+							<circle cx="15" cy="12" r="1.4" fill="currentColor" />
+							<circle cx="9" cy="18" r="1.4" fill="currentColor" />
+							<circle cx="15" cy="18" r="1.4" fill="currentColor" />
+						</svg>
 						</span>
-					</div>
-				{/each}
+				</div>
+			{/each}
 			</div>
 		</div>
 	</aside>
@@ -2509,26 +3162,26 @@
 			</button>
 		</div>
 
-		{#if selectedLayer?.kind === 'secondary' && mapLegendItems.length && mapMode === 'flat'}
-			{@const layer = secondaryLayers.find((l) => l.id === selectedLayer.id)}
+		{#if displayedMapLegend}
 			<div
 				class="pointer-events-none absolute top-3 right-3 z-10 max-h-[70%] max-w-[220px] overflow-y-auto rounded-lg border border-brand-navy/10 bg-white/95 p-3 shadow-md backdrop-blur-sm"
 			>
 				<p class="m-0 mb-2 text-[10px] font-semibold tracking-wide text-brand-navy/55 uppercase">
-					{layer?.name ?? 'Legend'}
+					{displayedMapLegend.title}
 				</p>
-				{#if layer?.render_type === 'continuous' || mapLegendItems[0]?.continuous}
+				{#if displayedMapLegend.items[0]?.continuous}
+					{@const layer = secondaryLayers.find((l) => l.id === selectedLayer?.id)}
 					<div
 						class="mb-1 h-2.5 w-full rounded border border-gray-200"
-						style="background: linear-gradient(90deg, #2c7bb6, #abd9e9, #ffffbf, #fdae61, #d7191c)"
+						style="background: {continuousLegendGradient(layer)}"
 					></div>
-					<div class="flex justify-between text-[10px] text-gray-500">
-						<span>Low</span>
-						<span>High</span>
+					<div class="mb-2 flex justify-between text-[10px] text-gray-500">
+						<span>{continuousLegendLabels(layer).low}</span>
+						<span>{continuousLegendLabels(layer).high}</span>
 					</div>
 				{:else}
 					<ul class="m-0 list-none space-y-1.5 p-0">
-						{#each mapLegendItems as item}
+						{#each displayedMapLegend.items as item}
 							<li class="flex items-center gap-2 text-xs">
 								<span
 									class="inline-block h-3.5 w-3.5 shrink-0 rounded border border-gray-300"
@@ -2539,7 +3192,7 @@
 						{/each}
 					</ul>
 				{/if}
-			</div>
+				</div>
 		{/if}
 
 		{#if mapMode === 'flat'}
@@ -2844,7 +3497,7 @@
 						<div class="p-4">
 							<div class="mb-3">
 								<span class="mb-0.5 block text-xs font-semibold text-gray-500 uppercase">Observations</span>
-								<p class="m-0 text-sm leading-relaxed whitespace-pre-wrap text-brand-navy">
+							<p class="m-0 text-sm leading-relaxed whitespace-pre-wrap text-brand-navy">
 									{selectedZone.observations || '—'}
 								</p>
 							</div>
@@ -3287,54 +3940,54 @@
 									<h3 class="m-0 text-base font-semibold">
 										{selectedFieldNote.title?.trim() || 'Field note'}
 									</h3>
-									<div class="flex shrink-0 items-center gap-1">
-										<div class="relative">
+							<div class="flex shrink-0 items-center gap-1">
+								<div class="relative">
+									<button
+										type="button"
+										class="flex h-8 w-8 cursor-pointer items-center justify-center rounded border-0 bg-transparent text-gray-600 hover:bg-gray-100"
+										aria-label="More actions"
+										onclick={() => (showSelectedFieldNoteMenu = !showSelectedFieldNoteMenu)}
+									>
+										<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="h-5 w-5">
+											<circle cx="12" cy="5" r="1.5" />
+											<circle cx="12" cy="12" r="1.5" />
+											<circle cx="12" cy="19" r="1.5" />
+										</svg>
+									</button>
+									{#if showSelectedFieldNoteMenu}
+										<div
+											class="absolute right-0 z-20 mt-1 min-w-28 overflow-hidden rounded border border-gray-200 bg-white shadow-lg"
+										>
 											<button
 												type="button"
-												class="flex h-8 w-8 cursor-pointer items-center justify-center rounded border-0 bg-transparent text-gray-600 hover:bg-gray-100"
-												aria-label="More actions"
-												onclick={() => (showSelectedFieldNoteMenu = !showSelectedFieldNoteMenu)}
+												class="block w-full cursor-pointer border-0 bg-white px-3 py-2 text-left text-sm hover:bg-gray-50"
+												onclick={startEditSelectedFieldNote}
 											>
-												<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="h-5 w-5">
-													<circle cx="12" cy="5" r="1.5" />
-													<circle cx="12" cy="12" r="1.5" />
-													<circle cx="12" cy="19" r="1.5" />
-												</svg>
+												Edit
 											</button>
-											{#if showSelectedFieldNoteMenu}
-												<div
-													class="absolute right-0 z-20 mt-1 min-w-28 overflow-hidden rounded border border-gray-200 bg-white shadow-lg"
-												>
-													<button
-														type="button"
-														class="block w-full cursor-pointer border-0 bg-white px-3 py-2 text-left text-sm hover:bg-gray-50"
-														onclick={startEditSelectedFieldNote}
-													>
-														Edit
-													</button>
-													<button
-														type="button"
-														class="block w-full cursor-pointer border-0 bg-white px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
-														onclick={deleteSelectedFieldNote}
-													>
-														Delete
-													</button>
-												</div>
-											{/if}
+											<button
+												type="button"
+												class="block w-full cursor-pointer border-0 bg-white px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+												onclick={deleteSelectedFieldNote}
+											>
+												Delete
+											</button>
 										</div>
-										<button
-											type="button"
-											class="cursor-pointer rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-600 hover:bg-gray-50"
-											onclick={closeSelectedFieldNote}
-										>
-											Close
-										</button>
-									</div>
+									{/if}
 								</div>
-								<div class="mb-3">
+								<button
+									type="button"
+									class="cursor-pointer rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-600 hover:bg-gray-50"
+									onclick={closeSelectedFieldNote}
+								>
+									Close
+								</button>
+							</div>
+						</div>
+						<div class="mb-3">
 									<span class="mb-0.5 block text-xs font-semibold text-gray-500 uppercase">Notes</span>
-									<p class="m-0 text-sm whitespace-pre-wrap">{selectedFieldNote.text || '—'}</p>
-								</div>
+							<p class="m-0 text-sm whitespace-pre-wrap">{selectedFieldNote.text || '—'}</p>
+						</div>
 								{#if selectedFieldNote.hypothesis_id}
 									<div class="mb-3">
 										<span class="mb-0.5 block text-xs font-semibold text-gray-500 uppercase"
@@ -3346,14 +3999,14 @@
 											)}
 										</p>
 									</div>
-								{/if}
-								{#if selectedFieldNote.audio_path}
-									{@const audioUrl = fieldNoteMediaUrl(selectedFieldNote.audio_path)}
-									{#if audioUrl}
-										<audio controls src={audioUrl} class="w-full"></audio>
-									{/if}
-								{/if}
-							</div>
+						{/if}
+						{#if selectedFieldNote.audio_path}
+							{@const audioUrl = fieldNoteMediaUrl(selectedFieldNote.audio_path)}
+							{#if audioUrl}
+								<audio controls src={audioUrl} class="w-full"></audio>
+							{/if}
+						{/if}
+					</div>
 							{#if thumbUrl}
 								<button
 									type="button"
@@ -3404,6 +4057,25 @@
 </div>
 
 <style>
+	@keyframes indeterminate {
+		0% {
+			transform: scaleX(0);
+			transform-origin: 0 0;
+		}
+		40% {
+			transform: scaleX(0.65);
+			transform-origin: 0 0;
+		}
+		60% {
+			transform: scaleX(0.65);
+			transform-origin: 100% 0;
+		}
+		100% {
+			transform: scaleX(0);
+			transform-origin: 100% 0;
+		}
+	}
+
 	.sidebar-section-title {
 		margin: 0 0 1.25rem;
 	}

@@ -10,6 +10,8 @@ class Settings(BaseSettings):
     titiler_public_url: str = "http://localhost:8000"
     aws_s3_bucket: str = ""
     aws_default_region: str = "us-east-1"
+    # Per-project diagnose media/packages live under this prefix (e.g. diagnose/{project_id}/media/)
+    diagnose_s3_prefix: str = "diagnose"
     cog_layers: str = "lulc.cog.tif"
     vector_layers: str = ""
     watersheds_fgb_key: str = "watersheds.fbg"
@@ -43,8 +45,8 @@ class Settings(BaseSettings):
 
     # Browser origin for CORS / cookies (no path). Production example: https://ai.welllabs.org
     frontend_origin: str = "http://localhost:5173"
-    # SvelteKit kit.paths.base in production (empty locally). Example: /wst
-    frontend_base_path: str = ""
+    # SvelteKit kit.paths.base (must match frontend/svelte.config.js — /wst locally and in prod)
+    frontend_base_path: str = "/wst"
     # Browser API segment under frontend_base_path (/backend avoids CF Worker 1101 on /wst/api POST)
     api_public_segment: str = "/backend"
     session_cookie_name: str = "dda_session"

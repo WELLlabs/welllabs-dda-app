@@ -712,7 +712,9 @@ def _build_watershed_rasters(
 
 
 def _enabled_vector_keys() -> set[str]:
-    return {k.strip() for k in (settings.vector_layers or "").split(",") if k.strip()}
+    from app.modules.diagnose.services.layer_catalog import resolve_enabled_vector_keys
+
+    return set(resolve_enabled_vector_keys())
 
 
 def _vector_style_payload(cfg) -> dict:
@@ -755,8 +757,7 @@ def _export_secondary_vectors(
     if not enabled or not s3_storage.is_s3_enabled():
         return []
 
-    # Clip each unique s3_key once
-    clipped_by_key: dict[str, dict] = {}
+    # Clip per catalog layer (shared s3_keys may need different derived columns).
     exports: list[dict] = []
     for cfg in get_catalog().vector_layers():
         if cfg.s3_key not in enabled:
@@ -771,11 +772,7 @@ def _export_secondary_vectors(
         if progress:
             progress.log(f"Clipping {display} to watershed GeoPackage")
         try:
-            if cfg.s3_key not in clipped_by_key:
-                clipped_by_key[cfg.s3_key] = clip_vector_geojson(
-                    cfg.s3_key, "", watershed_geom
-                )
-            geojson = clipped_by_key[cfg.s3_key]
+            geojson = clip_vector_geojson(cfg.s3_key, "", watershed_geom, layer_cfg=cfg)
             features = geojson.get("features") or []
             if not features:
                 logger.info("No features in watershed for %s — writing empty GPKG", cfg.id)
