@@ -78,7 +78,7 @@ layers:
 
   - id: cropping_intensity
     category: Hydrology & Landscape Controls
-    s3_key: rasters/Cropping Intensity of India.tif
+    s3_key: rasters/Cropping Intensity of India_cog.tif
     name: Cropping Intensity
     source: cog
     analysis_type: continuous_raster

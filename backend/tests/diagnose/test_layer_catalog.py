@@ -143,7 +143,7 @@ def test_notebook_gap_layers_resolve_by_s3_key():
 
     cropping = catalog.by_id("cropping_intensity")
     assert cropping is not None
-    assert cropping.s3_key == "rasters/Cropping Intensity of India.tif"
+    assert cropping.s3_key == "rasters/Cropping Intensity of India_cog.tif"
     assert cropping.render_type == "continuous"
     assert cropping.analysis_type == "continuous_raster"
     assert cropping.continuous.get("colormap") == "viridis"
