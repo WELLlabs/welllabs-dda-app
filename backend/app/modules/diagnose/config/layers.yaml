@@ -82,8 +82,6 @@ layers:
     name: Cropping Intensity
     source: cog
     analysis_type: continuous_raster
-    tile_strategy: watershed_image
-    analysis_batch: false
     render:
       type: continuous
       colormap: viridis

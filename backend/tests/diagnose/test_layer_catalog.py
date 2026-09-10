@@ -147,8 +147,7 @@ def test_notebook_gap_layers_resolve_by_s3_key():
     assert cropping.render_type == "continuous"
     assert cropping.analysis_type == "continuous_raster"
     assert cropping.continuous.get("colormap") == "viridis"
-    assert cropping.tile_strategy == "watershed_image"
-    assert cropping.analysis_batch is False
+    assert cropping.tile_strategy != "watershed_image"
     assert len(cropping.companions) == 0
 
     canals = catalog.by_id("canals")
