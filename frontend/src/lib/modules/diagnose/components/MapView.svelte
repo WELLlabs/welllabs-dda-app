@@ -77,6 +77,13 @@
 	 * is freed immediately and the user request can proceed without a 502.
 	 */
 	let bgBatchAbort = new AbortController();
+	/**
+	 * AbortController for in-flight vector /data fetches.
+	 * Aborted each time the user selects a different secondary layer so stale
+	 * FGB clips are cancelled immediately — prevents rapid toggling from
+	 * flooding the backend thread pool and returning 502s.
+	 */
+	let vectorSelectAbort = new AbortController();
 
 	function readBootMode() {
 		try {
@@ -199,17 +206,23 @@
 		if (layer?.kind === 'primary') {
 			activePrimaryTab = layer.id;
 			closeSelectedZone();
-		closeSelectedFieldNote();
+			closeSelectedFieldNote();
 			closeSelectedHypothesis();
-		cancelPendingForms();
+			cancelPendingForms();
 			if (layer.id === 'hypotheses') {
 				void reloadHypotheses();
 			}
 		} else if (layer?.kind === 'secondary') {
+			// Abort any stale vector /data fetch from the previously selected layer.
+			// This cancels the network request so the backend thread is freed
+			// immediately rather than finishing a clip nobody will see.
+			vectorSelectAbort.abort();
+			vectorSelectAbort = new AbortController();
+
 			if (mapReady) {
 				const meta = secondaryLayers.find((l) => l.id === layer.id);
 				if (meta?.kind === 'vector' && meta.map_render !== false) {
-					await ensureVectorLayerOnMap(meta);
+					await ensureVectorLayerOnMap(meta, { signal: vectorSelectAbort.signal });
 				}
 				if (isOverlayLayer(meta)) {
 					// Overlays are visibility-toggled only; selecting opens the right panel
@@ -804,6 +817,7 @@
 	onMount(async () => {
 		mapDataAbort = new AbortController();
 		bgBatchAbort = new AbortController();
+		vectorSelectAbort = new AbortController();
 		postOpenLoadGen = 0;
 		bootMode = readBootMode();
 		projectBooting = true;
@@ -994,6 +1008,7 @@
 		postOpenLoadGen += 1;
 		mapDataAbort.abort();
 		bgBatchAbort.abort();
+		vectorSelectAbort.abort();
 		bgLoading = false;
 		fieldNotePinReady = false;
 		villageHoverPopup?.remove();
@@ -1808,19 +1823,17 @@
 		});
 	}
 
-	async function fetchClippedGeoJSON(url) {
+	async function fetchClippedGeoJSON(url, { signal: callerSignal } = {}) {
 		const resolved = resolveApiUrl(url);
+		// Combine caller signal (per-selection abort) with the page-level abort.
+		// When either fires the fetch is cancelled immediately.
+		const signal = callerSignal ?? mapDataAbort.signal;
 		let lastError = null;
 		// At most one retry — reload storms were freezing beta.
 		for (let attempt = 0; attempt < 2; attempt++) {
 			try {
-				if (mapDataAbort.signal.aborted) {
-					throw new DOMException('Aborted', 'AbortError');
-				}
-				const response = await fetch(resolved, {
-					credentials: 'include',
-					signal: mapDataAbort.signal
-				});
+				if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+				const response = await fetch(resolved, { credentials: 'include', signal });
 				if (!response.ok) {
 					const retryable =
 						response.status === 502 || response.status === 503 || response.status === 504;
@@ -1938,7 +1951,7 @@
 		}
 	}
 
-	async function ensureVectorLayerOnMap(layer, { force = false } = {}) {
+	async function ensureVectorLayerOnMap(layer, { force = false, signal } = {}) {
 		if (!map || !layer?.id) return false;
 		const sourceId = `vec-${layer.id}`;
 		if (map.getSource(sourceId) && !force) {
@@ -1958,8 +1971,10 @@
 			data = vectorGeoJsonByKey[cacheKey];
 		} else {
 			try {
-				data = await fetchClippedGeoJSON(layer.url);
+				data = await fetchClippedGeoJSON(layer.url, { signal });
 			} catch (fetchErr) {
+				// Silently drop AbortErrors — user navigated away before clip finished.
+				if (fetchErr?.name === 'AbortError') return false;
 				console.error(`Failed to load ${layer.name}:`, fetchErr);
 				status = `${layer.name} failed: ${fetchErr instanceof Error ? fetchErr.message : String(fetchErr)}`;
 				return false;

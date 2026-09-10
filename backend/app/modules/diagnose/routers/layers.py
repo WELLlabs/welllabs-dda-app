@@ -23,11 +23,15 @@ from shapely.geometry import shape as shp_shape
 # Cap heavy clip/analysis work per worker.
 #
 # _heavy_clip_sem  — single-layer analysis (and leftover hierarchy endpoint).
-#                    Vector /data intentionally has NO semaphore — matches prod
-#                    so on-demand layer clicks are not queued behind analysis.
+# _vector_clip_sem — vector /data on-demand clips.  Kept separate from
+#                    _heavy_clip_sem so analysis cannot block layer-click
+#                    fetches.  Capacity 3 absorbs normal usage but prevents
+#                    rapid layer-toggling from spawning unlimited parallel S3
+#                    FGB reads that saturate the thread pool → 502.
 # _batch_sem       — at most ONE concurrent /analysis/batch call per worker.
 # _batch_inner_sem — caps parallelism *inside* a single batch.
 _heavy_clip_sem = asyncio.Semaphore(2)
+_vector_clip_sem = asyncio.Semaphore(3)
 _batch_sem = asyncio.Semaphore(1)
 _batch_inner_sem = asyncio.Semaphore(2)
 
@@ -1302,11 +1306,13 @@ async def clipped_vector_layer_data(
         raise HTTPException(404, f"S3 error: {err.get('Code')} – {err.get('Message')}") from exc
 
     try:
-        # No semaphore — match prod. On-demand vector paints must not queue
-        # behind analysis / other clips (that was making beta feel slower).
-        geojson = await asyncio.to_thread(
-            clipped_vector_geojson_for_watershed, cfg.s3_key, vector_url, geom, cfg
-        )
+        # _vector_clip_sem caps concurrent S3 FGB reads during rapid toggling.
+        # Capacity 3 covers normal usage; the frontend aborts stale requests so
+        # a queue of 3 drains quickly rather than growing without bound → 502.
+        async with _vector_clip_sem:
+            geojson = await asyncio.to_thread(
+                clipped_vector_geojson_for_watershed, cfg.s3_key, vector_url, geom, cfg
+            )
     except Exception as exc:
         raise HTTPException(500, f"Clip failed: {exc}") from exc
 
