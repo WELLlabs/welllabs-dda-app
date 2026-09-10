@@ -1470,6 +1470,10 @@ async def batch_layer_analysis(
         elif cfg.source == "vector_fgb" and cfg.s3_key in enabled_vec:
             configs.append(cfg)
 
+    # Same FGB siblings share clipped_vector_gdf_for_watershed — process them
+    # consecutively so batch pays the S3/clip cost once per key.
+    configs.sort(key=lambda c: (c.s3_key or "", c.source or "", c.id))
+
     async def _one(cfg: LayerConfig) -> LayerAnalysisResponse:
         try:
             async with _batch_inner_sem:
