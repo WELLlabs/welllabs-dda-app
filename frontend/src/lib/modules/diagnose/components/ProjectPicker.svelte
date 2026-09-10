@@ -47,6 +47,8 @@
 	let villageAbort = null;
 	/** @type {AbortController | null} */
 	let previewAbort = null;
+	/** @type {AbortController | null} */
+	let pointAbort = null;
 	let previewGen = 0;
 
 	let villageState = $state('');
@@ -93,6 +95,10 @@
 		document.addEventListener('click', closeMenu);
 		return () => {
 			document.removeEventListener('click', closeMenu);
+			// Cancel village resolve / preview-context so leaving create UI
+			// cannot leave GIS work running and 502 the next page.
+			abortInFlightLoads();
+			mounted = false;
 		};
 	});
 
@@ -218,8 +224,10 @@
 	function abortInFlightLoads() {
 		villageAbort?.abort();
 		previewAbort?.abort();
+		pointAbort?.abort();
 		villageAbort = null;
 		previewAbort = null;
+		pointAbort = null;
 		previewGen += 1;
 		contextLoading = false;
 	}
@@ -413,14 +421,19 @@
 		watershedPreview = null;
 		microChoice = 'all';
 		previewContextLayers = [];
+		pointAbort?.abort();
+		pointAbort = new AbortController();
+		const { signal } = pointAbort;
 		try {
-			const result = await lookupWatershed(lng, lat);
+			const result = await lookupWatershed(lng, lat, { signal });
+			if (signal.aborted) return;
 			setWatershedPreview({ ...result, source: 'point' }, 'point');
 			if (watershedPreview?.geometry) void loadPreviewContext(watershedPreview.geometry);
 		} catch (err) {
+			if (err?.name === 'AbortError' || signal.aborted) return;
 			watershedPreview = { error: String(err) };
 		} finally {
-			previewLoading = false;
+			if (!signal.aborted) previewLoading = false;
 		}
 	}
 

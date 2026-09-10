@@ -11,11 +11,13 @@ function bboxQuery(bounds) {
 }
 
 export async function fetchProjects() {
-	return request('/projects');
+	// Soft-retry: navigating back to the list must not fail on a single transient
+	// Cloudflare/gateway blip while GIS work is draining.
+	return request('/projects', { retries: 2, retryDelayMs: 600 });
 }
 
 export async function fetchProject(id) {
-	return request(`/projects/${id}`);
+	return request(`/projects/${id}`, { retries: 1, retryDelayMs: 700 });
 }
 
 export async function createProject(nameOrPayload, lng, lat) {
@@ -23,12 +25,12 @@ export async function createProject(nameOrPayload, lng, lat) {
 		typeof nameOrPayload === 'object' && nameOrPayload !== null
 			? nameOrPayload
 			: { name: nameOrPayload, lng, lat };
+	// No retries on POST — CF timeout after insert would create duplicates.
 	return request('/projects', {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify(body),
-		retries: 2,
-		retryDelayMs: 1000
+		retries: 0
 	});
 }
 
@@ -78,11 +80,14 @@ export async function removeOrgAccess(projectId, orgId) {
 	await request(`/projects/${projectId}/access/orgs/${orgId}`, { method: 'DELETE' });
 }
 
-export async function lookupWatershed(lng, lat) {
+export async function lookupWatershed(lng, lat, { signal } = {}) {
 	return request('/watersheds/lookup', {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ lng, lat })
+		body: JSON.stringify({ lng, lat }),
+		signal,
+		retries: 1,
+		retryDelayMs: 800
 	});
 }
 
@@ -151,7 +156,7 @@ export async function fetchWatershedPreviewContext(geometry, { signal, includeRi
 export async function fetchWatershedHierarchy(projectId, { signal } = {}) {
 	return request(
 		`/layers/watershed/hierarchy?project_id=${encodeURIComponent(projectId)}`,
-		// One retry max — stacking retries during reload saturates the 2 API workers.
+		// One retry max — stacking retries during reload saturates API workers.
 		{ signal, retries: 1, retryDelayMs: 1200 }
 	);
 }
@@ -169,18 +174,22 @@ function layerQuery(bounds, projectId) {
 }
 
 export async function fetchCogLayers(bounds, projectId) {
-	return request(`/layers/cog${layerQuery(bounds, projectId)}`);
+	return request(`/layers/cog${layerQuery(bounds, projectId)}`, {
+		retries: 1,
+		retryDelayMs: 700
+	});
 }
 
 export async function fetchVectorLayers(projectId) {
 	const q = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
-	return request(`/layers/vector${q}`);
+	return request(`/layers/vector${q}`, { retries: 1, retryDelayMs: 700 });
 }
 
-export async function fetchLayerAnalysis(layerId, projectId, { isCog = false } = {}) {
+export async function fetchLayerAnalysis(layerId, projectId, { isCog = false, signal } = {}) {
 	const base = isCog ? '/layers/cog' : '/layers/vector';
 	return request(
-		`${base}/${encodeURIComponent(layerId)}/analysis?project_id=${encodeURIComponent(projectId)}`
+		`${base}/${encodeURIComponent(layerId)}/analysis?project_id=${encodeURIComponent(projectId)}`,
+		{ signal, retries: 1, retryDelayMs: 800 }
 	);
 }
 

@@ -10,14 +10,27 @@ async function parseErrorMessage(res) {
 	}
 	if (
 		res.status === 502 ||
+		res.status === 503 ||
 		res.status === 504 ||
-		/bad gateway|504: gateway time-out|cloudflare/i.test(text)
+		/bad gateway|504: gateway time-out|cloudflare|service unavailable/i.test(text)
 	) {
 		if (text.trimStart().startsWith('<!') || /cf-error-details|Bad gateway/i.test(text)) {
 			return (
 				`Upstream API error (${res.status}): the server timed out or crashed while ` +
 				'resolving this location. Try another nearby point, or retry in a moment.'
 			);
+		}
+		// JSON 503 from our own hard timeouts — clearer than Cloudflare HTML.
+		if (res.status === 503) {
+			try {
+				const json = JSON.parse(text);
+				if (json.detail) {
+					return typeof json.detail === 'string' ? json.detail : JSON.stringify(json.detail);
+				}
+			} catch {
+				/* fall through */
+			}
+			return 'Server is busy — retry in a moment.';
 		}
 	}
 	let message = text || res.statusText;

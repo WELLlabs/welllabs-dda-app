@@ -7,6 +7,7 @@
 	import ModuleHeader from '$lib/shared/components/ModuleHeader.svelte';
 	import {
 		fetchProjects,
+		fetchProject,
 		packageToQfieldStream,
 		syncFromQfieldStream
 	} from '$lib/modules/diagnose/api';
@@ -39,14 +40,15 @@
 		loadError = '';
 		currentProject = null;
 		try {
+			// Slim list for slug→id only (no full-precision watershed geoms).
 			const data = await fetchProjects();
 			const match = findBySlug(data.projects ?? [], slugValue);
 			if (!match) {
 				loadError = 'Project not found';
 				return;
 			}
-			// fetchProjects() already returns the full project shape (_SELECT).
-			currentProject = match;
+			// Full project (precise watershed_geometry) for the map.
+			currentProject = await fetchProject(match.id);
 		} catch (err) {
 			loadError = String(err);
 		} finally {

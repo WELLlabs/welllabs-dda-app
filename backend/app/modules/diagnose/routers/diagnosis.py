@@ -80,41 +80,63 @@ def _row_to_dict(row: dict) -> dict:
     }
 
 
-_SELECT = """
+# Shared metadata columns. Full-precision watershed_geom is ONLY for get_project —
+# list_projects uses a heavily simplified thumb geom so navigating back to the
+# project picker never serializes multi-MB MultiPolygons (Cloudflare 502 risk).
+_META_COLS = """
+    p.id,
+    p.name,
+    p.owner_id,
+    owner_u.name  AS owner_name,
+    owner_u.email AS owner_email,
+    p.watershed_id,
+    p.watershed_name,
+    p.seed_lng,
+    p.seed_lat,
+    p.created_at,
+    p.updated_at,
+    ST_AsGeoJSON(ST_Envelope(p.watershed_geom))::json AS bounds_geojson,
+    (
+        SELECT COUNT(*)::int
+        FROM observation_zones oz
+        WHERE oz.project_id = p.id
+    ) AS observation_zone_count,
+    (
+        SELECT COUNT(*)::int
+        FROM field_notes fn
+        WHERE fn.project_id = p.id
+    ) AS field_note_count
+"""
+
+# ~100 m tolerance + 5 decimal places — enough for 64px WatershedThumb, tiny payload.
+_LIST_SELECT = f"""
     SELECT
-        p.id,
-        p.name,
-        p.owner_id,
-        owner_u.name  AS owner_name,
-        owner_u.email AS owner_email,
-        p.watershed_id,
-        p.watershed_name,
-        p.seed_lng,
-        p.seed_lat,
-        p.created_at,
-        p.updated_at,
-        ST_AsGeoJSON(p.watershed_geom, 9)::json AS watershed_geojson,
-        ST_AsGeoJSON(ST_Envelope(p.watershed_geom))::json AS bounds_geojson,
-        (
-            SELECT COUNT(*)::int
-            FROM observation_zones oz
-            WHERE oz.project_id = p.id
-        ) AS observation_zone_count,
-        (
-            SELECT COUNT(*)::int
-            FROM field_notes fn
-            WHERE fn.project_id = p.id
-        ) AS field_note_count
+        {_META_COLS},
+        ST_AsGeoJSON(
+            ST_SimplifyPreserveTopology(p.watershed_geom, 0.001),
+            5
+        )::json AS watershed_geojson
     FROM diagnosis p
     JOIN users owner_u ON owner_u.id = p.owner_id
 """
+
+_DETAIL_SELECT = f"""
+    SELECT
+        {_META_COLS},
+        ST_AsGeoJSON(p.watershed_geom, 9)::json AS watershed_geojson
+    FROM diagnosis p
+    JOIN users owner_u ON owner_u.id = p.owner_id
+"""
+
+# Back-compat alias for create_project RETURNING / internal uses.
+_SELECT = _DETAIL_SELECT
 
 
 @router.get("")
 def list_projects(user: dict = Depends(get_current_user)):
     with db_cursor() as cur:
         cur.execute(
-            f"{_SELECT} WHERE {diagnosis_access_where('p')} ORDER BY created_at DESC",
+            f"{_LIST_SELECT} WHERE {diagnosis_access_where('p')} ORDER BY created_at DESC",
             {"current_user_id": user["id"]},
         )
         rows = cur.fetchall()
@@ -124,7 +146,7 @@ def list_projects(user: dict = Depends(get_current_user)):
 @router.get("/{project_id}")
 def get_project(project_id: str, user: dict = Depends(require_diagnosis_access)):
     with db_cursor() as cur:
-        cur.execute(f"{_SELECT} WHERE p.id = %(id)s", {"id": project_id})
+        cur.execute(f"{_DETAIL_SELECT} WHERE p.id = %(id)s", {"id": project_id})
         row = cur.fetchone()
     if not row:
         raise HTTPException(404, "Project not found")

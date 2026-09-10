@@ -11,7 +11,7 @@ from functools import lru_cache
 from botocore.exceptions import ClientError
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 from rasterio.features import geometry_mask
@@ -23,17 +23,32 @@ from shapely.geometry import shape as shp_shape
 # Cap heavy clip/analysis work per worker.
 #
 # _heavy_clip_sem  — single-layer analysis (and leftover hierarchy endpoint).
-# _vector_clip_sem — vector /data on-demand clips.  Kept separate from
+# _vector_clip_sem  — vector /data on-demand clips.  Kept separate from
 #                    _heavy_clip_sem so analysis cannot block layer-click
-#                    fetches.  Capacity 3 absorbs normal usage but prevents
-#                    rapid layer-toggling from spawning unlimited parallel S3
-#                    FGB reads that saturate the thread pool → 502.
+#                    fetches.  Capacity 2 keeps interactive capacity free
+#                    for /projects list + auth while a clip runs.
+# _tile_sem        — COG tile renders. MapLibre can fire dozens of parallel
+#                    tile requests; without a cap the default thread pool
+#                    saturates and unrelated navigation (back to projects)
+#                    times out at Cloudflare → 502.
 # _batch_sem       — at most ONE concurrent /analysis/batch call per worker.
 # _batch_inner_sem — caps parallelism *inside* a single batch.
+# _prewarm_sem     — at most one prewarm per worker (never competes with tiles).
 _heavy_clip_sem = asyncio.Semaphore(2)
-_vector_clip_sem = asyncio.Semaphore(3)
+_vector_clip_sem = asyncio.Semaphore(2)
+_tile_sem = asyncio.Semaphore(4)
 _batch_sem = asyncio.Semaphore(1)
 _batch_inner_sem = asyncio.Semaphore(2)
+_prewarm_sem = asyncio.Semaphore(1)
+
+# Hard budgets under Cloudflare's ~100s proxy timeout. Prefer 503 over hang→502.
+_VECTOR_CLIP_TIMEOUT_S = 45.0
+_TILE_RENDER_TIMEOUT_S = 25.0
+_BATCH_TOTAL_TIMEOUT_S = 70.0
+_BATCH_LAYER_TIMEOUT_S = 30.0
+_ANALYSIS_TIMEOUT_S = 45.0
+_PREWARM_LAYER_TIMEOUT_S = 30.0
+_WATERSHED_IMAGE_TIMEOUT_S = 45.0
 
 from app.modules.diagnose.services.layer_analysis import (
     analyze_layer,
@@ -322,7 +337,12 @@ def _watershed_feature_json(project_id: str) -> str:
     with db_cursor() as cur:
         cur.execute(
             """
-            SELECT ST_AsGeoJSON(watershed_geom, 9)::json AS geom
+            SELECT
+                ST_AsGeoJSON(watershed_geom, 9)::json AS geom,
+                ST_XMin(watershed_geom) AS minx,
+                ST_YMin(watershed_geom) AS miny,
+                ST_XMax(watershed_geom) AS maxx,
+                ST_YMax(watershed_geom) AS maxy
             FROM diagnosis WHERE id = %(id)s
             """,
             {"id": project_id},
@@ -330,11 +350,28 @@ def _watershed_feature_json(project_id: str) -> str:
         row = cur.fetchone()
     if not row or not row["geom"]:
         raise HTTPException(404, "Project watershed not found")
-    return json.dumps({"type": "Feature", "geometry": row["geom"], "properties": {}})
+    return json.dumps(
+        {
+            "type": "Feature",
+            "geometry": row["geom"],
+            "properties": {},
+            "_bounds": [row["minx"], row["miny"], row["maxx"], row["maxy"]],
+        }
+    )
 
 
 def _watershed_feature(project_id: str) -> dict:
     return json.loads(_watershed_feature_json(project_id))
+
+
+def _watershed_bbox(feature: dict) -> tuple[float, float, float, float]:
+    """Cached bbox from _watershed_feature — avoids shp_shape().bounds on every tile."""
+    b = feature.get("_bounds")
+    if isinstance(b, (list, tuple)) and len(b) == 4:
+        return float(b[0]), float(b[1]), float(b[2]), float(b[3])
+    ws_geom = feature.get("geometry") or feature
+    bounds = shp_shape(ws_geom).bounds
+    return bounds[0], bounds[1], bounds[2], bounds[3]
 
 
 def _render_params(layer_cfg: LayerConfig | None, bbox: list[float] | None = None) -> str:
@@ -990,7 +1027,14 @@ async def cog_watershed_image(
 
     try:
         http_url = _presigned_url_cached(key)
-        content = await asyncio.to_thread(_render_watershed_image, http_url, feature, layer_cfg)
+        content = await asyncio.wait_for(
+            asyncio.to_thread(_render_watershed_image, http_url, feature, layer_cfg),
+            timeout=_WATERSHED_IMAGE_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(
+            503, "Watershed image timed out — retry in a moment."
+        ) from exc
     except ClientError as exc:
         err = exc.response.get("Error", {})
         raise HTTPException(403, f"S3 error: {err.get('Message')}") from exc
@@ -1008,12 +1052,14 @@ async def cog_watershed_image(
 @router.get("/cog/prewarm")
 async def prewarm_cog_layers(
     project_id: str,
+    request: Request,
     user: dict = Depends(get_current_user),
 ):
     """Background pre-warm: compute elevation ranges + watershed images for all COG layers.
 
     Called fire-and-forget from the frontend after map open.  Returns 204 when done.
     Warms the in-process caches so the first user tile/image request is cheap.
+    Aborts early if the client disconnects (user navigated away).
     """
     assert_diagnosis_access(user["id"], project_id)
     feature = _watershed_feature(project_id)
@@ -1025,11 +1071,16 @@ async def prewarm_cog_layers(
             if cfg.tile_strategy == "watershed_image":
                 cache_key = (cfg.s3_key, project_id)
                 if _watershed_image_cache_get(cache_key) is None:
-                    content = await asyncio.to_thread(_render_watershed_image, http_url, feature, cfg)
+                    content = await asyncio.wait_for(
+                        asyncio.to_thread(_render_watershed_image, http_url, feature, cfg),
+                        timeout=_PREWARM_LAYER_TIMEOUT_S,
+                    )
                     _watershed_image_cache_set(cache_key, content)
             elif cfg.render_type == "continuous":
-                # Pre-compute the elevation range used for per-tile colour scaling.
-                await asyncio.to_thread(_watershed_elev_range, cfg.s3_key, http_url, geom)
+                await asyncio.wait_for(
+                    asyncio.to_thread(_watershed_elev_range, cfg.s3_key, http_url, geom),
+                    timeout=_PREWARM_LAYER_TIMEOUT_S,
+                )
         except Exception:
             pass  # best-effort — a failure here doesn't affect the user
 
@@ -1037,11 +1088,12 @@ async def prewarm_cog_layers(
         cfg for cfg in get_catalog().layers
         if cfg.source == "cog" and cfg.s3_key in set(_cog_keys())
     ]
-    # Sequential — not asyncio.gather — so the thread pool isn't flooded with
-    # 5 parallel S3 reads on a cold worker.  This keeps capacity free for the
-    # user's layer-click requests that arrive right after project creation.
-    for cfg in cog_cfgs:
-        await _warm_one(cfg)
+    # One prewarm at a time per worker; exit early if client left the map.
+    async with _prewarm_sem:
+        for cfg in cog_cfgs:
+            if await request.is_disconnected():
+                break
+            await _warm_one(cfg)
     return Response(status_code=204)
 
 
@@ -1086,8 +1138,7 @@ async def proxy_cog_tile(
 
             # Pre-flight: skip tiles that cannot intersect the watershed bbox.
             ws_geom = feature.get("geometry") or feature
-            ws_bounds = shp_shape(ws_geom).bounds  # (minx, miny, maxx, maxy)
-            ws_bbox = (ws_bounds[0], ws_bounds[1], ws_bounds[2], ws_bounds[3])
+            ws_bbox = _watershed_bbox(feature)
             tile_bbox = _tile_bounds_wgs84(z, x, y)
             if not _bbox_intersects(tile_bbox, ws_bbox):
                 return Response(
@@ -1106,20 +1157,37 @@ async def proxy_cog_tile(
                     headers={"Cache-Control": "public, max-age=3600"},
                 )
 
-            # For continuous COG layers, compute a consistent watershed-level
-            # elevation range once and cache it so all tiles share the same scale.
-            elev_range = None
-            if layer_cfg and layer_cfg.render_type == "continuous":
-                elev_range = await asyncio.to_thread(
-                    _watershed_elev_range, key, http_url, ws_geom
-                )
-
+            # Cap concurrent tile renders so MapLibre tile storms cannot saturate
+            # the thread pool and starve /projects / auth (Cloudflare 502).
             try:
-                content = await asyncio.to_thread(
-                    _render_clipped_tile, http_url, z, x, y, feature, layer_cfg, elev_range
-                )
-            except Exception:
+                async with _tile_sem:
+                    elev_range = None
+                    if layer_cfg and layer_cfg.render_type == "continuous":
+                        elev_range = await asyncio.wait_for(
+                            asyncio.to_thread(
+                                _watershed_elev_range, key, http_url, ws_geom
+                            ),
+                            timeout=_TILE_RENDER_TIMEOUT_S,
+                        )
+                    try:
+                        content = await asyncio.wait_for(
+                            asyncio.to_thread(
+                                _render_clipped_tile,
+                                http_url,
+                                z,
+                                x,
+                                y,
+                                feature,
+                                layer_cfg,
+                                elev_range,
+                            ),
+                            timeout=_TILE_RENDER_TIMEOUT_S,
+                        )
+                    except Exception:
+                        content = _TRANSPARENT_TILE
+            except asyncio.TimeoutError:
                 content = _TRANSPARENT_TILE
+
             _tile_cache_set(cache_key, content)
             return Response(
                 content=content,
@@ -1310,13 +1378,19 @@ async def clipped_vector_layer_data(
         raise HTTPException(404, f"S3 error: {err.get('Code')} – {err.get('Message')}") from exc
 
     try:
-        # _vector_clip_sem caps concurrent S3 FGB reads during rapid toggling.
-        # Capacity 3 covers normal usage; the frontend aborts stale requests so
-        # a queue of 3 drains quickly rather than growing without bound → 502.
+        # Cap concurrent S3 FGB reads; hard timeout under Cloudflare ~100s budget
+        # so hung clips return 503 (retryable) instead of hanging into a CF 502.
         async with _vector_clip_sem:
-            geojson = await asyncio.to_thread(
-                clipped_vector_geojson_for_watershed, cfg.s3_key, vector_url, geom, cfg
+            geojson = await asyncio.wait_for(
+                asyncio.to_thread(
+                    clipped_vector_geojson_for_watershed, cfg.s3_key, vector_url, geom, cfg
+                ),
+                timeout=_VECTOR_CLIP_TIMEOUT_S,
             )
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(
+            503, "Vector clip timed out — retry in a moment."
+        ) from exc
     except Exception as exc:
         raise HTTPException(500, f"Clip failed: {exc}") from exc
 
@@ -1374,6 +1448,7 @@ def _run_layer_analysis_sync(cfg: LayerConfig, geom: dict):
 @router.get("/analysis/batch", response_model=BatchAnalysisResponse)
 async def batch_layer_analysis(
     project_id: str,
+    request: Request,
     user: dict = Depends(get_current_user),
 ):
     """Preload watershed analysis for all enabled secondary layers at once."""
@@ -1398,7 +1473,10 @@ async def batch_layer_analysis(
     async def _one(cfg: LayerConfig) -> LayerAnalysisResponse:
         try:
             async with _batch_inner_sem:
-                result = await asyncio.to_thread(_run_layer_analysis_sync, cfg, geom)
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(_run_layer_analysis_sync, cfg, geom),
+                    timeout=_BATCH_LAYER_TIMEOUT_S,
+                )
             return _analysis_response(cfg, result)
         except Exception as exc:
             meaning = cfg.meaning or cfg.interpretation
@@ -1417,8 +1495,22 @@ async def batch_layer_analysis(
     # _batch_sem: at most one concurrent batch per worker.  We intentionally do
     # NOT use _heavy_clip_sem here so that on-demand user requests (single
     # layer analysis, hierarchy) are never blocked by a running batch.
+    # Stop scheduling more layers if the client left (navigate away) so the
+    # next /projects request is not starved into a Cloudflare 502.
     async with _batch_sem:
-        analyses = await asyncio.gather(*[_one(cfg) for cfg in configs])
+        analyses: list[LayerAnalysisResponse] = []
+
+        async def _run_all() -> None:
+            for cfg in configs:
+                if await request.is_disconnected():
+                    break
+                analyses.append(await _one(cfg))
+
+        try:
+            await asyncio.wait_for(_run_all(), timeout=_BATCH_TOTAL_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            # Partial results beat hanging until Cloudflare returns HTML 502.
+            pass
     return BatchAnalysisResponse(analyses=list(analyses))
 
 
@@ -1433,8 +1525,16 @@ async def analyze_vector_layer(
     cfg = _resolve_analysis_layer(layer_id)
     feature = _watershed_feature(project_id)
     geom = feature.get("geometry") or feature
-    async with _heavy_clip_sem:
-        result = await asyncio.to_thread(_run_layer_analysis_sync, cfg, geom)
+    try:
+        async with _heavy_clip_sem:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(_run_layer_analysis_sync, cfg, geom),
+                timeout=_ANALYSIS_TIMEOUT_S,
+            )
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(
+            503, "Layer analysis timed out — retry in a moment."
+        ) from exc
     return _analysis_response(cfg, result)
 
 

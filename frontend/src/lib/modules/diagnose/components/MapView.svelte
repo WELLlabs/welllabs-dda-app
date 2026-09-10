@@ -904,13 +904,13 @@
 				await loadCogLayers();
 				if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
 
-				// Fire-and-forget: pre-warm backend COG caches (watershed images + elevation
-				// ranges for DEM-style continuous layers) so the first user click is instant.
+				// Fire-and-forget: pre-warm backend COG caches. Abort when leaving the map
+				// so prewarm does not keep the worker busy after navigate-away.
 				fetch(
 					resolveApiUrl(
 						apiPath(`/diagnose/layers/cog/prewarm?project_id=${encodeURIComponent(project.id)}`)
 					),
-					{ credentials: 'include' }
+					{ credentials: 'include', signal: mapDataAbort.signal }
 				).catch(() => {});
 
 				await loadVectorLayers();

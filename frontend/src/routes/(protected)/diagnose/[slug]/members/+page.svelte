@@ -54,6 +54,7 @@
 		loadError = '';
 		project = null;
 		try {
+			// Slim list for slug→id; full project fetch for members metadata.
 			const data = await fetchProjects();
 			const match = findBySlug(data.projects ?? [], slugValue);
 			if (!match) {
