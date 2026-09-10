@@ -946,13 +946,20 @@
 						if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
 
 						// ── Vector preload ─────────────────────────────────────────────
-						// Fetch all vector layers sequentially in the background.
+						// Fetch all THEMATIC vector layers sequentially in the background.
+						// Overlays (canals, rivers) are excluded — their FGBs are large
+						// national files whose clips take 10-30 s and would exhaust the
+						// backend's _vector_clip_sem, causing 502s on user-initiated clicks.
 						// Populates vectorGeoJsonByKey so user clicks find cached data → instant.
-						// Sequential (1 at a time) so _vector_clip_sem slot 1 is used for preload
-						// while slots 2-3 remain free for simultaneous user clicks.
+						// Sequential (1 at a time) so _vector_clip_sem slot 1 is used for
+						// preload while slots 2-3 remain free for simultaneous user clicks.
 						void (async () => {
 							const vectorsToPreload = secondaryLayers.filter(
-								(l) => l.kind === 'vector' && l.map_render !== false && l.url
+								(l) =>
+									l.kind === 'vector' &&
+									l.map_render !== false &&
+									l.url &&
+									!isOverlayLayer(l) // skip canals, rivers, village-boundary overlays
 							);
 							for (const layer of vectorsToPreload) {
 								if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) break;
@@ -2806,15 +2813,29 @@
 	}
 
 	function toggleCog(id, visible) {
-		cogVisibility = { ...cogVisibility, [id]: visible };
 		const meta = secondaryLayers.find((l) => l.id === id);
 		if (meta?.kind === 'vector') {
+			// WISER rank layers (irrigation / kharif / rabi) all render the same
+			// village_resilience.fgb with different style columns.  Enabling one via
+			// the eye-toggle must auto-disable its siblings so they never stack.
+			if (visible && WISER_RANK_LAYER_IDS.has(id)) {
+				for (const wid of WISER_RANK_LAYER_IDS) {
+					if (wid === id) continue;
+					cogVisibility = { ...cogVisibility, [wid]: false };
+					setLayerVisibility(`vec-${wid}-fill`, false);
+					setLayerVisibility(`vec-${wid}-line`, false);
+					setLayerVisibility(`vec-${wid}-line-halo`, false);
+					setLayerVisibility(`vec-${wid}-label`, false);
+				}
+			}
+			cogVisibility = { ...cogVisibility, [id]: visible };
 			setLayerVisibility(`vec-${id}-fill`, visible);
 			setLayerVisibility(`vec-${id}-line-halo`, visible);
 			setLayerVisibility(`vec-${id}-line`, visible);
 			setLayerVisibility(`vec-${id}-label`, visible);
 		} else {
 			// COG: use opacity so tiles keep streaming even when eye-toggled off
+			cogVisibility = { ...cogVisibility, [id]: visible };
 			const cogId = `cog-${id}`;
 			if (map?.getLayer(cogId)) map.setPaintProperty(cogId, 'raster-opacity', visible ? 0.85 : 0);
 		}
