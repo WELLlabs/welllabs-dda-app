@@ -449,6 +449,52 @@ def _clip_to_watershed(gdf, watershed_geom: dict):
     return clipped
 
 
+def _clip_mode_signature(layer_cfg: LayerConfig | None) -> tuple[str, str]:
+    """Clip behaviour that must match for raw-clip reuse across sibling layers."""
+    if layer_cfg is None:
+        return ("polygon", "")
+    geometry_kind = layer_cfg.geometry_kind or (
+        "line" if layer_cfg.render_type == "line" else "polygon"
+    )
+    clip_mode = (layer_cfg.clip_mode or "").lower()
+    return (str(geometry_kind), clip_mode)
+
+
+_RAW_CLIP_MEM: dict[tuple, Any] = {}
+_CLIP_MEM: dict[tuple, dict] = {}
+
+
+def clipped_vector_gdf_for_watershed(
+    s3_key: str,
+    watershed_geom: dict,
+    layer_cfg: LayerConfig | None = None,
+    *,
+    pad_frac: float = 0.05,
+):
+    """Watershed-clipped GeoDataFrame memoized by (s3_key, geom, clip mode).
+
+    Sibling catalog layers that share one FGB (WISER trio, village demographics)
+    reuse the expensive S3 bbox read + spatial clip; only enrich/analyze diverge.
+    """
+    cache_key = (
+        s3_key,
+        json.dumps(watershed_geom, sort_keys=True),
+        round(float(pad_frac), 4),
+        _clip_mode_signature(layer_cfg),
+    )
+    cached = _RAW_CLIP_MEM.get(cache_key)
+    if cached is not None:
+        return cached.copy()
+
+    bbox = _watershed_bbox(watershed_geom, pad_frac=pad_frac)
+    gdf = _read_vector_gdf_bbox(s3_key, bbox)
+    clipped = _clip_vector_to_watershed(gdf, watershed_geom, layer_cfg)
+    if len(_RAW_CLIP_MEM) > 48:
+        _RAW_CLIP_MEM.clear()
+    _RAW_CLIP_MEM[cache_key] = clipped
+    return clipped.copy()
+
+
 def clip_vector_geojson(
     s3_key: str,
     vector_url: str,
@@ -460,12 +506,13 @@ def clip_vector_geojson(
     """Return watershed-clipped GeoJSON FeatureCollection for map rendering.
 
     Reads only the watershed bbox from S3 via /vsis3/ range requests — never the
-    full national FGB.
+    full national FGB. Shares the raw clip with analysis via
+    clipped_vector_gdf_for_watershed.
     """
     del vector_url  # unused; vsis3 uses IAM/env credentials
-    bbox = _watershed_bbox(watershed_geom, pad_frac=pad_frac)
-    gdf = _read_vector_gdf_bbox(s3_key, bbox)
-    clipped = _clip_vector_to_watershed(gdf, watershed_geom, layer_cfg)
+    clipped = clipped_vector_gdf_for_watershed(
+        s3_key, watershed_geom, layer_cfg, pad_frac=pad_frac
+    )
     if clipped.empty:
         return {"type": "FeatureCollection", "features": []}
     if layer_cfg:
@@ -474,9 +521,6 @@ def clip_vector_geojson(
     if drop_cols:
         clipped = clipped.drop(columns=drop_cols)
     return json.loads(clipped.to_json())
-
-
-_CLIP_MEM: dict[tuple, dict] = {}
 
 
 def clipped_vector_geojson_for_watershed(
@@ -942,9 +986,7 @@ def analyze_layer(
         if not vector_url:
             return AnalysisResult(stats={}, status="error", error="Missing vector URL for analysis")
 
-        bbox = _watershed_bbox(watershed_geom)
-        gdf = _read_vector_gdf_bbox(layer_cfg.s3_key, bbox)
-        clipped = _clip_vector_to_watershed(gdf, watershed_geom, layer_cfg)
+        clipped = clipped_vector_gdf_for_watershed(layer_cfg.s3_key, watershed_geom, layer_cfg)
         if layer_cfg.source == "vector_fgb":
             clipped = enrich_vector_gdf(clipped, layer_cfg)
 

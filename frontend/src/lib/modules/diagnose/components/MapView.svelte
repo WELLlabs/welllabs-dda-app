@@ -946,46 +946,47 @@
 					try {
 						if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
 
-						// ── Vector preload ─────────────────────────────────────────────
-						// Fetch all THEMATIC vector layers sequentially in the background.
-						// Overlays (canals, rivers) are excluded — their FGBs are large
-						// national files whose clips take 10-30 s and would exhaust the
-						// backend's _vector_clip_sem, causing 502s on user-initiated clicks.
-						// Populates vectorGeoJsonByKey so user clicks find cached data → instant.
-						// Sequential (1 at a time) so _vector_clip_sem slot 1 is used for
-						// preload while slots 2-3 remain free for simultaneous user clicks.
-						void (async () => {
-							const vectorsToPreload = secondaryLayers.filter(
-								(l) =>
-									l.kind === 'vector' &&
-									l.map_render !== false &&
-									l.url &&
-									!isOverlayLayer(l) // skip canals, rivers, village-boundary overlays
-							);
-							for (const layer of vectorsToPreload) {
-								if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) break;
-								const cacheKey = layer.s3_key || layer.url || layer.id;
-								if (vectorGeoJsonByKey[cacheKey]) continue; // already fetched by user click
-								try {
-									const data = await fetchClippedGeoJSON(layer.url, {
-										signal: mapDataAbort.signal
-									});
-									vectorGeoJsonByKey = { ...vectorGeoJsonByKey, [cacheKey]: data };
-								} catch {
-									// best-effort — don't abort the preload loop on one failure
-								}
-								// Small pause between sequential clips so a user click always gets
-								// prompt access to the remaining _vector_clip_sem capacity.
-								await new Promise((r) => setTimeout(r, 300));
-							}
-						})();
-
-						// Batch layer analysis — delayed so first layer clicks stay fast.
-						await new Promise((r) => setTimeout(r, 2500));
+						// Batch analysis first (sidebar evidence). Do not race it against
+						// village/WISER /data clips — those were the ~1s + ~2.7s load spikes.
+						await new Promise((r) => setTimeout(r, 400));
 						if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
 						await preloadAllSecondaryData();
 						if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
 
+						// Then warm unique thematic FGB clips so later toggles are instant.
+						// One request per s3_key (WISER trio / village demography share files).
+						const seenKeys = new Set();
+						const vectorsToPreload = [];
+						for (const l of secondaryLayers) {
+							if (
+								l.kind !== 'vector' ||
+								l.map_render === false ||
+								!l.url ||
+								isOverlayLayer(l)
+							) {
+								continue;
+							}
+							const key = l.s3_key || l.url || l.id;
+							if (seenKeys.has(key)) continue;
+							seenKeys.add(key);
+							vectorsToPreload.push(l);
+						}
+						for (const layer of vectorsToPreload) {
+							if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) break;
+							const cacheKey = layer.s3_key || layer.url || layer.id;
+							if (vectorGeoJsonByKey[cacheKey]) continue;
+							try {
+								const data = await fetchClippedGeoJSON(layer.url, {
+									signal: mapDataAbort.signal
+								});
+								vectorGeoJsonByKey = { ...vectorGeoJsonByKey, [cacheKey]: data };
+							} catch {
+								// best-effort
+							}
+							await new Promise((r) => setTimeout(r, 100));
+						}
+
+						if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
 						await Promise.allSettled([
 							reloadObservationZones(),
 							reloadFieldNotes(),
