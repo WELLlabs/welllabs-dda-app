@@ -1037,7 +1037,11 @@ async def prewarm_cog_layers(
         cfg for cfg in get_catalog().layers
         if cfg.source == "cog" and cfg.s3_key in set(_cog_keys())
     ]
-    await asyncio.gather(*[_warm_one(cfg) for cfg in cog_cfgs])
+    # Sequential — not asyncio.gather — so the thread pool isn't flooded with
+    # 5 parallel S3 reads on a cold worker.  This keeps capacity free for the
+    # user's layer-click requests that arrive right after project creation.
+    for cfg in cog_cfgs:
+        await _warm_one(cfg)
     return Response(status_code=204)
 
 

@@ -160,6 +160,7 @@
 		setWatershedOutlineVisible(true);
 
 		// Hard-hide every thematic vector/COG layer first so WISER siblings never stack.
+		// COG layers use opacity (not visibility) so MapLibre keeps streaming their tiles.
 		if (map) {
 			for (const layer of map.getStyle()?.layers || []) {
 				const id = layer.id;
@@ -173,7 +174,7 @@
 					const overlay = overlayLayers.some((o) => id.startsWith(`vec-${o.id}-`));
 					if (!overlay) setLayerVisibility(id, false);
 				} else if (id.startsWith('cog-')) {
-					setLayerVisibility(id, false);
+					if (map.getLayer(id)) map.setPaintProperty(id, 'raster-opacity', 0);
 				}
 			}
 			// Explicitly clear WISER rank siblings (shared FGB → easy to leave stacked).
@@ -196,7 +197,11 @@
 				setLayerVisibility(`vec-${l.id}-line-halo`, visible);
 				setLayerVisibility(`vec-${l.id}-label`, visible);
 			} else {
-				setLayerVisibility(`cog-${l.id}`, visible);
+				// COG: opacity instead of visibility — tiles keep streaming while "hidden"
+				const cogId = `cog-${l.id}`;
+				if (map?.getLayer(cogId)) {
+					map.setPaintProperty(cogId, 'raster-opacity', visible ? 0.85 : 0);
+				}
 			}
 		}
 	}
@@ -940,8 +945,32 @@
 					try {
 						if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
 
-						// Vectors load on demand (prod behaviour) — do not background-
-						// preload every FGB clip; that queues workers and slows clicks.
+						// ── Vector preload ─────────────────────────────────────────────
+						// Fetch all vector layers sequentially in the background.
+						// Populates vectorGeoJsonByKey so user clicks find cached data → instant.
+						// Sequential (1 at a time) so _vector_clip_sem slot 1 is used for preload
+						// while slots 2-3 remain free for simultaneous user clicks.
+						void (async () => {
+							const vectorsToPreload = secondaryLayers.filter(
+								(l) => l.kind === 'vector' && l.map_render !== false && l.url
+							);
+							for (const layer of vectorsToPreload) {
+								if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) break;
+								const cacheKey = layer.s3_key || layer.url || layer.id;
+								if (vectorGeoJsonByKey[cacheKey]) continue; // already fetched by user click
+								try {
+									const data = await fetchClippedGeoJSON(layer.url, {
+										signal: mapDataAbort.signal
+									});
+									vectorGeoJsonByKey = { ...vectorGeoJsonByKey, [cacheKey]: data };
+								} catch {
+									// best-effort — don't abort the preload loop on one failure
+								}
+								// Small pause between sequential clips so a user click always gets
+								// prompt access to the remaining _vector_clip_sem capacity.
+								await new Promise((r) => setTimeout(r, 300));
+							}
+						})();
 
 						// Batch layer analysis — delayed so first layer clicks stay fast.
 						await new Promise((r) => setTimeout(r, 2500));
@@ -1660,8 +1689,10 @@
 							id: sourceId,
 							type: 'raster',
 							source: sourceId,
-							layout: { visibility: 'none' },
-							paint: { 'raster-opacity': 0.85 }
+							// Keep visibility: visible so the browser pre-fetches this image now.
+							// Opacity 0 = invisible; flip to 0.85 when user selects the layer.
+							layout: { visibility: 'visible' },
+							paint: { 'raster-opacity': 0 }
 						},
 						beforeId
 					);
@@ -1680,8 +1711,10 @@
 							id: sourceId,
 							type: 'raster',
 							source: sourceId,
-							layout: { visibility: 'none' },
-							paint: { 'raster-opacity': 0.85 }
+							// Keep visibility: visible so MapLibre pre-fetches viewport tiles now.
+							// Opacity 0 = invisible; flip to 0.85 when user selects the layer.
+							layout: { visibility: 'visible' },
+							paint: { 'raster-opacity': 0 }
 						},
 						beforeId
 					);
@@ -2781,7 +2814,9 @@
 			setLayerVisibility(`vec-${id}-line`, visible);
 			setLayerVisibility(`vec-${id}-label`, visible);
 		} else {
-		setLayerVisibility(`cog-${id}`, visible);
+			// COG: use opacity so tiles keep streaming even when eye-toggled off
+			const cogId = `cog-${id}`;
+			if (map?.getLayer(cogId)) map.setPaintProperty(cogId, 'raster-opacity', visible ? 0.85 : 0);
 		}
 	}
 
