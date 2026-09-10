@@ -36,21 +36,46 @@ except ImportError:  # pragma: no cover
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    init_pool(min_size=2, max_size=10)
+    # Keep the pool small — each uvicorn worker creates its own pool.
+    # Oversized pools + multi-worker restarts have exhausted Postgres and hung beta.
+    init_pool(min_size=1, max_size=5)
     # Warm village typeahead index in the background (S3 attribute read ~30–60s first time).
+    # Only one process should warm: uvicorn workers each run lifespan, and parallel
+    # S3 downloads after deploy have saturated the host (site unreachable).
+    import os
     import threading
+    import time
 
     from app.shared.watersheds import warm_village_name_index
 
-    threading.Thread(target=warm_village_name_index, name="village-index-warm", daemon=True).start()
+    # Prefer the first worker. Uvicorn sets UVICORN_WORKER / no standard env —
+    # use a simple file lock so only one process warms.
+    warm_lock = "/tmp/welllabs-village-warm.lock"
+    should_warm = False
     try:
-        from app.modules.diagnose.services.layer_analysis import warm_hierarchy_vector_caches
+        fd = os.open(warm_lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, str(os.getpid()).encode())
+        os.close(fd)
+        should_warm = True
+    except FileExistsError:
+        # Another worker is warming (or warmed recently).
+        try:
+            age = time.time() - os.path.getmtime(warm_lock)
+            if age > 3600:
+                os.unlink(warm_lock)
+                fd = os.open(warm_lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                os.write(fd, str(os.getpid()).encode())
+                os.close(fd)
+                should_warm = True
+        except OSError:
+            should_warm = False
 
+    if should_warm:
         threading.Thread(
-            target=warm_hierarchy_vector_caches, name="hierarchy-gpkg-warm", daemon=True
+            target=warm_village_name_index, name="village-index-warm", daemon=True
         ).start()
-    except Exception:
-        pass
+    # Hierarchy FGB warm removed from startup — hierarchy is not on project maps,
+    # and downloading those files on every deploy was thrashing disk/network.
     try:
         yield
     finally:

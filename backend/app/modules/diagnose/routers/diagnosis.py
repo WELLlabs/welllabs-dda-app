@@ -108,14 +108,12 @@ _META_COLS = """
     ) AS field_note_count
 """
 
-# ~100 m tolerance + 5 decimal places — enough for 64px WatershedThumb, tiny payload.
+# Tiny thumb for project cards — envelope only (never run SimplifyPreserveTopology
+# on large MultiPolygons at list time; that can lock PostGIS under load).
 _LIST_SELECT = f"""
     SELECT
         {_META_COLS},
-        ST_AsGeoJSON(
-            ST_SimplifyPreserveTopology(p.watershed_geom, 0.001),
-            5
-        )::json AS watershed_geojson
+        ST_AsGeoJSON(ST_Envelope(p.watershed_geom), 5)::json AS watershed_geojson
     FROM diagnosis p
     JOIN users owner_u ON owner_u.id = p.owner_id
 """
