@@ -6,7 +6,7 @@
 	<div class="mx-auto flex max-w-6xl flex-col items-center gap-8">
 		<div class="flex flex-col items-center gap-3 text-center">
 			<p class="m-0 max-w-xl font-body text-[13px] leading-relaxed text-ink-dim sm:text-[14px]">
-				Built by WELL Labs with the support of Environmental Defense Fund
+				Built by WELL Labs and Environmental Defense Fund
 			</p>
 			<div class="flex flex-wrap items-center justify-center gap-8 sm:gap-12">
 				<a
