@@ -233,10 +233,11 @@
 					// Overlays are visibility-toggled only; selecting opens the right panel
 					return;
 				}
-				if (meta?.tile_strategy === 'watershed_image') {
-					status = `Loading ${meta.name}…`;
-				}
+				// watershed_image / COG sources are registered at boot — showing them is an
+				// opacity flip. Never leave a sticky "Loading …" status when analysis is
+				// already cached (ensureLayerAnalysis returns early and used to skip Ready).
 				await showOnlySecondaryLayer(layer.id);
+				status = 'Ready';
 				void ensureLayerAnalysis(layer.id);
 			}
 		}
@@ -2181,7 +2182,7 @@
 
 	async function preloadAllSecondaryData() {
 		if (!project?.id) return;
-		status = 'Loading watershed analysis…';
+		if (!mapDataAbort.signal.aborted) status = 'Loading watershed analysis…';
 
 		// Seed COG legends (full catalog)
 		for (const layer of secondaryLayers.filter((l) => l.kind === 'cog')) {
@@ -2231,9 +2232,10 @@
 			layerAnalysisLoading = Object.fromEntries(
 				secondaryLayers.map((l) => [l.id, false])
 			);
+			// Always clear sticky "Loading watershed analysis…" — including on abort
+			// when the user already has map + evidence visible.
+			if (!mapDataAbort.signal.aborted) status = 'Ready';
 		}
-
-		status = 'Ready';
 	}
 
 	function hasLoadedAnalysis(entry) {
@@ -2257,9 +2259,14 @@
 		layerAnalysisLoading = { ...layerAnalysisLoading, [layerId]: true };
 		try {
 			const isCog = meta.kind === 'cog';
-			const result = await fetchLayerAnalysis(layerId, project.id, { isCog });
+			const result = await fetchLayerAnalysis(layerId, project.id, {
+				isCog,
+				signal: mapDataAbort.signal
+			});
+			if (mapDataAbort.signal.aborted) return;
 			layerAnalysis = { ...layerAnalysis, [layerId]: result };
 		} catch (err) {
+			if (err?.name === 'AbortError' || mapDataAbort.signal.aborted) return;
 			layerAnalysis = {
 				...layerAnalysis,
 				[layerId]: {
@@ -2276,6 +2283,9 @@
 			};
 		} finally {
 			layerAnalysisLoading = { ...layerAnalysisLoading, [layerId]: false };
+			if (!mapDataAbort.signal.aborted && selectedLayer?.id === layerId) {
+				status = 'Ready';
+			}
 		}
 	}
 

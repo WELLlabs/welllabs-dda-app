@@ -5,6 +5,7 @@
 	import MapView from '$lib/modules/diagnose/components/MapView.svelte';
 	import PackageProgressPanel from '$lib/shared/components/PackageProgressPanel.svelte';
 	import ModuleHeader from '$lib/shared/components/ModuleHeader.svelte';
+	import { onDestroy } from 'svelte';
 	import {
 		fetchProjects,
 		fetchProject,
@@ -34,25 +35,38 @@
 	let showPanel = $state(false);
 	/** @type {AbortController | null} */
 	let opAbort = null;
+	/** @type {AbortController | null} */
+	let loadAbort = null;
+	let loadGen = 0;
 
 	async function loadProject(slugValue) {
+		const gen = ++loadGen;
+		loadAbort?.abort();
+		loadAbort = new AbortController();
+		const { signal } = loadAbort;
+
 		loading = true;
 		loadError = '';
 		currentProject = null;
 		try {
 			// Slim list for slug→id only (no full-precision watershed geoms).
-			const data = await fetchProjects();
+			const data = await fetchProjects({ signal });
+			if (signal.aborted || gen !== loadGen) return;
 			const match = findBySlug(data.projects ?? [], slugValue);
 			if (!match) {
 				loadError = 'Project not found';
 				return;
 			}
 			// Full project (precise watershed_geometry) for the map.
-			currentProject = await fetchProject(match.id);
+			currentProject = await fetchProject(match.id, { signal });
 		} catch (err) {
-			loadError = String(err);
+			if (err?.name === 'AbortError' || signal.aborted || gen !== loadGen) return;
+			const raw = err instanceof Error ? err.message : String(err);
+			loadError = /502|503|504|Upstream|Cloudflare|timed out|Failed to fetch/i.test(raw)
+				? 'The server was busy finishing the previous project. Wait a moment and try again.'
+				: raw;
 		} finally {
-			loading = false;
+			if (gen === loadGen) loading = false;
 		}
 	}
 
@@ -60,8 +74,19 @@
 		loadProject(slug);
 	});
 
+	onDestroy(() => {
+		loadAbort?.abort();
+		opAbort?.abort();
+	});
+
 	function backToProjects() {
+		loadAbort?.abort();
 		goto(appPath('/diagnose'));
+	}
+
+	function retryLoad() {
+		loadError = '';
+		loadProject(slug);
 	}
 
 	function dismissPanel() {
@@ -194,14 +219,26 @@
 		<p class="m-0 text-sm text-brand-steel">Fetching project details</p>
 	</div>
 {:else if loadError || !currentProject}
-	<div class="flex h-screen flex-col items-center justify-center gap-4 bg-white font-body">
-		<p class="m-0 text-brand-navy">{loadError || 'Project not found'}</p>
-		<button
-			class="cursor-pointer rounded bg-brand-blue px-4 py-2 font-body text-white hover:bg-brand-deep"
-			onclick={backToProjects}
-		>
-			← Back to projects
-		</button>
+	<div class="flex h-screen flex-col items-center justify-center gap-4 bg-white px-6 font-body">
+		<p class="m-0 max-w-md text-center text-brand-navy">{loadError || 'Project not found'}</p>
+		<div class="flex flex-wrap items-center justify-center gap-2">
+			{#if loadError}
+				<button
+					type="button"
+					class="cursor-pointer rounded bg-brand-blue px-4 py-2 font-body text-white hover:bg-brand-deep"
+					onclick={retryLoad}
+				>
+					Retry
+				</button>
+			{/if}
+			<button
+				type="button"
+				class="cursor-pointer rounded border border-brand-navy/20 bg-white px-4 py-2 font-body text-brand-navy hover:bg-brand-sky/20"
+				onclick={backToProjects}
+			>
+				← Back to projects
+			</button>
+		</div>
 	</div>
 {:else}
 	<div class="relative flex h-screen flex-col bg-white font-body">

@@ -4,20 +4,43 @@ import { apiPath } from '$lib/shared/paths.js';
 const API = apiPath('/diagnose');
 const request = createApiClient(API);
 
+/** Short-lived list cache so rapid project↔list navigation does not re-hit the API. */
+let _projectsCache = /** @type {{ at: number, data: any } | null} */ (null);
+const PROJECTS_CACHE_MS = 45_000;
+
+export function invalidateProjectsCache() {
+	_projectsCache = null;
+}
+
 function bboxQuery(bounds) {
 	if (!bounds || bounds.length !== 4) return '';
 	const q = bounds.map((v) => encodeURIComponent(v)).join(',');
 	return `?bbox=${q}`;
 }
 
-export async function fetchProjects() {
+export async function fetchProjects({ signal, fresh = false } = {}) {
+	if (!fresh && _projectsCache && Date.now() - _projectsCache.at < PROJECTS_CACHE_MS) {
+		return _projectsCache.data;
+	}
 	// Soft-retry: navigating back to the list must not fail on a single transient
 	// Cloudflare/gateway blip while GIS work is draining.
-	return request('/projects', { retries: 2, retryDelayMs: 600 });
+	const data = await request('/projects', {
+		retries: 2,
+		retryDelayMs: 600,
+		...(signal ? { signal } : {})
+	});
+	if (!signal?.aborted) {
+		_projectsCache = { at: Date.now(), data };
+	}
+	return data;
 }
 
-export async function fetchProject(id) {
-	return request(`/projects/${id}`, { retries: 1, retryDelayMs: 700 });
+export async function fetchProject(id, { signal } = {}) {
+	return request(`/projects/${id}`, {
+		retries: 1,
+		retryDelayMs: 700,
+		...(signal ? { signal } : {})
+	});
 }
 
 export async function createProject(nameOrPayload, lng, lat) {
@@ -26,6 +49,7 @@ export async function createProject(nameOrPayload, lng, lat) {
 			? nameOrPayload
 			: { name: nameOrPayload, lng, lat };
 	// No retries on POST — CF timeout after insert would create duplicates.
+	invalidateProjectsCache();
 	return request('/projects', {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
@@ -35,6 +59,7 @@ export async function createProject(nameOrPayload, lng, lat) {
 }
 
 export async function deleteProject(id) {
+	invalidateProjectsCache();
 	await request(`/projects/${id}`, { method: 'DELETE' });
 }
 

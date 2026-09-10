@@ -42,6 +42,8 @@
 	let contextLoading = $state(false);
 	let creating = $state(false);
 	let deletingId = $state(null);
+	/** Prevents rapid multi-open which stacks map boots and triggers CF 502s. */
+	let openingId = $state(null);
 	let mounted = $state(false);
 	/** @type {AbortController | null} */
 	let villageAbort = null;
@@ -113,11 +115,11 @@
 		openMenuId = null;
 	}
 
-	async function loadProjects() {
+	async function loadProjects({ fresh = false } = {}) {
 		loading = true;
 		error = '';
 		try {
-			const data = await fetchProjects();
+			const data = await fetchProjects({ fresh });
 			projects = data.projects ?? [];
 		} catch (err) {
 			error = String(err);
@@ -482,6 +484,11 @@
 	}
 
 	function openProject(project, { boot = 'opening' } = {}) {
+		// One navigation at a time — opening several projects quickly stacks
+		// prewarm/batch on the API and causes Cloudflare 502s on the next open.
+		if (openingId) return;
+		openingId = project.id;
+		abortInFlightLoads();
 		try {
 			sessionStorage.setItem('diagnose:project-boot', boot);
 		} catch {
@@ -519,7 +526,7 @@
 			name = '';
 			watershedPreview = null;
 			selectMode = 'point';
-			await loadProjects();
+			await loadProjects({ fresh: true });
 			openProject(project, { boot: 'creating' });
 		} catch (err) {
 			error = String(err);
@@ -607,7 +614,7 @@
 		error = '';
 		try {
 			await deleteProject(project.id);
-			await loadProjects();
+			await loadProjects({ fresh: true });
 		} catch (err) {
 			error = String(err);
 		} finally {
@@ -891,8 +898,24 @@
 				<p class="mb-4 text-sm text-red-600">{error}</p>
 			{/if}
 
+			{#if openingId}
+				<div
+					class="mb-4 flex items-center gap-3 rounded-xl border border-brand-blue/20 bg-brand-sky/15 px-4 py-3 font-body text-sm text-brand-navy"
+					role="status"
+					aria-live="polite"
+				>
+					<span
+						class="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-brand-navy/20 border-t-brand-blue"
+						aria-hidden="true"
+					></span>
+					<span>Opening project… wait until it loads before opening another.</span>
+				</div>
+			{/if}
+
 			<div
 				class="grid gap-6"
+				class:pointer-events-none={!!openingId}
+				class:opacity-60={!!openingId}
 				style="grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr));"
 			>
 				<button
@@ -900,6 +923,7 @@
 					class="card card-new group"
 					class:in={mounted}
 					style="--accent: #1b75e0; --delay: 0ms;"
+					disabled={!!openingId}
 					onpointermove={handlePointer}
 					onclick={openCreate}
 				>
@@ -926,12 +950,16 @@
 					<div
 						class="card group"
 						class:in={mounted}
+						class:ring-2={openingId === project.id}
+						class:ring-brand-blue={openingId === project.id}
 						style="--accent: #1b75e0; --delay: {(i + 1) * 70}ms;"
 						role="button"
-						tabindex="0"
+						tabindex={openingId ? -1 : 0}
+						aria-disabled={!!openingId}
 						onpointermove={handlePointer}
 						onclick={() => openProject(project)}
 						onkeydown={(e) => {
+							if (openingId) return;
 							if (e.key === 'Enter' || e.key === ' ') {
 								e.preventDefault();
 								openProject(project);
