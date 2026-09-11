@@ -158,11 +158,13 @@ def get_project(project_id: str, user: dict = Depends(require_diagnosis_access))
 @router.post("", status_code=201)
 async def create_project(body: ProjectCreate, user: dict = Depends(get_current_user)):
     import asyncio
+    import logging
+
+    log = logging.getLogger("uvicorn.error")
 
     def _build_row():
         if body.geometry is not None:
             # Client-supplied clip (village union or custom AOI) — validate, do not re-lookup.
-            parse_geojson_polygon(body.geometry)
             if body.source == "custom" or (body.watershed_id or "") == "custom":
                 watershed = custom_aoi_from_geometry(body.geometry, name=body.watershed_name)
             else:
@@ -170,7 +172,7 @@ async def create_project(body: ProjectCreate, user: dict = Depends(get_current_u
 
                 from app.shared.watersheds import _geojson_geom, _simplify_for_storage
 
-                geom = shp_shape(body.geometry)
+                geom = parse_geojson_polygon(body.geometry)
                 # Large multi-micro unions can stall PostGIS / CF if left unsimplified.
                 geom = _simplify_for_storage(geom)
                 if geom.is_empty:
@@ -180,6 +182,7 @@ async def create_project(body: ProjectCreate, user: dict = Depends(get_current_u
                     "watershed_id": (body.watershed_id or f"union:geom").strip()[:500],
                     "watershed_name": (body.watershed_name or "Watershed union").strip()[:500],
                     "geometry": _geojson_geom(geom),
+                    "bounds": list(geom.bounds),
                     "seed_lng": float(centroid.x),
                     "seed_lat": float(centroid.y),
                 }
@@ -192,14 +195,26 @@ async def create_project(body: ProjectCreate, user: dict = Depends(get_current_u
         return watershed, seed_lng, seed_lat
 
     try:
-        watershed, seed_lng, seed_lat = await asyncio.to_thread(_build_row)
+        watershed, seed_lng, seed_lat = await asyncio.wait_for(
+            asyncio.to_thread(_build_row),
+            timeout=20.0,
+        )
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(
+            503,
+            "Project create timed out while preparing the AOI — simplify the boundary and retry.",
+        ) from exc
     except ValueError as exc:
         raise HTTPException(400 if body.geometry is not None else 404, str(exc)) from exc
     except Exception as exc:
+        log.exception("Watershed resolve failed during project create")
         raise HTTPException(502, f"Watershed resolve failed: {exc}") from exc
 
     def _insert():
+        # Minimal RETURNING — never ST_AsGeoJSON the full AOI here (CF HTML 502 risk).
+        bounds = watershed.get("bounds")
         with db_cursor() as cur:
+            cur.execute("SET LOCAL statement_timeout = '15000'")
             cur.execute(
                 """
                 INSERT INTO diagnosis (
@@ -210,28 +225,15 @@ async def create_project(body: ProjectCreate, user: dict = Depends(get_current_u
                     %(owner_id)s,
                     %(watershed_id)s,
                     %(watershed_name)s,
-                    ST_SetSRID(ST_GeomFromGeoJSON(%(watershed_geom)s), 4326),
+                    ST_MakeValid(ST_SetSRID(ST_GeomFromGeoJSON(%(watershed_geom)s), 4326)),
                     %(seed_lng)s,
                     %(seed_lat)s
                 )
-                RETURNING id, name, owner_id,
-                          %(owner_name)s AS owner_name,
-                          %(owner_email)s AS owner_email,
-                          watershed_id, watershed_name, seed_lng, seed_lat,
-                          created_at, updated_at,
-                          -- Envelope only: full ST_AsGeoJSON of dense custom AOIs
-                          -- (GP / cadastral KMLs) routinely exceeds Cloudflare's
-                          -- proxy budget and surfaces as HTML 502 on create.
-                          ST_AsGeoJSON(ST_Envelope(watershed_geom), 5)::json AS watershed_geojson,
-                          ST_AsGeoJSON(ST_Envelope(watershed_geom))::json AS bounds_geojson,
-                          0 AS observation_zone_count,
-                          0 AS field_note_count
+                RETURNING id, created_at, updated_at
                 """,
                 {
                     "name": body.name.strip(),
                     "owner_id": user["id"],
-                    "owner_name": user["name"],
-                    "owner_email": user["email"],
                     "watershed_id": watershed["watershed_id"],
                     "watershed_name": watershed["watershed_name"],
                     "watershed_geom": json.dumps(watershed["geometry"]),
@@ -239,13 +241,54 @@ async def create_project(body: ProjectCreate, user: dict = Depends(get_current_u
                     "seed_lat": seed_lat,
                 },
             )
-            return cur.fetchone()
+            row = cur.fetchone()
+            return row, bounds
 
     try:
-        row = await asyncio.to_thread(_insert)
+        row, bounds = await asyncio.wait_for(asyncio.to_thread(_insert), timeout=25.0)
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(
+            503,
+            "Project create timed out writing to the database — retry in a moment.",
+        ) from exc
     except Exception as exc:
+        log.exception("Project create insert failed")
         raise HTTPException(502, f"Project create failed: {exc}") from exc
-    return _row_to_dict(row)
+
+    # Build the create response in Python (envelope thumb only). Full geom loads on get_project.
+    if bounds and len(bounds) == 4:
+        minx, miny, maxx, maxy = (float(v) for v in bounds)
+        envelope = {
+            "type": "Polygon",
+            "coordinates": [[
+                [minx, miny],
+                [maxx, miny],
+                [maxx, maxy],
+                [minx, maxy],
+                [minx, miny],
+            ]],
+        }
+    else:
+        envelope = watershed.get("geometry")
+        bounds = None
+
+    return {
+        "id": str(row["id"]),
+        "name": body.name.strip(),
+        "owner_id": str(user["id"]),
+        "owner_name": user.get("name") or "",
+        "owner_email": user.get("email") or "",
+        "watershed_id": watershed["watershed_id"],
+        "watershed_name": watershed["watershed_name"],
+        "seed_lng": seed_lng,
+        "seed_lat": seed_lat,
+        "bounds": bounds,
+        "watershed_geometry": envelope,
+        "observation_zone_count": 0,
+        "field_note_count": 0,
+        "created_at": row["created_at"].isoformat(),
+        "updated_at": row["updated_at"].isoformat(),
+    }
 
 
 @router.delete("/{project_id}", status_code=204)

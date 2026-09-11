@@ -474,7 +474,8 @@
 			watershedPreview = result;
 			if (result.seed_lng != null) lng = result.seed_lng;
 			if (result.seed_lat != null) lat = result.seed_lat;
-			if (result.geometry) void loadPreviewContext(result.geometry);
+			// Skip basin/river preview clips for custom AOIs — dense GP boundaries
+			// wedge the 2 API workers and the subsequent Create POST becomes a CF 502.
 		} catch (err) {
 			uploadError = String(err);
 			watershedPreview = { error: String(err) };
@@ -507,6 +508,7 @@
 		error = '';
 		// Free workers that may still be clipping preview layers.
 		abortInFlightLoads();
+		previewContextLayers = [];
 		try {
 			sessionStorage.setItem('diagnose:project-boot', 'creating');
 		} catch {

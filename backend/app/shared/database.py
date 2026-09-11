@@ -43,8 +43,9 @@ def get_pool() -> ConnectionPool:
 
 
 @contextmanager
-def db_cursor() -> Generator:
-    with get_pool().connection() as conn:
+def db_cursor(*, timeout: float | None = 30.0) -> Generator:
+    """Yield a dict-row cursor. ``timeout`` is seconds to wait for a pool connection."""
+    with get_pool().connection(timeout=timeout) as conn:
         with conn.cursor() as cur:
             yield cur
             conn.commit()
