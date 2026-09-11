@@ -23,6 +23,11 @@ packages/
 # QGIS
 *.qgz
 
+# Large local geo caches (download/S3 at runtime)
+backend/app/modules/diagnose/data/*.fgb
+.tmp_hierarchy_fgb/
+.tmp_pdf_compare/
+
 # Local research / conversion artifacts (do not commit)
 clinton_code.py
 clinton_code_updated.ipynb

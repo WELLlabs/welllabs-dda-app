@@ -64,8 +64,12 @@ _VILLAGE_STATE_KEYS = (
 # Guardrails for custom / union AOIs (degrees / vertex count)
 _MAX_BBOX_SPAN_DEG = 8.0
 _MAX_VERTICES = 50_000
+# Soft target after simplify — keeps POST bodies and PostGIS RETURNING under CF limits.
+_TARGET_STORAGE_VERTICES = 8_000
 _MAX_UNION_PARTS = 200
 _MIN_VILLAGE_QUERY_LEN = 4
+# Progressive tolerances (~25 m → ~500 m) for dense census / GP rings.
+_STORAGE_SIMPLIFY_TOLERANCES = (0.00025, 0.0005, 0.001, 0.002, 0.005)
 
 # Approximate WGS84 bboxes for state-scoped centroid enrichment (fast spatial reads)
 _STATE_BBOXES: dict[str, tuple[float, float, float, float]] = {
@@ -173,9 +177,88 @@ def _simplify_for_preview(geom):
         return geom
 
 
-def _geojson_geom(geom) -> dict:
+def _vertex_count(geom) -> int:
+    """Approximate coordinate count for Polygon / MultiPolygon."""
+    if geom is None or geom.is_empty:
+        return 0
+    try:
+        if geom.geom_type == "Polygon":
+            n = len(geom.exterior.coords)
+            n += sum(len(r.coords) for r in geom.interiors)
+            return n
+        if geom.geom_type == "MultiPolygon":
+            return sum(_vertex_count(g) for g in geom.geoms)
+        if hasattr(geom, "geoms"):
+            return sum(_vertex_count(g) for g in geom.geoms)
+    except Exception:
+        pass
+    try:
+        return int(getattr(geom, "geom_type", "") and len(mapping(geom).get("coordinates", [])) or 0)
+    except Exception:
+        return 0
+
+
+def _simplify_for_storage(geom, *, target_vertices: int = _TARGET_STORAGE_VERTICES):
+    """Progressively simplify dense AOIs so create/list stay under Cloudflare limits."""
+    if geom is None or geom.is_empty:
+        return geom
+    out = geom
+    if not out.is_valid:
+        try:
+            out = make_valid(out)
+        except Exception:
+            pass
+    if out.geom_type == "GeometryCollection":
+        polys = [g for g in out.geoms if g.geom_type in ("Polygon", "MultiPolygon")]
+        if not polys:
+            return geom
+        out = unary_union(polys)
+    if out.geom_type not in ("Polygon", "MultiPolygon"):
+        return geom
+
+    if _vertex_count(out) <= target_vertices:
+        return _simplify_for_preview(out)
+
+    for tol in _STORAGE_SIMPLIFY_TOLERANCES:
+        try:
+            simple = out.simplify(tol, preserve_topology=True)
+            if simple is None or simple.is_empty:
+                continue
+            if not simple.is_valid:
+                simple = make_valid(simple)
+            if simple.geom_type == "GeometryCollection":
+                polys = [g for g in simple.geoms if g.geom_type in ("Polygon", "MultiPolygon")]
+                if not polys:
+                    continue
+                simple = unary_union(polys)
+            if simple.geom_type not in ("Polygon", "MultiPolygon") or simple.is_empty:
+                continue
+            out = simple
+            if _vertex_count(out) <= target_vertices:
+                break
+        except Exception:
+            continue
+    return out
+
+
+def _geojson_geom(geom, *, precision: int | None = 6) -> dict:
     # mapping() is already JSON-serializable; avoid dumps/loads round-trip.
-    return mapping(geom)
+    raw = mapping(geom)
+    if precision is None:
+        return raw
+    return _round_geojson_coords(raw, precision)
+
+
+def _round_geojson_coords(obj, precision: int):
+    if isinstance(obj, dict):
+        if "coordinates" in obj:
+            return {**obj, "coordinates": _round_geojson_coords(obj["coordinates"], precision)}
+        return {k: _round_geojson_coords(v, precision) if k == "geometries" else v for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        if obj and isinstance(obj[0], (int, float)):
+            return [round(float(c), precision) for c in obj]
+        return [_round_geojson_coords(v, precision) for v in obj]
+    return obj
 
 
 def _feature_payload(geom, props: dict | None = None, *, simplify: bool = True) -> dict:
@@ -523,6 +606,11 @@ def parse_geojson_polygon(geometry: dict) -> Polygon | MultiPolygon:
     coords = geometry.get("coordinates") or []
     flat = json.dumps(coords)
     vertex_est = flat.count("[") // 2
+    # Prefer a real GEOS count when available (bracket heuristic undercounts rings).
+    try:
+        vertex_est = max(vertex_est, _vertex_count(geom))
+    except Exception:
+        pass
     if vertex_est > _MAX_VERTICES:
         raise ValueError(f"geometry has too many vertices (max {_MAX_VERTICES})")
     return geom
@@ -531,6 +619,12 @@ def parse_geojson_polygon(geometry: dict) -> Polygon | MultiPolygon:
 def custom_aoi_from_geometry(geometry: dict, *, name: str | None = None) -> dict:
     """Treat an uploaded polygon as the clip boundary."""
     geom = parse_geojson_polygon(geometry)
+    # Dense GP / cadastral KMLs must be simplified before JSON↔PostGIS or CF 502s.
+    geom = _simplify_for_storage(geom)
+    if geom is None or geom.is_empty:
+        raise ValueError("geometry is empty after simplify")
+    if geom.geom_type not in ("Polygon", "MultiPolygon"):
+        raise ValueError("geometry must resolve to a Polygon or MultiPolygon")
     label = (name or "").strip() or "Custom AOI"
     centroid = geom.centroid
     return {

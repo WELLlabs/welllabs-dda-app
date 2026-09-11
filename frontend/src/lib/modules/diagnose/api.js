@@ -426,6 +426,70 @@ export async function syncFromQfieldStream(projectId, handlers = {}) {
 	);
 }
 
+/** Stream atlas PDF build progress, then download when done. */
+export async function exportDiagnosisPdfStream(projectId, handlers = {}) {
+	const { signal, ...eventHandlers } = handlers;
+	return streamSSE(
+		`${API}/projects/${encodeURIComponent(projectId)}/export-pdf/stream`,
+		{
+			method: 'POST',
+			headers: {
+				Accept: 'text/event-stream'
+			},
+			signal
+		},
+		eventHandlers
+	);
+}
+
+/** Download a previously generated atlas PDF. */
+export async function downloadDiagnosisPdf(projectId, filename, { signal } = {}) {
+	const res = await fetch(
+		`${API}/projects/${encodeURIComponent(projectId)}/export-pdf/download?file=${encodeURIComponent(filename)}`,
+		{ method: 'GET', credentials: 'include', signal }
+	);
+	if (!res.ok) {
+		const text = await res.text();
+		let message = text || res.statusText;
+		try {
+			const json = JSON.parse(text);
+			if (json.detail)
+				message = typeof json.detail === 'string' ? json.detail : JSON.stringify(json.detail);
+		} catch {
+			/* keep raw */
+		}
+		throw new Error(message);
+	}
+	const blob = await res.blob();
+	return { blob, filename };
+}
+
+/** @deprecated Prefer exportDiagnosisPdfStream */
+export async function exportDiagnosisPdf(projectId, { signal } = {}) {
+	const res = await fetch(`${API}/projects/${encodeURIComponent(projectId)}/export-pdf`, {
+		method: 'POST',
+		credentials: 'include',
+		signal
+	});
+	if (!res.ok) {
+		const text = await res.text();
+		let message = text || res.statusText;
+		try {
+			const json = JSON.parse(text);
+			if (json.detail)
+				message = typeof json.detail === 'string' ? json.detail : JSON.stringify(json.detail);
+		} catch {
+			/* keep raw */
+		}
+		throw new Error(message);
+	}
+	const blob = await res.blob();
+	const disposition = res.headers.get('Content-Disposition') || '';
+	const match = disposition.match(/filename="?([^"]+)"?/i);
+	const filename = match?.[1] || 'Diagnosis_Report.pdf';
+	return { blob, filename };
+}
+
 /** Rewrite Titiler URLs to use the Vite dev proxy. */
 export function proxyTitilerUrl(url) {
 	return url.replace(/^https?:\/\/[^/]+/, '/titiler');

@@ -3,9 +3,10 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, EmailStr, Field, model_validator
 
+from app.modules.diagnose.services.package_progress import PackageProgress
 from app.shared.access import (
     diagnosis_access_where,
     require_diagnosis_access,
@@ -121,7 +122,10 @@ _LIST_SELECT = f"""
 _DETAIL_SELECT = f"""
     SELECT
         {_META_COLS},
-        ST_AsGeoJSON(p.watershed_geom, 9)::json AS watershed_geojson
+        ST_AsGeoJSON(
+            ST_SimplifyPreserveTopology(p.watershed_geom, 0.00025),
+            6
+        )::json AS watershed_geojson
     FROM diagnosis p
     JOIN users owner_u ON owner_u.id = p.owner_id
 """
@@ -162,27 +166,20 @@ async def create_project(body: ProjectCreate, user: dict = Depends(get_current_u
             if body.source == "custom" or (body.watershed_id or "") == "custom":
                 watershed = custom_aoi_from_geometry(body.geometry, name=body.watershed_name)
             else:
-                from shapely.geometry import mapping as shp_mapping
                 from shapely.geometry import shape as shp_shape
+
+                from app.shared.watersheds import _geojson_geom, _simplify_for_storage
 
                 geom = shp_shape(body.geometry)
                 # Large multi-micro unions can stall PostGIS / CF if left unsimplified.
-                try:
-                    if geom.geom_type in ("MultiPolygon", "GeometryCollection") or len(
-                        getattr(geom, "geoms", [])
-                    ) > 1:
-                        geom = geom.simplify(0.00015, preserve_topology=True)
-                    elif hasattr(geom, "area") and float(geom.area) > 0.05:
-                        geom = geom.simplify(0.00015, preserve_topology=True)
-                except Exception:
-                    pass
+                geom = _simplify_for_storage(geom)
                 if geom.is_empty:
                     raise ValueError("Watershed geometry is empty after simplify")
                 centroid = geom.centroid
                 watershed = {
                     "watershed_id": (body.watershed_id or f"union:geom").strip()[:500],
                     "watershed_name": (body.watershed_name or "Watershed union").strip()[:500],
-                    "geometry": shp_mapping(geom),
+                    "geometry": _geojson_geom(geom),
                     "seed_lng": float(centroid.x),
                     "seed_lat": float(centroid.y),
                 }
@@ -222,7 +219,10 @@ async def create_project(body: ProjectCreate, user: dict = Depends(get_current_u
                           %(owner_email)s AS owner_email,
                           watershed_id, watershed_name, seed_lng, seed_lat,
                           created_at, updated_at,
-                          ST_AsGeoJSON(watershed_geom, 9)::json AS watershed_geojson,
+                          -- Envelope only: full ST_AsGeoJSON of dense custom AOIs
+                          -- (GP / cadastral KMLs) routinely exceeds Cloudflare's
+                          -- proxy budget and surfaces as HTML 502 on create.
+                          ST_AsGeoJSON(ST_Envelope(watershed_geom), 5)::json AS watershed_geojson,
                           ST_AsGeoJSON(ST_Envelope(watershed_geom))::json AS bounds_geojson,
                           0 AS observation_zone_count,
                           0 AS field_note_count
@@ -418,3 +418,218 @@ def remove_org_access(project_id: str, org_id: str, user: dict = Depends(require
         )
         if not cur.fetchone():
             raise HTTPException(404, "That organization does not have access to this project")
+
+
+def _load_zones_for_pdf(project_id: str) -> list[dict]:
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, text, observations, questions, color,
+                   ST_AsGeoJSON(geom)::json AS geometry
+            FROM observation_zones
+            WHERE project_id = %(project_id)s
+            ORDER BY created_at ASC
+            """,
+            {"project_id": project_id},
+        )
+        return [
+            {
+                "id": str(r["id"]),
+                "text": r.get("text") or "",
+                "observations": r.get("observations") or "",
+                "questions": r.get("questions") or "",
+                "color": r.get("color") or "",
+                "geometry": r.get("geometry"),
+            }
+            for r in cur.fetchall()
+        ]
+
+
+def _load_hypotheses_for_pdf(project_id: str) -> list[dict]:
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, hypothesis, root_cause, status, created_at
+            FROM hypotheses
+            WHERE project_id = %(project_id)s
+            ORDER BY created_at ASC
+            """,
+            {"project_id": project_id},
+        )
+        rows = cur.fetchall()
+        out = []
+        for row in rows:
+            hid = str(row["id"])
+            cur.execute(
+                "SELECT zone_id FROM hypothesis_observation_zones WHERE hypothesis_id = %(id)s",
+                {"id": hid},
+            )
+            zone_ids = [str(r["zone_id"]) for r in cur.fetchall()]
+            cur.execute(
+                "SELECT COUNT(*)::int AS n FROM field_notes WHERE hypothesis_id = %(id)s",
+                {"id": hid},
+            )
+            note_count = cur.fetchone()["n"]
+            out.append(
+                {
+                    "id": hid,
+                    "hypothesis": row.get("hypothesis") or "",
+                    "root_cause": row.get("root_cause") or "",
+                    "status": row.get("status") or "untested",
+                    "observation_zone_ids": zone_ids,
+                    "field_note_count": note_count,
+                }
+            )
+        return out
+
+
+def _reports_dir(project_id: str) -> Path:
+    from app.shared.config import settings
+
+    return Path(settings.packages_dir) / project_id / "reports"
+
+
+def _run_atlas_export(project_id: str, progress: PackageProgress) -> dict:
+    """Build atlas PDF on disk; return download metadata for SSE done event."""
+    import re
+
+    from app.modules.diagnose.services.diagnosis_atlas import build_atlas_pdf
+
+    with db_cursor() as cur:
+        cur.execute(f"{_DETAIL_SELECT} WHERE p.id = %(id)s", {"id": project_id})
+        row = cur.fetchone()
+    if not row:
+        raise ValueError("Project not found")
+
+    project = _row_to_dict(row)
+    if not project.get("watershed_geometry"):
+        raise ValueError("Project has no watershed geometry")
+
+    zones = _load_zones_for_pdf(project_id)
+    hypotheses = _load_hypotheses_for_pdf(project_id)
+
+    safe = re.sub(r"[^\w\-]+", "_", (project.get("name") or "diagnosis").strip())[:60] or "diagnosis"
+    filename = f"Diagnosis_Dashboard_{safe}.pdf"
+    out_dir = _reports_dir(project_id)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / filename
+
+    build_atlas_pdf(
+        project=project,
+        observation_zones=zones,
+        hypotheses=hypotheses,
+        output_path=out_path,
+        progress=progress,
+    )
+    return {
+        "filename": filename,
+        "download_path": filename,
+        "project_id": project_id,
+        "message": f"Diagnosis atlas PDF ready ({filename}).",
+    }
+
+
+@router.post("/{project_id}/export-pdf/stream")
+async def export_diagnosis_pdf_stream(
+    project_id: str, user: dict = Depends(require_diagnosis_access)
+):
+    """Stream atlas PDF build progress (SSE), then download via /export-pdf/download."""
+    import asyncio
+    import json
+    from datetime import UTC, datetime
+
+    from fastapi.responses import StreamingResponse
+
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    def on_progress(percent: int, message: str) -> None:
+        loop.call_soon_threadsafe(
+            queue.put_nowait,
+            {
+                "type": "progress",
+                "percent": percent,
+                "message": message,
+                "time": datetime.now(UTC).isoformat(),
+            },
+        )
+
+    async def run_export() -> None:
+        progress = PackageProgress(on_event=on_progress)
+        try:
+            result = await loop.run_in_executor(
+                None,
+                lambda: _run_atlas_export(project_id, progress),
+            )
+            await queue.put({"type": "done", "percent": 100, "result": result})
+        except ValueError as exc:
+            await queue.put({"type": "error", "message": str(exc)})
+        except Exception as exc:
+            await queue.put({"type": "error", "message": f"PDF export failed: {exc}"})
+
+    async def event_stream():
+        task = asyncio.create_task(run_export())
+        try:
+            while True:
+                item = await queue.get()
+                yield f"data: {json.dumps(item)}\n\n"
+                if item.get("type") in ("done", "error"):
+                    break
+        finally:
+            await task
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.get("/{project_id}/export-pdf/download")
+def download_diagnosis_pdf(
+    project_id: str,
+    file: str = Query(..., min_length=1, max_length=200),
+    user: dict = Depends(require_diagnosis_access),
+):
+    """Download a previously generated atlas PDF for this project."""
+    from fastapi.responses import FileResponse
+
+    # Confine to reports dir — no path traversal
+    safe = Path(file).name
+    if not safe.lower().endswith(".pdf") or safe != file:
+        raise HTTPException(400, "Invalid file name")
+    path = _reports_dir(project_id) / safe
+    if not path.is_file():
+        raise HTTPException(404, "PDF not found — export again")
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        filename=safe,
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+@router.post("/{project_id}/export-pdf")
+async def export_diagnosis_pdf(project_id: str, user: dict = Depends(require_diagnosis_access)):
+    """Deprecated blocking export — prefer /export-pdf/stream. Still builds the atlas PDF."""
+    import asyncio
+
+    from fastapi.responses import FileResponse
+
+    try:
+        result = await asyncio.to_thread(_run_atlas_export, project_id, PackageProgress())
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(500, f"PDF export failed: {exc}") from exc
+
+    path = _reports_dir(project_id) / result["filename"]
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        filename=result["filename"],
+    )

@@ -782,7 +782,11 @@ def analyze_vector_categorical(clipped, style_column: str | None = None) -> dict
 
 
 def analyze_continuous_raster(
-    cog_url: str, watershed_geom: dict, nodata: float | int | None = None
+    cog_url: str,
+    watershed_geom: dict,
+    nodata: float | int | None = None,
+    *,
+    layer_id: str | None = None,
 ) -> dict[str, str]:
     """Sample continuous raster values inside the watershed bbox."""
     try:
@@ -798,6 +802,17 @@ def analyze_continuous_raster(
         if img.alpha_mask is not None:
             arr = np.where(img.alpha_mask > 0, arr, np.nan)
         valid = arr[~np.isnan(arr)]
+        # Cropping-intensity product uses 0 / NaN for non-crop; mean over crop only.
+        if layer_id == "cropping_intensity":
+            crop = valid[valid > 0]
+            if crop.size == 0:
+                return {"Status": "No cropping-intensity pixels in watershed"}
+            return {
+                "Min": f"{float(np.nanmin(crop)):.2f}",
+                "Max": f"{float(np.nanmax(crop)):.2f}",
+                "Mean": f"{float(np.nanmean(crop)):.2f}",
+                "Median": f"{float(np.nanmedian(crop)):.2f}",
+            }
         if valid.size == 0:
             return {"Status": "No valid raster pixels in watershed"}
         return {
@@ -970,7 +985,9 @@ def analyze_layer(
         if atype == "continuous_raster":
             if not cog_url:
                 return AnalysisResult(stats={}, status="error", error="Missing COG URL for raster analysis")
-            stats = analyze_continuous_raster(cog_url, watershed_geom, nodata=layer_cfg.nodata)
+            stats = analyze_continuous_raster(
+                cog_url, watershed_geom, nodata=layer_cfg.nodata, layer_id=getattr(layer_cfg, "id", None)
+            )
             return AnalysisResult(stats=stats)
 
         if atype == "watershed_hierarchy" or layer_cfg.source == "watershed_hierarchy":

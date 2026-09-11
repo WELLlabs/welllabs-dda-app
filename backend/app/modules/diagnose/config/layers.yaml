@@ -100,6 +100,8 @@ layers:
     source: vector_fgb
     analysis_type: vector_length
     map_render: true
+    # Keep canals that touch the AOI (and near-edge delivery paths) for map + atlas overlays.
+    clip_mode: intersect
     render:
       type: line
       line_color: rust
