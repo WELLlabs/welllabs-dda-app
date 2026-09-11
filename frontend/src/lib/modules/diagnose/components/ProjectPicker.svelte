@@ -474,8 +474,25 @@
 			watershedPreview = result;
 			if (result.seed_lng != null) lng = result.seed_lng;
 			if (result.seed_lat != null) lat = result.seed_lat;
-			// Skip basin/river preview clips for custom AOIs — dense GP boundaries
-			// wedge the 2 API workers and the subsequent Create POST becomes a CF 502.
+			// Clip basin context to the AOI envelope only — full multipolygon clips
+			// wedge the API workers; create uses create_token and must stay free.
+			const bounds = Array.isArray(result.bounds) ? result.bounds : null;
+			if (bounds && bounds.length === 4) {
+				const [minx, miny, maxx, maxy] = bounds.map(Number);
+				const envelope = {
+					type: 'Polygon',
+					coordinates: [
+						[
+							[minx, miny],
+							[maxx, miny],
+							[maxx, maxy],
+							[minx, maxy],
+							[minx, miny]
+						]
+					]
+				};
+				void loadPreviewContext(envelope);
+			}
 		} catch (err) {
 			uploadError = String(err);
 			watershedPreview = { error: String(err) };
@@ -515,14 +532,21 @@
 			/* ignore */
 		}
 		try {
+			const token = watershedPreview.create_token;
 			const project = await createProject({
 				name: name.trim(),
 				source: selectMode,
 				lng: watershedPreview.seed_lng ?? lng,
 				lat: watershedPreview.seed_lat ?? lat,
-				geometry: watershedPreview.geometry,
-				watershed_id: watershedPreview.watershed_id,
-				watershed_name: watershedPreview.watershed_name
+				// Prefer server-side token from from-geometry so create does not
+				// re-parse dense GP rings (GEOS can crash the worker → CF 502).
+				...(token
+					? { create_token: token, watershed_id: 'custom', watershed_name: watershedPreview.watershed_name }
+					: {
+							geometry: watershedPreview.geometry,
+							watershed_id: watershedPreview.watershed_id,
+							watershed_name: watershedPreview.watershed_name
+						})
 			});
 			showCreate = false;
 			name = '';

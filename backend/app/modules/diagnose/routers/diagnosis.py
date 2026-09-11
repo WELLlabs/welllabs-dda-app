@@ -17,7 +17,7 @@ from app.shared.auth import get_current_user
 from app.shared.config import settings
 from app.shared.database import db_cursor
 from app.shared import s3_storage
-from app.shared.watersheds import custom_aoi_from_geometry, lookup_watershed, parse_geojson_polygon
+from app.shared.watersheds import custom_aoi_from_geometry, load_stashed_custom_aoi, lookup_watershed, parse_geojson_polygon
 
 router = APIRouter()
 
@@ -27,6 +27,7 @@ class ProjectCreate(BaseModel):
     lng: float | None = Field(default=None, ge=-180, le=180)
     lat: float | None = Field(default=None, ge=-90, le=90)
     geometry: dict[str, Any] | None = None
+    create_token: str | None = Field(default=None, max_length=128)
     watershed_id: str | None = Field(default=None, max_length=500)
     watershed_name: str | None = Field(default=None, max_length=500)
     source: Literal["point", "village", "custom"] = "point"
@@ -35,8 +36,9 @@ class ProjectCreate(BaseModel):
     def require_point_or_geometry(self):
         has_point = self.lng is not None and self.lat is not None
         has_geom = self.geometry is not None
-        if not has_point and not has_geom:
-            raise ValueError("Provide lng/lat or geometry")
+        has_token = bool(self.create_token)
+        if not has_point and not has_geom and not has_token:
+            raise ValueError("Provide lng/lat, geometry, or create_token")
         return self
 
 
@@ -163,21 +165,29 @@ async def create_project(body: ProjectCreate, user: dict = Depends(get_current_u
     log = logging.getLogger("uvicorn.error")
 
     def _build_row():
+        # Prefer create_token from /watersheds/from-geometry — avoids re-running
+        # GEOS on dense GP multipolygons (can crash the worker → CF Host 502).
+        if body.create_token:
+            watershed = load_stashed_custom_aoi(body.create_token)
+            if body.watershed_name:
+                watershed["watershed_name"] = body.watershed_name.strip()[:500] or watershed["watershed_name"]
+            seed_lng = body.lng if body.lng is not None else watershed["seed_lng"]
+            seed_lat = body.lat if body.lat is not None else watershed["seed_lat"]
+            return watershed, seed_lng, seed_lat
+
         if body.geometry is not None:
             # Client-supplied clip (village union or custom AOI) — validate, do not re-lookup.
             if body.source == "custom" or (body.watershed_id or "") == "custom":
                 watershed = custom_aoi_from_geometry(body.geometry, name=body.watershed_name)
             else:
-                from shapely.geometry import shape as shp_shape
-
                 from app.shared.watersheds import _geojson_geom, _simplify_for_storage
 
-                geom = parse_geojson_polygon(body.geometry)
+                geom = parse_geojson_polygon(body.geometry, repair=False)
                 # Large multi-micro unions can stall PostGIS / CF if left unsimplified.
                 geom = _simplify_for_storage(geom)
                 if geom.is_empty:
                     raise ValueError("Watershed geometry is empty after simplify")
-                centroid = geom.centroid
+                centroid = geom.representative_point()
                 watershed = {
                     "watershed_id": (body.watershed_id or f"union:geom").strip()[:500],
                     "watershed_name": (body.watershed_name or "Watershed union").strip()[:500],
@@ -254,6 +264,14 @@ async def create_project(body: ProjectCreate, user: dict = Depends(get_current_u
     except Exception as exc:
         log.exception("Project create insert failed")
         raise HTTPException(502, f"Project create failed: {exc}") from exc
+
+    if body.create_token:
+        try:
+            from app.shared.watersheds import _aoi_cache_path
+
+            _aoi_cache_path(body.create_token).unlink(missing_ok=True)
+        except Exception:
+            pass
 
     # Build the create response in Python (envelope thumb only). Full geom loads on get_project.
     if bounds and len(bounds) == 4:
