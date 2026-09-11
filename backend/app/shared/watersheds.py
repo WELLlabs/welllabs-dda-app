@@ -682,14 +682,48 @@ def load_stashed_custom_aoi(token: str) -> dict:
     return data
 
 
+def _force_2d(geom: Polygon | MultiPolygon) -> Polygon | MultiPolygon:
+    """Strip Z coordinates. KML files carry Z=0; 3D geometries can crash some PostGIS builds."""
+    if not geom.has_z:
+        return geom
+    try:
+        import shapely
+        return shapely.force_2d(geom)
+    except Exception:
+        pass
+    # Fallback: reconstruct via WKB without Z
+    try:
+        from shapely.wkb import loads as wkb_loads, dumps as wkb_dumps
+        return wkb_loads(wkb_dumps(geom, include_srid=False), hex=False)
+    except Exception:
+        # Last resort: map exterior/interior coords
+        from shapely.geometry import Polygon as _Poly, MultiPolygon as _MP
+        if geom.geom_type == "Polygon":
+            ext = [(x, y) for x, y, *_ in geom.exterior.coords]
+            holes = [[(x, y) for x, y, *_ in ring.coords] for ring in geom.interiors]
+            return _Poly(ext, holes)
+        polys = []
+        for p in geom.geoms:
+            ext = [(x, y) for x, y, *_ in p.exterior.coords]
+            holes = [[(x, y) for x, y, *_ in ring.coords] for ring in p.interiors]
+            polys.append(_Poly(ext, holes))
+        return _MP(polys)
+
+
 def _dissolve_custom_aoi(geom: Polygon | MultiPolygon) -> Polygon | MultiPolygon:
-    """Merge overlapping GP / cadastral parts into one valid polygon.
+    """Merge overlapping GP / cadastral parts into one valid 2D polygon.
 
     Overlapping MultiPolygons (e.g. adjacent GPs) stay ``is_valid=False``. Passing
     those to PostGIS ``ST_MakeValid`` can yield GeometryCollection or hang the
     connection on some hosts (Cloudflare Host Error 502). ``unary_union`` is fast
     and safe for typical village/GP uploads; avoid ``make_valid`` here.
+
+    Z coordinates are stripped because some PostGIS builds crash on 3D geometry
+    operations (ST_CollectionExtract, ST_Multi on 3D) — KML files carry Z=0 which
+    is safe to drop.
     """
+    # Always work in 2D — KML Z=0 causes PostGIS 3D geometry issues on some builds.
+    geom = _force_2d(geom)
     if geom.geom_type == "Polygon":
         if geom.is_valid:
             return geom

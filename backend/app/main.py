@@ -1,7 +1,16 @@
 from contextlib import asynccontextmanager
-
+import faulthandler
 import html
 import json
+import os as _os
+
+# Dump native stack trace to a file on SIGSEGV / SIGFPE / SIGBUS — survives crashes
+# that bypass Python's exception handler (GDAL/GEOS segfaults, OOM, etc.).
+try:
+    _fh_path = "/tmp/welllabs-faulthandler.txt"
+    faulthandler.enable(file=open(_fh_path, "a"))  # noqa: WPS515
+except Exception:
+    pass
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware

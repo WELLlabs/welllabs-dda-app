@@ -254,19 +254,30 @@ async def create_project(body: ProjectCreate, user: dict = Depends(get_current_u
 
     def _insert():
         # Minimal RETURNING — never ST_AsGeoJSON the full AOI here (CF HTML 502 risk).
-        # Skip ST_MakeValid for custom AOIs: overlapping GP MultiPolygons can become
-        # GeometryCollections or stall PostGIS on beta (CF HTML Host Error 502).
-        # custom_aoi_from_geometry already dissolves to a valid Polygon/MultiPolygon.
+        # custom_aoi_from_geometry dissolves overlapping GPs to a valid 2D Polygon
+        # (Z stripped to avoid PostGIS 3D issues on some builds).
+        # Use bare ST_SetSRID/ST_GeomFromGeoJSON for custom AOIs — no ST_MakeValid,
+        # no ST_CollectionExtract, no ST_Multi (all crash-prone for 3D/invalid geoms).
         bounds = watershed.get("bounds")
-        skip_make_valid = (
+        is_custom = (
             body.source == "custom"
             or (watershed.get("watershed_id") or "") == "custom"
             or watershed.get("source") == "custom"
         )
-        geom_sql = (
-            "ST_SetSRID(ST_GeomFromGeoJSON(%(watershed_geom)s), 4326)"
-            if skip_make_valid
-            else "ST_MakeValid(ST_SetSRID(ST_GeomFromGeoJSON(%(watershed_geom)s), 4326))"
+        if is_custom:
+            # Geometry already a valid 2D Polygon from dissolve step.
+            geom_sql = "ST_SetSRID(ST_GeomFromGeoJSON(%(watershed_geom)s), 4326)"
+        else:
+            # Non-custom paths (FGB lookup): repair + multi-wrap.
+            geom_sql = (
+                "ST_Multi(ST_CollectionExtract("
+                "ST_MakeValid(ST_SetSRID(ST_GeomFromGeoJSON(%(watershed_geom)s), 4326)), 3))"
+            )
+        log.info(
+            "create_project insert: watershed_id=%s is_custom=%s geom_bytes=%d",
+            watershed.get("watershed_id"),
+            is_custom,
+            len(json.dumps(watershed["geometry"])),
         )
         with db_cursor() as cur:
             cur.execute("SET LOCAL statement_timeout = '15000'")
@@ -280,7 +291,7 @@ async def create_project(body: ProjectCreate, user: dict = Depends(get_current_u
                     %(owner_id)s,
                     %(watershed_id)s,
                     %(watershed_name)s,
-                    ST_Multi(ST_CollectionExtract({geom_sql}, 3)),
+                    {geom_sql},
                     %(seed_lng)s,
                     %(seed_lat)s
                 )
@@ -297,6 +308,7 @@ async def create_project(body: ProjectCreate, user: dict = Depends(get_current_u
                 },
             )
             row = cur.fetchone()
+            log.info("create_project insert OK: id=%s", row["id"] if row else None)
             return row, bounds
 
     try:
