@@ -17,7 +17,14 @@ from app.shared.auth import get_current_user
 from app.shared.config import settings
 from app.shared.database import db_cursor
 from app.shared import s3_storage
-from app.shared.watersheds import custom_aoi_from_geometry, load_stashed_custom_aoi, lookup_watershed, parse_geojson_polygon
+from app.shared.watersheds import (
+    _dissolve_custom_aoi,
+    _geojson_geom,
+    custom_aoi_from_geometry,
+    load_stashed_custom_aoi,
+    lookup_watershed,
+    parse_geojson_polygon,
+)
 
 router = APIRouter()
 
@@ -167,13 +174,37 @@ async def create_project(body: ProjectCreate, user: dict = Depends(get_current_u
     def _build_row():
         # Prefer create_token from /watersheds/from-geometry — avoids re-running
         # GEOS on dense GP multipolygons (can crash the worker → CF Host 502).
+        # Fall back to body.geometry when the token is missing (multi-host /tmp)
+        # or expired — client always re-sends the already-validated preview geom.
         if body.create_token:
-            watershed = load_stashed_custom_aoi(body.create_token)
-            if body.watershed_name:
-                watershed["watershed_name"] = body.watershed_name.strip()[:500] or watershed["watershed_name"]
-            seed_lng = body.lng if body.lng is not None else watershed["seed_lng"]
-            seed_lat = body.lat if body.lat is not None else watershed["seed_lat"]
-            return watershed, seed_lng, seed_lat
+            try:
+                watershed = load_stashed_custom_aoi(body.create_token)
+            except ValueError:
+                watershed = None
+            if watershed is not None:
+                if body.watershed_name:
+                    watershed["watershed_name"] = (
+                        body.watershed_name.strip()[:500] or watershed["watershed_name"]
+                    )
+                # Re-dissolve in case the stash predates the GP-union fix.
+                try:
+                    geom = _dissolve_custom_aoi(
+                        parse_geojson_polygon(watershed["geometry"], repair=False)
+                    )
+                    watershed["geometry"] = _geojson_geom(geom)
+                    watershed["bounds"] = list(geom.bounds)
+                    centroid = geom.representative_point()
+                    watershed["seed_lng"] = float(centroid.x)
+                    watershed["seed_lat"] = float(centroid.y)
+                except Exception:
+                    pass
+                seed_lng = body.lng if body.lng is not None else watershed["seed_lng"]
+                seed_lat = body.lat if body.lat is not None else watershed["seed_lat"]
+                return watershed, seed_lng, seed_lat
+            if body.geometry is None:
+                raise ValueError(
+                    "Custom AOI create token expired or missing — re-upload the file"
+                )
 
         if body.geometry is not None:
             # Client-supplied clip (village union or custom AOI) — validate, do not re-lookup.
@@ -215,18 +246,32 @@ async def create_project(body: ProjectCreate, user: dict = Depends(get_current_u
             "Project create timed out while preparing the AOI — simplify the boundary and retry.",
         ) from exc
     except ValueError as exc:
-        raise HTTPException(400 if body.geometry is not None else 404, str(exc)) from exc
+        # Token/geometry validation errors are client-fixable (400), not 404.
+        raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
         log.exception("Watershed resolve failed during project create")
         raise HTTPException(502, f"Watershed resolve failed: {exc}") from exc
 
     def _insert():
         # Minimal RETURNING — never ST_AsGeoJSON the full AOI here (CF HTML 502 risk).
+        # Skip ST_MakeValid for custom AOIs: overlapping GP MultiPolygons can become
+        # GeometryCollections or stall PostGIS on beta (CF HTML Host Error 502).
+        # custom_aoi_from_geometry already dissolves to a valid Polygon/MultiPolygon.
         bounds = watershed.get("bounds")
+        skip_make_valid = (
+            body.source == "custom"
+            or (watershed.get("watershed_id") or "") == "custom"
+            or watershed.get("source") == "custom"
+        )
+        geom_sql = (
+            "ST_SetSRID(ST_GeomFromGeoJSON(%(watershed_geom)s), 4326)"
+            if skip_make_valid
+            else "ST_MakeValid(ST_SetSRID(ST_GeomFromGeoJSON(%(watershed_geom)s), 4326))"
+        )
         with db_cursor() as cur:
             cur.execute("SET LOCAL statement_timeout = '15000'")
             cur.execute(
-                """
+                f"""
                 INSERT INTO diagnosis (
                     name, owner_id, watershed_id, watershed_name, watershed_geom, seed_lng, seed_lat
                 )
@@ -235,7 +280,7 @@ async def create_project(body: ProjectCreate, user: dict = Depends(get_current_u
                     %(owner_id)s,
                     %(watershed_id)s,
                     %(watershed_name)s,
-                    ST_MakeValid(ST_SetSRID(ST_GeomFromGeoJSON(%(watershed_geom)s), 4326)),
+                    ST_Multi(ST_CollectionExtract({geom_sql}, 3)),
                     %(seed_lng)s,
                     %(seed_lat)s
                 )

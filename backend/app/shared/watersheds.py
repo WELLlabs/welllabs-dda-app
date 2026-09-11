@@ -682,15 +682,52 @@ def load_stashed_custom_aoi(token: str) -> dict:
     return data
 
 
+def _dissolve_custom_aoi(geom: Polygon | MultiPolygon) -> Polygon | MultiPolygon:
+    """Merge overlapping GP / cadastral parts into one valid polygon.
+
+    Overlapping MultiPolygons (e.g. adjacent GPs) stay ``is_valid=False``. Passing
+    those to PostGIS ``ST_MakeValid`` can yield GeometryCollection or hang the
+    connection on some hosts (Cloudflare Host Error 502). ``unary_union`` is fast
+    and safe for typical village/GP uploads; avoid ``make_valid`` here.
+    """
+    if geom.geom_type == "Polygon":
+        if geom.is_valid:
+            return geom
+        parts = [geom]
+    else:
+        parts = [g for g in geom.geoms if g.geom_type == "Polygon" and not g.is_empty]
+        if not parts:
+            raise ValueError("geometry must contain a polygon")
+        if len(parts) == 1 and parts[0].is_valid:
+            return parts[0]
+    try:
+        merged = unary_union(parts)
+    except Exception as exc:
+        raise ValueError(f"Could not merge overlapping AOI parts: {exc}") from exc
+    if merged is None or merged.is_empty:
+        raise ValueError("geometry is empty after merge")
+    if merged.geom_type == "GeometryCollection":
+        polys = [g for g in merged.geoms if g.geom_type in ("Polygon", "MultiPolygon")]
+        if not polys:
+            raise ValueError("geometry must contain a polygon after merge")
+        merged = unary_union(polys) if len(polys) > 1 else polys[0]
+    if merged.geom_type not in ("Polygon", "MultiPolygon"):
+        raise ValueError("geometry must resolve to a Polygon or MultiPolygon after merge")
+    return merged
+
+
 def custom_aoi_from_geometry(geometry: dict, *, name: str | None = None) -> dict:
     """Treat an uploaded polygon as the clip boundary."""
     # Avoid GEOS make_valid here — it can crash the uvicorn worker on dense GP rings.
     geom = parse_geojson_polygon(geometry, repair=False)
+    geom = _dissolve_custom_aoi(geom)
     try:
-        # Mild simplify only; PostGIS ST_MakeValid repairs on insert.
+        # Mild simplify for storage / create payload size.
         simple = geom.simplify(0.0005, preserve_topology=True)
         if simple is not None and not simple.is_empty and simple.geom_type in ("Polygon", "MultiPolygon"):
             geom = simple
+            if not geom.is_valid:
+                geom = _dissolve_custom_aoi(geom)
     except Exception as exc:
         logger.warning("custom AOI simplify skipped: %s", exc)
     if geom is None or geom.is_empty:

@@ -538,15 +538,13 @@
 				source: selectMode,
 				lng: watershedPreview.seed_lng ?? lng,
 				lat: watershedPreview.seed_lat ?? lat,
-				// Prefer server-side token from from-geometry so create does not
-				// re-parse dense GP rings (GEOS can crash the worker → CF 502).
-				...(token
-					? { create_token: token, watershed_id: 'custom', watershed_name: watershedPreview.watershed_name }
-					: {
-							geometry: watershedPreview.geometry,
-							watershed_id: watershedPreview.watershed_id,
-							watershed_name: watershedPreview.watershed_name
-						})
+				// Always send the preview geometry (already dissolved/simplified).
+				// create_token is preferred when the stash hits the same host; geometry
+				// is the multi-host fallback so create does not 400/502 on /tmp miss.
+				geometry: watershedPreview.geometry,
+				watershed_id: watershedPreview.watershed_id,
+				watershed_name: watershedPreview.watershed_name,
+				...(token ? { create_token: token } : {})
 			});
 			showCreate = false;
 			name = '';
