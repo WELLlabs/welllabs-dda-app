@@ -18,10 +18,17 @@
 		fetchVillageStates,
 		fetchVillagesByDistrict,
 		fetchWatershedPreviewContext,
+		invalidateProjectsCache,
 		lookupWatershed,
 		watershedsFromGeometry,
 		watershedsFromVillage
 	} from '$lib/modules/diagnose/api';
+	import {
+		beginDiagnoseNav,
+		clearDiagnoseNav,
+		isDiagnoseNavBusy,
+		subscribeDiagnoseNav
+	} from '$lib/modules/diagnose/nav-lock.js';
 
 	let projects = $state([]);
 	let loading = $state(true);
@@ -44,6 +51,7 @@
 	let deletingId = $state(null);
 	/** Prevents rapid multi-open which stacks map boots and triggers CF 502s. */
 	let openingId = $state(null);
+	let navBusy = $state(isDiagnoseNavBusy());
 	let mounted = $state(false);
 	/** @type {AbortController | null} */
 	let villageAbort = null;
@@ -51,6 +59,8 @@
 	let previewAbort = null;
 	/** @type {AbortController | null} */
 	let pointAbort = null;
+	/** @type {AbortController | null} */
+	let aoiAbort = null;
 	let previewGen = 0;
 
 	let villageState = $state('');
@@ -91,12 +101,19 @@
 	}
 
 	onMount(() => {
+		// Returned from a project mid-boot: free the lock so the list can open again.
+		clearDiagnoseNav();
+		navBusy = isDiagnoseNavBusy();
+		const unsub = subscribeDiagnoseNav(() => {
+			navBusy = isDiagnoseNavBusy();
+		});
 		loadProjects();
 		void ensureStatesLoaded();
 		mounted = true;
 		document.addEventListener('click', closeMenu);
 		return () => {
 			document.removeEventListener('click', closeMenu);
+			unsub();
 			// Cancel village resolve / preview-context so leaving create UI
 			// cannot leave GIS work running and 502 the next page.
 			abortInFlightLoads();
@@ -227,9 +244,11 @@
 		villageAbort?.abort();
 		previewAbort?.abort();
 		pointAbort?.abort();
+		aoiAbort?.abort();
 		villageAbort = null;
 		previewAbort = null;
 		pointAbort = null;
+		aoiAbort = null;
 		previewGen += 1;
 		contextLoading = false;
 	}
@@ -467,10 +486,15 @@
 		previewLoading = true;
 		watershedPreview = null;
 		previewContextLayers = [];
+		aoiAbort?.abort();
+		aoiAbort = new AbortController();
+		const { signal } = aoiAbort;
 		try {
 			const { geometry, name: aoiName } = await parseAoiFile(file);
+			if (signal.aborted) return;
 			uploadName = aoiName;
-			const result = await watershedsFromGeometry(geometry, aoiName);
+			const result = await watershedsFromGeometry(geometry, aoiName, { signal });
+			if (signal.aborted) return;
 			watershedPreview = result;
 			if (result.seed_lng != null) lng = result.seed_lng;
 			if (result.seed_lat != null) lat = result.seed_lat;
@@ -494,17 +518,19 @@
 				void loadPreviewContext(envelope);
 			}
 		} catch (err) {
+			if (err?.name === 'AbortError' || signal.aborted) return;
 			uploadError = String(err);
 			watershedPreview = { error: String(err) };
 		} finally {
-			previewLoading = false;
+			if (!signal.aborted) previewLoading = false;
 		}
 	}
 
 	function openProject(project, { boot = 'opening' } = {}) {
 		// One navigation at a time — opening several projects quickly stacks
 		// prewarm/batch on the API and causes Cloudflare 502s on the next open.
-		if (openingId) return;
+		if (openingId || isDiagnoseNavBusy()) return;
+		if (!beginDiagnoseNav(boot === 'creating' ? 'creating' : 'opening', project.id)) return;
 		openingId = project.id;
 		abortInFlightLoads();
 		try {
@@ -521,6 +547,8 @@
 
 	async function handleCreate() {
 		if (!name.trim() || !previewOk()) return;
+		if (creating || isDiagnoseNavBusy()) return;
+		if (!beginDiagnoseNav('creating')) return;
 		creating = true;
 		error = '';
 		// Free workers that may still be clipping preview layers.
@@ -550,11 +578,23 @@
 			name = '';
 			watershedPreview = null;
 			selectMode = 'point';
-			await loadProjects({ fresh: true });
-			openProject(project, { boot: 'creating' });
+			// Don't await a fresh list fetch here — it delays the overlay handoff
+			// and stacks another API call under create. Invalidate and navigate.
+			invalidateProjectsCache();
+			// Upgrade lock to this project id, then navigate (openProject handoff).
+			beginDiagnoseNav('creating', project.id);
+			openingId = project.id;
+			abortInFlightLoads();
+			try {
+				sessionStorage.setItem('diagnose:project-boot', 'creating');
+			} catch {
+				/* ignore */
+			}
+			goto(itemPath('/diagnose', project, projects));
 		} catch (err) {
 			error = String(err);
 			creating = false;
+			clearDiagnoseNav();
 			try {
 				sessionStorage.removeItem('diagnose:project-boot');
 			} catch {
@@ -648,7 +688,7 @@
 </script>
 
 <div class="relative min-h-screen bg-transparent font-body">
-	{#if creating}
+	{#if creating || openingId || navBusy}
 		<div
 			class="fixed inset-0 z-[100] flex flex-col items-center justify-center gap-4 bg-white/95 px-6 backdrop-blur-sm"
 			role="status"
@@ -659,9 +699,13 @@
 				class="h-10 w-10 animate-spin rounded-full border-2 border-brand-navy/20 border-t-brand-blue"
 				aria-hidden="true"
 			></div>
-			<p class="m-0 font-headline text-lg font-semibold text-brand-navy">Creating project…</p>
+			<p class="m-0 font-headline text-lg font-semibold text-brand-navy">
+				{creating ? 'Creating project…' : 'Opening project…'}
+			</p>
 			<p class="m-0 max-w-sm text-center font-body text-sm text-brand-steel">
-				Saving your watershed, then preparing map layers.
+				{creating
+					? 'Saving your watershed, then preparing map layers and analyses.'
+					: 'Loading map layers and analyses — please wait.'}
 			</p>
 		</div>
 	{/if}
@@ -938,8 +982,8 @@
 
 			<div
 				class="grid gap-6"
-				class:pointer-events-none={!!openingId}
-				class:opacity-60={!!openingId}
+				class:pointer-events-none={!!openingId || navBusy}
+				class:opacity-60={!!openingId || navBusy}
 				style="grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr));"
 			>
 				<button
@@ -947,7 +991,7 @@
 					class="card card-new group"
 					class:in={mounted}
 					style="--accent: #1b75e0; --delay: 0ms;"
-					disabled={!!openingId}
+					disabled={!!openingId || navBusy}
 					onpointermove={handlePointer}
 					onclick={openCreate}
 				>
@@ -978,12 +1022,12 @@
 						class:ring-brand-blue={openingId === project.id}
 						style="--accent: #1b75e0; --delay: {(i + 1) * 70}ms;"
 						role="button"
-						tabindex={openingId ? -1 : 0}
-						aria-disabled={!!openingId}
+						tabindex={openingId || navBusy ? -1 : 0}
+						aria-disabled={!!openingId || navBusy}
 						onpointermove={handlePointer}
 						onclick={() => openProject(project)}
 						onkeydown={(e) => {
-							if (openingId) return;
+							if (openingId || navBusy) return;
 							if (e.key === 'Enter' || e.key === ' ') {
 								e.preventDefault();
 								openProject(project);

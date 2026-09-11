@@ -14,6 +14,10 @@
 		exportDiagnosisPdfStream,
 		downloadDiagnosisPdf
 	} from '$lib/modules/diagnose/api';
+	import {
+		beginDiagnoseLeave,
+		clearDiagnoseNav
+	} from '$lib/modules/diagnose/nav-lock.js';
 	import { findBySlug } from '$lib/shared/slug.js';
 
 	let slug = $derived(page.params.slug);
@@ -41,6 +45,7 @@
 	/** @type {AbortController | null} */
 	let loadAbort = null;
 	let loadGen = 0;
+	let leaving = $state(false);
 
 	async function loadProject(slugValue) {
 		const gen = ++loadGen;
@@ -82,9 +87,21 @@
 		opAbort?.abort();
 	});
 
-	function backToProjects() {
+	function leaveToProjects() {
+		if (leaving) return;
+		leaving = true;
+		beginDiagnoseLeave();
 		loadAbort?.abort();
-		goto(appPath('/diagnose'));
+		opAbort?.abort();
+		// MapView onDestroy also aborts map controllers + clears the lock.
+		goto(appPath('/diagnose')).finally(() => {
+			clearDiagnoseNav();
+			leaving = false;
+		});
+	}
+
+	function backToProjects() {
+		leaveToProjects();
 	}
 
 	function retryLoad() {
@@ -265,7 +282,7 @@
 	<title>{currentProject ? `${currentProject.name} · Diagnose` : 'Diagnose'}</title>
 </svelte:head>
 
-{#if loading}
+{#if loading || leaving}
 	<div
 		class="flex h-screen flex-col items-center justify-center gap-4 bg-white px-6 font-body"
 		role="status"
@@ -275,8 +292,12 @@
 			class="h-10 w-10 animate-spin rounded-full border-2 border-brand-navy/20 border-t-brand-blue"
 			aria-hidden="true"
 		></div>
-		<p class="m-0 font-headline text-lg font-semibold text-brand-navy">Loading project…</p>
-		<p class="m-0 text-sm text-brand-steel">Fetching project details</p>
+		<p class="m-0 font-headline text-lg font-semibold text-brand-navy">
+			{leaving ? 'Returning to projects…' : 'Loading project…'}
+		</p>
+		<p class="m-0 text-sm text-brand-steel">
+			{leaving ? 'Cancelling in-flight map loads' : 'Fetching project details'}
+		</p>
 	</div>
 {:else if loadError || !currentProject}
 	<div class="flex h-screen flex-col items-center justify-center gap-4 bg-white px-6 font-body">
@@ -305,6 +326,7 @@
 		<ModuleHeader
 			title="Diagnose"
 			titleHref="/diagnose"
+			onTitleNavigate={leaveToProjects}
 			project={currentProject.name}
 			subtitle={currentProject.watershed_name}
 			wide

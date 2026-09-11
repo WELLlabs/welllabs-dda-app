@@ -24,6 +24,10 @@
 		updateObservationZone
 	} from '$lib/modules/diagnose/api';
 	import { apiPath, resolveApiUrl } from '$lib/shared/paths.js';
+	import {
+		beginDiagnoseNav,
+		clearDiagnoseNav
+	} from '$lib/modules/diagnose/nav-lock.js';
 	import { MAX_FIELD_NOTE_MEDIA_BYTES, OBSERVATION_ZONE_COLOR, FIELD_NOTE_COLOR, HYPOTHESIS_COLOR, ZONE_COLORS } from '$lib/modules/diagnose/map-constants';
 	import FieldNoteIcon from '$lib/modules/diagnose/components/icons/FieldNoteIcon.svelte';
 	import HypothesisIcon from '$lib/modules/diagnose/components/icons/HypothesisIcon.svelte';
@@ -883,6 +887,7 @@
 			projectBooting = true;
 			bootError = '';
 			bgLoading = false;
+			beginDiagnoseNav('booting', project?.id ?? null);
 			const loadGen = ++postOpenLoadGen;
 			map.setPitch(0);
 			map.setBearing(0);
@@ -891,9 +896,9 @@
 			applyBasemapVisibility(BASE_LAYERS.esri.id, baseLayer === 'esri');
 
 			try {
-				// ── Fast critical path (< 500 ms) ──────────────────────────────
-				// Register COG tile sources + vector catalog. Tile layers stream
-				// lazily from Titiler; we don't wait for any clip work here.
+				// Critical path: catalogs + default layer + batch analysis before overlay dismiss.
+				// Background vector warm / notes start only after the map is usable.
+				setBoot(8, bootMode === 'creating' ? 'Saving project…' : 'Preparing map…');
 				await ensureFieldNotePinIcon();
 				if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
 
@@ -902,29 +907,20 @@
 				updateDrawSizes();
 				ensureDrawPreviewOnTop();
 
+				setBoot(22, 'Loading map layers…');
 				await loadCogLayers();
 				if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
 
-				// Fire-and-forget: pre-warm backend COG caches. Abort when leaving the map
-				// so prewarm does not keep the worker busy after navigate-away.
-				fetch(
-					resolveApiUrl(
-						apiPath(`/diagnose/layers/cog/prewarm?project_id=${encodeURIComponent(project.id)}`)
-					),
-					{ credentials: 'include', signal: mapDataAbort.signal }
-				).catch(() => {});
-
+				setBoot(40, 'Loading vector catalog…');
 				await loadVectorLayers();
 				if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
 
 				// Pick the default layer and make it visible now.
-				// COG layers (LULC, DEM…) will start streaming tiles immediately.
-				// Project AOI outline is always shown under thematic layers.
+				setBoot(55, 'Showing watershed layers…');
 				if (thematicLayers.length > 0) {
 					const prefer = thematicLayers[0].id;
 					selectedLayer = { kind: 'secondary', id: prefer };
 					await showOnlySecondaryLayer(prefer);
-					void ensureLayerAnalysis(prefer);
 				} else if (secondaryLayers.length > 0) {
 					selectedLayer = { kind: 'secondary', id: secondaryLayers[0].id };
 					await showOnlySecondaryLayer(secondaryLayers[0].id);
@@ -936,25 +932,31 @@
 				ensureDrawPreviewOnTop();
 				requestAnimationFrame(() => map?.resize());
 
-				// ── Dismiss overlay now — map is usable ─────────────────────────
+				// Await batch analysis before dismissing overlay — do NOT also fire
+				// ensureLayerAnalysis here (that raced the batch and overloaded beta).
+				setBoot(70, 'Running layer analyses…');
+				await preloadAllSecondaryData();
+				if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
+
+				setBoot(100, 'Ready');
 				projectBooting = false;
 				status = 'Ready';
+				clearDiagnoseNav(project?.id ?? null);
 
-				// ── Heavy background work — non-blocking ───────────────────────
+				// Heavy background work after overlay — abortable on leave.
 				bgLoading = true;
 				void (async () => {
 					try {
 						if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
 
-						// Batch analysis first (sidebar evidence). Do not race it against
-						// village/WISER /data clips — those were the ~1s + ~2.7s load spikes.
-						await new Promise((r) => setTimeout(r, 400));
-						if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
-						await preloadAllSecondaryData();
-						if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
+						// Prewarm COGs only after analysis is done (avoids worker contention).
+						fetch(
+							resolveApiUrl(
+								apiPath(`/diagnose/layers/cog/prewarm?project_id=${encodeURIComponent(project.id)}`)
+							),
+							{ credentials: 'include', signal: mapDataAbort.signal }
+						).catch(() => {});
 
-						// Then warm unique thematic FGB clips so later toggles are instant.
-						// One request per s3_key (WISER trio / village demography share files).
 						const seenKeys = new Set();
 						const vectorsToPreload = [];
 						for (const l of secondaryLayers) {
@@ -983,7 +985,7 @@
 							} catch {
 								// best-effort
 							}
-							await new Promise((r) => setTimeout(r, 100));
+							await new Promise((r) => setTimeout(r, 150));
 						}
 
 						if (loadGen !== postOpenLoadGen || mapDataAbort.signal.aborted) return;
@@ -1007,6 +1009,7 @@
 				status = `Load failed: ${bootError}`;
 				projectBooting = false;
 				bgLoading = false;
+				clearDiagnoseNav(project?.id ?? null);
 			}
 		});
 
@@ -1048,9 +1051,12 @@
 		bgBatchAbort.abort();
 		vectorSelectAbort.abort();
 		bgLoading = false;
+		projectBooting = false;
 		fieldNotePinReady = false;
 		villageHoverPopup?.remove();
 		map?.remove();
+		// Leaving mid-boot: free the nav lock so the projects list can open cleanly.
+		clearDiagnoseNav(project?.id ?? null);
 	});
 
 	$effect(() => {
@@ -1671,7 +1677,10 @@
 	async function loadCogLayers() {
 		try {
 			removeCogLayers();
-			const { cog_layers } = await fetchCogLayers(watershedBounds, project.id);
+			const { cog_layers } = await fetchCogLayers(watershedBounds, project.id, {
+				signal: mapDataAbort.signal
+			});
+			if (mapDataAbort.signal.aborted) return;
 			cogLayers = cog_layers;
 			secondaryLayers = rebuildSecondaryList(cogLayers, vectorLayers);
 			if (cog_layers.length === 0 && vectorLayers.length === 0) {
@@ -1733,6 +1742,7 @@
 				ensureDrawPreviewOnTop();
 			fitToWatershed();
 		} catch (err) {
+			if (err?.name === 'AbortError' || mapDataAbort.signal.aborted) throw err;
 			status = `Raster layers unavailable: ${err instanceof Error ? err.message : String(err)}`;
 		}
 	}
@@ -1975,7 +1985,10 @@
 	async function loadVectorLayers() {
 		try {
 			removeVectorLayers();
-			const { vector_layers } = await fetchVectorLayers(project?.id);
+			const { vector_layers } = await fetchVectorLayers(project?.id, {
+				signal: mapDataAbort.signal
+			});
+			if (mapDataAbort.signal.aborted) return;
 			vectorLayers = vector_layers;
 			secondaryLayers = rebuildSecondaryList(cogLayers, vectorLayers);
 			for (const layer of vector_layers) {
@@ -1988,6 +2001,7 @@
 				}
 			}
 		} catch (err) {
+			if (err?.name === 'AbortError' || mapDataAbort.signal.aborted) throw err;
 			console.error('Vector layers failed', err);
 			status = `Vector layers unavailable: ${err instanceof Error ? err.message : String(err)}`;
 		}
@@ -2869,6 +2883,29 @@
 </script>
 
 <div class="relative flex h-full min-h-0 w-full">
+	{#if projectBooting}
+		<div
+			class="absolute inset-0 z-[90] flex flex-col items-center justify-center gap-4 bg-white/95 px-6 backdrop-blur-sm"
+			role="status"
+			aria-live="polite"
+			aria-busy="true"
+		>
+			<div
+				class="h-10 w-10 animate-spin rounded-full border-2 border-brand-navy/20 border-t-brand-blue"
+				aria-hidden="true"
+			></div>
+			<p class="m-0 font-headline text-lg font-semibold text-brand-navy">
+				{bootMode === 'creating' ? 'Creating project…' : 'Opening project…'}
+			</p>
+			<p class="m-0 max-w-sm text-center font-body text-sm text-brand-steel">{bootStep}</p>
+			<div class="h-1.5 w-48 overflow-hidden rounded-full bg-brand-navy/10" aria-hidden="true">
+				<div
+					class="h-full rounded-full bg-brand-blue transition-[width] duration-300 ease-out"
+					style:width="{bootPercent}%"
+				></div>
+			</div>
+		</div>
+	{/if}
 	{#if bootError}
 		<div
 			class="absolute inset-x-0 top-0 z-[80] flex items-center gap-2 bg-red-600 px-4 py-2 text-sm text-white"
@@ -2882,7 +2919,7 @@
 			>Dismiss</button>
 		</div>
 	{/if}
-	{#if bgLoading}
+	{#if bgLoading && !projectBooting}
 		<div class="absolute inset-x-0 top-0 z-[70] h-0.5 overflow-hidden" aria-hidden="true">
 			<div class="h-full w-full origin-left animate-[indeterminate_1.6s_ease-in-out_infinite] bg-brand-blue"></div>
 		</div>

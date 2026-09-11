@@ -157,11 +157,12 @@ export async function watershedsFromVillage({ villageId, geometry, signal } = {}
 	});
 }
 
-export async function watershedsFromGeometry(geometry, name = null) {
+export async function watershedsFromGeometry(geometry, name = null, { signal } = {}) {
 	return request('/watersheds/from-geometry', {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ geometry, name })
+		body: JSON.stringify({ geometry, name }),
+		signal
 	});
 }
 
@@ -198,16 +199,17 @@ function layerQuery(bounds, projectId) {
 	return qs ? `?${qs}` : '';
 }
 
-export async function fetchCogLayers(bounds, projectId) {
+export async function fetchCogLayers(bounds, projectId, { signal } = {}) {
 	return request(`/layers/cog${layerQuery(bounds, projectId)}`, {
+		signal,
 		retries: 1,
 		retryDelayMs: 700
 	});
 }
 
-export async function fetchVectorLayers(projectId) {
+export async function fetchVectorLayers(projectId, { signal } = {}) {
 	const q = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
-	return request(`/layers/vector${q}`, { retries: 1, retryDelayMs: 700 });
+	return request(`/layers/vector${q}`, { signal, retries: 1, retryDelayMs: 700 });
 }
 
 export async function fetchLayerAnalysis(layerId, projectId, { isCog = false, signal } = {}) {

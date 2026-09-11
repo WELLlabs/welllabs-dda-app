@@ -12,6 +12,7 @@
 	 *   subtitle?: string,
 	 *   homeHref?: string,
 	 *   titleHref?: string,
+	 *   onTitleNavigate?: (event: MouseEvent) => void,
 	 *   wide?: boolean,
 	 *   fullProjectTitle?: boolean,
 	 *   crumbs?: Crumb[],
@@ -24,6 +25,7 @@
 		subtitle = '',
 		homeHref = '/home',
 		titleHref = '',
+		onTitleNavigate = undefined,
 		wide = true,
 		fullProjectTitle = false,
 		crumbs = [],
@@ -82,7 +84,13 @@
 									href={item.href}
 									class="crumb-link font-display"
 									class:crumb-current={i === trail.length - 1}
-									title={item.label}>{item.label}</a
+									title={item.label}
+									onclick={(e) => {
+										if (i === 0 && onTitleNavigate) {
+											e.preventDefault();
+											onTitleNavigate(e);
+										}
+									}}>{item.label}</a
 								>
 							{:else}
 								<span
