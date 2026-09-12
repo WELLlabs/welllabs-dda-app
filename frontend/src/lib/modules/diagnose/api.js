@@ -157,11 +157,12 @@ export async function watershedsFromVillage({ villageId, geometry, signal } = {}
 	});
 }
 
-export async function watershedsFromGeometry(geometry, name = null) {
+export async function watershedsFromGeometry(geometry, name = null, { signal } = {}) {
 	return request('/watersheds/from-geometry', {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ geometry, name })
+		body: JSON.stringify({ geometry, name }),
+		signal
 	});
 }
 
@@ -198,16 +199,17 @@ function layerQuery(bounds, projectId) {
 	return qs ? `?${qs}` : '';
 }
 
-export async function fetchCogLayers(bounds, projectId) {
+export async function fetchCogLayers(bounds, projectId, { signal } = {}) {
 	return request(`/layers/cog${layerQuery(bounds, projectId)}`, {
+		signal,
 		retries: 1,
 		retryDelayMs: 700
 	});
 }
 
-export async function fetchVectorLayers(projectId) {
+export async function fetchVectorLayers(projectId, { signal } = {}) {
 	const q = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
-	return request(`/layers/vector${q}`, { retries: 1, retryDelayMs: 700 });
+	return request(`/layers/vector${q}`, { signal, retries: 1, retryDelayMs: 700 });
 }
 
 export async function fetchLayerAnalysis(layerId, projectId, { isCog = false, signal } = {}) {
@@ -424,6 +426,70 @@ export async function syncFromQfieldStream(projectId, handlers = {}) {
 		},
 		eventHandlers
 	);
+}
+
+/** Stream atlas PDF build progress, then download when done. */
+export async function exportDiagnosisPdfStream(projectId, handlers = {}) {
+	const { signal, ...eventHandlers } = handlers;
+	return streamSSE(
+		`${API}/projects/${encodeURIComponent(projectId)}/export-pdf/stream`,
+		{
+			method: 'POST',
+			headers: {
+				Accept: 'text/event-stream'
+			},
+			signal
+		},
+		eventHandlers
+	);
+}
+
+/** Download a previously generated atlas PDF. */
+export async function downloadDiagnosisPdf(projectId, filename, { signal } = {}) {
+	const res = await fetch(
+		`${API}/projects/${encodeURIComponent(projectId)}/export-pdf/download?file=${encodeURIComponent(filename)}`,
+		{ method: 'GET', credentials: 'include', signal }
+	);
+	if (!res.ok) {
+		const text = await res.text();
+		let message = text || res.statusText;
+		try {
+			const json = JSON.parse(text);
+			if (json.detail)
+				message = typeof json.detail === 'string' ? json.detail : JSON.stringify(json.detail);
+		} catch {
+			/* keep raw */
+		}
+		throw new Error(message);
+	}
+	const blob = await res.blob();
+	return { blob, filename };
+}
+
+/** @deprecated Prefer exportDiagnosisPdfStream */
+export async function exportDiagnosisPdf(projectId, { signal } = {}) {
+	const res = await fetch(`${API}/projects/${encodeURIComponent(projectId)}/export-pdf`, {
+		method: 'POST',
+		credentials: 'include',
+		signal
+	});
+	if (!res.ok) {
+		const text = await res.text();
+		let message = text || res.statusText;
+		try {
+			const json = JSON.parse(text);
+			if (json.detail)
+				message = typeof json.detail === 'string' ? json.detail : JSON.stringify(json.detail);
+		} catch {
+			/* keep raw */
+		}
+		throw new Error(message);
+	}
+	const blob = await res.blob();
+	const disposition = res.headers.get('Content-Disposition') || '';
+	const match = disposition.match(/filename="?([^"]+)"?/i);
+	const filename = match?.[1] || 'Diagnosis_Report.pdf';
+	return { blob, filename };
 }
 
 /** Rewrite Titiler URLs to use the Vite dev proxy. */

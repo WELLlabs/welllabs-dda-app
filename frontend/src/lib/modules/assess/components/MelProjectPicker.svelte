@@ -18,6 +18,7 @@
 	let name = $state('');
 	let creating = $state(false);
 	let deletingId = $state(null);
+	let openingId = $state(null);
 
 	onMount(() => {
 		mounted = true;
@@ -44,6 +45,8 @@
 	}
 
 	function openProject(project) {
+		if (openingId || creating) return;
+		openingId = project.id;
 		goto(itemPath('/assess', project, projects));
 	}
 
@@ -65,19 +68,19 @@
 	}
 
 	async function handleCreate() {
-		if (!name.trim()) return;
+		if (!name.trim() || creating || openingId) return;
 		creating = true;
 		error = '';
 		try {
 			const project = await createMelProject({ name: name.trim() });
 			showCreate = false;
 			name = '';
-			await load();
-			openProject(project);
+			openingId = project.id;
+			goto(itemPath('/assess', project, [project, ...projects]));
 		} catch (err) {
 			error = String(err);
-		} finally {
 			creating = false;
+			openingId = null;
 		}
 	}
 
@@ -111,6 +114,22 @@
 </script>
 
 <div class="relative min-h-screen bg-transparent font-body">
+	{#if creating || openingId}
+		<div
+			class="fixed inset-0 z-[100] flex flex-col items-center justify-center gap-4 bg-white/95 px-6 backdrop-blur-sm"
+			role="status"
+			aria-live="polite"
+			aria-busy="true"
+		>
+			<div
+				class="h-10 w-10 animate-spin rounded-full border-2 border-brand-navy/20 border-t-brand-blue"
+				aria-hidden="true"
+			></div>
+			<p class="m-0 font-headline text-lg font-semibold text-brand-navy">
+				{creating ? 'Creating project…' : 'Opening project…'}
+			</p>
+		</div>
+	{/if}
 	<ModuleHeader
 		title="Assess"
 		titleHref="/assess"
@@ -168,12 +187,16 @@
 					<div
 						class="card group"
 						class:in={mounted}
+						class:pointer-events-none={!!openingId}
+						class:opacity-60={!!openingId}
 						style="--accent: {ASSESS_BLUE}; --delay: {(i + 1) * 70}ms;"
 						role="button"
-						tabindex="0"
+						tabindex={openingId ? -1 : 0}
+						aria-disabled={!!openingId}
 						onpointermove={handlePointer}
 						onclick={() => openProject(project)}
 						onkeydown={(e) => {
+							if (openingId) return;
 							if (e.key === 'Enter' || e.key === ' ') {
 								e.preventDefault();
 								openProject(project);

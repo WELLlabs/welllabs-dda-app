@@ -10,8 +10,14 @@
 		fetchProjects,
 		fetchProject,
 		packageToQfieldStream,
-		syncFromQfieldStream
+		syncFromQfieldStream,
+		exportDiagnosisPdfStream,
+		downloadDiagnosisPdf
 	} from '$lib/modules/diagnose/api';
+	import {
+		beginDiagnoseLeave,
+		clearDiagnoseNav
+	} from '$lib/modules/diagnose/nav-lock.js';
 	import { findBySlug } from '$lib/shared/slug.js';
 
 	let slug = $derived(page.params.slug);
@@ -21,6 +27,7 @@
 	let loadError = $state('');
 	let packaging = $state(false);
 	let syncing = $state(false);
+	let exportingPdf = $state(false);
 	let syncMsg = $state('');
 	let syncError = $state(false);
 	let syncPending = $state(false);
@@ -38,6 +45,7 @@
 	/** @type {AbortController | null} */
 	let loadAbort = null;
 	let loadGen = 0;
+	let leaving = $state(false);
 
 	async function loadProject(slugValue) {
 		const gen = ++loadGen;
@@ -79,9 +87,21 @@
 		opAbort?.abort();
 	});
 
-	function backToProjects() {
+	function leaveToProjects() {
+		if (leaving) return;
+		leaving = true;
+		beginDiagnoseLeave();
 		loadAbort?.abort();
-		goto(appPath('/diagnose'));
+		opAbort?.abort();
+		// MapView onDestroy also aborts map controllers + clears the lock.
+		goto(appPath('/diagnose')).finally(() => {
+			clearDiagnoseNav();
+			leaving = false;
+		});
+	}
+
+	function backToProjects() {
+		leaveToProjects();
 	}
 
 	function retryLoad() {
@@ -108,7 +128,7 @@
 	}
 
 	async function handlePackage() {
-		if (!currentProject || packaging || syncing) return;
+		if (!currentProject || packaging || syncing || exportingPdf) return;
 		packaging = true;
 		showPanel = true;
 		panelTitle = 'Packaging to QField';
@@ -149,7 +169,7 @@
 	}
 
 	async function handleSync() {
-		if (!currentProject || syncing || packaging) return;
+		if (!currentProject || syncing || packaging || exportingPdf) return;
 		syncing = true;
 		showPanel = true;
 		panelTitle = 'Syncing from QField';
@@ -199,13 +219,70 @@
 			syncing = false;
 		}
 	}
+
+	async function handleExportPdf() {
+		if (!currentProject || exportingPdf || packaging || syncing) return;
+		exportingPdf = true;
+		showPanel = true;
+		panelTitle = 'Exporting diagnosis PDF';
+		syncMsg = '';
+		syncError = false;
+		panelPercent = 0;
+		panelLogs = [];
+		panelStatus = 'running';
+		panelError = '';
+		opAbort = new AbortController();
+
+		try {
+			const result = await exportDiagnosisPdfStream(currentProject.id, {
+				signal: opAbort.signal,
+				onProgress: (percent, message, time) => {
+					panelPercent = percent;
+					appendLog(message, time);
+				},
+				onDone: () => {
+					panelStatus = 'done';
+					panelPercent = 100;
+				},
+				onError: (message) => {
+					panelError = message;
+				}
+			});
+			panelStatus = 'done';
+			panelPercent = 100;
+			const filename = result?.filename || result?.download_path;
+			if (!filename) throw new Error('Export finished without a downloadable file');
+			const { blob, filename: dlName } = await downloadDiagnosisPdf(currentProject.id, filename, {
+				signal: opAbort.signal
+			});
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = url;
+			a.download = dlName || filename;
+			document.body.appendChild(a);
+			a.click();
+			a.remove();
+			URL.revokeObjectURL(url);
+			appendLog(`Downloaded ${dlName || filename}`);
+		} catch (err) {
+			if (err?.name === 'AbortError') return;
+			panelStatus = 'error';
+			panelError = String(err);
+			syncError = true;
+			syncMsg = String(err);
+			appendLog(String(err));
+		} finally {
+			opAbort = null;
+			exportingPdf = false;
+		}
+	}
 </script>
 
 <svelte:head>
 	<title>{currentProject ? `${currentProject.name} · Diagnose` : 'Diagnose'}</title>
 </svelte:head>
 
-{#if loading}
+{#if loading || leaving}
 	<div
 		class="flex h-screen flex-col items-center justify-center gap-4 bg-white px-6 font-body"
 		role="status"
@@ -215,8 +292,12 @@
 			class="h-10 w-10 animate-spin rounded-full border-2 border-brand-navy/20 border-t-brand-blue"
 			aria-hidden="true"
 		></div>
-		<p class="m-0 font-headline text-lg font-semibold text-brand-navy">Loading project…</p>
-		<p class="m-0 text-sm text-brand-steel">Fetching project details</p>
+		<p class="m-0 font-headline text-lg font-semibold text-brand-navy">
+			{leaving ? 'Returning to projects…' : 'Loading project…'}
+		</p>
+		<p class="m-0 text-sm text-brand-steel">
+			{leaving ? 'Cancelling in-flight map loads' : 'Fetching project details'}
+		</p>
 	</div>
 {:else if loadError || !currentProject}
 	<div class="flex h-screen flex-col items-center justify-center gap-4 bg-white px-6 font-body">
@@ -245,15 +326,19 @@
 		<ModuleHeader
 			title="Diagnose"
 			titleHref="/diagnose"
+			onTitleNavigate={leaveToProjects}
 			project={currentProject.name}
 			subtitle={currentProject.watershed_name}
 			wide
 		>
 			<button type="button" onclick={() => goto(appPath(`/diagnose/${slug}/members`))}>Members</button>
-			<button type="button" disabled={packaging || syncing} onclick={handlePackage}>
+			<button type="button" disabled={packaging || syncing || exportingPdf} onclick={handleExportPdf}>
+				{exportingPdf ? 'Exporting PDF…' : 'Export PDF'}
+			</button>
+			<button type="button" disabled={packaging || syncing || exportingPdf} onclick={handlePackage}>
 				{packaging ? 'Packaging…' : 'Package to QField'}
 			</button>
-			<button type="button" disabled={packaging || syncing} onclick={handleSync}>
+			<button type="button" disabled={packaging || syncing || exportingPdf} onclick={handleSync}>
 				{syncing ? 'Syncing…' : 'Sync from QField'}
 			</button>
 		</ModuleHeader>
@@ -308,7 +393,7 @@
 					title={panelTitle}
 					percent={panelPercent}
 					logs={panelLogs}
-					status={packaging || syncing ? 'running' : panelStatus}
+					status={packaging || syncing || exportingPdf ? 'running' : panelStatus}
 					error={panelError}
 					onClose={dismissPanel}
 				/>

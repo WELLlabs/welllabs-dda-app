@@ -64,8 +64,12 @@ _VILLAGE_STATE_KEYS = (
 # Guardrails for custom / union AOIs (degrees / vertex count)
 _MAX_BBOX_SPAN_DEG = 8.0
 _MAX_VERTICES = 50_000
+# Soft target after simplify — keeps POST bodies and PostGIS RETURNING under CF limits.
+_TARGET_STORAGE_VERTICES = 8_000
 _MAX_UNION_PARTS = 200
 _MIN_VILLAGE_QUERY_LEN = 4
+# Progressive tolerances (~25 m → ~500 m) for dense census / GP rings.
+_STORAGE_SIMPLIFY_TOLERANCES = (0.00025, 0.0005, 0.001, 0.002, 0.005)
 
 # Approximate WGS84 bboxes for state-scoped centroid enrichment (fast spatial reads)
 _STATE_BBOXES: dict[str, tuple[float, float, float, float]] = {
@@ -173,9 +177,88 @@ def _simplify_for_preview(geom):
         return geom
 
 
-def _geojson_geom(geom) -> dict:
+def _vertex_count(geom) -> int:
+    """Approximate coordinate count for Polygon / MultiPolygon."""
+    if geom is None or geom.is_empty:
+        return 0
+    try:
+        if geom.geom_type == "Polygon":
+            n = len(geom.exterior.coords)
+            n += sum(len(r.coords) for r in geom.interiors)
+            return n
+        if geom.geom_type == "MultiPolygon":
+            return sum(_vertex_count(g) for g in geom.geoms)
+        if hasattr(geom, "geoms"):
+            return sum(_vertex_count(g) for g in geom.geoms)
+    except Exception:
+        pass
+    try:
+        return int(getattr(geom, "geom_type", "") and len(mapping(geom).get("coordinates", [])) or 0)
+    except Exception:
+        return 0
+
+
+def _simplify_for_storage(geom, *, target_vertices: int = _TARGET_STORAGE_VERTICES):
+    """Progressively simplify dense AOIs so create/list stay under Cloudflare limits."""
+    if geom is None or geom.is_empty:
+        return geom
+    out = geom
+    if not out.is_valid:
+        try:
+            out = make_valid(out)
+        except Exception:
+            pass
+    if out.geom_type == "GeometryCollection":
+        polys = [g for g in out.geoms if g.geom_type in ("Polygon", "MultiPolygon")]
+        if not polys:
+            return geom
+        out = unary_union(polys)
+    if out.geom_type not in ("Polygon", "MultiPolygon"):
+        return geom
+
+    if _vertex_count(out) <= target_vertices:
+        return _simplify_for_preview(out)
+
+    for tol in _STORAGE_SIMPLIFY_TOLERANCES:
+        try:
+            simple = out.simplify(tol, preserve_topology=True)
+            if simple is None or simple.is_empty:
+                continue
+            if not simple.is_valid:
+                simple = make_valid(simple)
+            if simple.geom_type == "GeometryCollection":
+                polys = [g for g in simple.geoms if g.geom_type in ("Polygon", "MultiPolygon")]
+                if not polys:
+                    continue
+                simple = unary_union(polys)
+            if simple.geom_type not in ("Polygon", "MultiPolygon") or simple.is_empty:
+                continue
+            out = simple
+            if _vertex_count(out) <= target_vertices:
+                break
+        except Exception:
+            continue
+    return out
+
+
+def _geojson_geom(geom, *, precision: int | None = 6) -> dict:
     # mapping() is already JSON-serializable; avoid dumps/loads round-trip.
-    return mapping(geom)
+    raw = mapping(geom)
+    if precision is None:
+        return raw
+    return _round_geojson_coords(raw, precision)
+
+
+def _round_geojson_coords(obj, precision: int):
+    if isinstance(obj, dict):
+        if "coordinates" in obj:
+            return {**obj, "coordinates": _round_geojson_coords(obj["coordinates"], precision)}
+        return {k: _round_geojson_coords(v, precision) if k == "geometries" else v for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        if obj and isinstance(obj[0], (int, float)):
+            return [round(float(c), precision) for c in obj]
+        return [_round_geojson_coords(v, precision) for v in obj]
+    return obj
 
 
 def _feature_payload(geom, props: dict | None = None, *, simplify: bool = True) -> dict:
@@ -490,8 +573,13 @@ def lookup_watershed_with_village_context(lng: float, lat: float) -> dict:
             return hit
 
 
-def parse_geojson_polygon(geometry: dict) -> Polygon | MultiPolygon:
-    """Validate client GeoJSON as a non-empty Polygon/MultiPolygon in WGS84."""
+def parse_geojson_polygon(geometry: dict, *, repair: bool = True) -> Polygon | MultiPolygon:
+    """Validate client GeoJSON as a non-empty Polygon/MultiPolygon in WGS84.
+
+    ``repair=False`` skips GEOS make_valid — some dense GP/cadastral multipolygons
+    can segfault the worker inside make_valid (Cloudflare sees Host Error 502).
+    PostGIS ST_MakeValid on insert is the safer repair path for those cases.
+    """
     if not isinstance(geometry, dict) or "type" not in geometry:
         raise ValueError("geometry must be a GeoJSON object")
     gtype = geometry.get("type")
@@ -503,16 +591,26 @@ def parse_geojson_polygon(geometry: dict) -> Polygon | MultiPolygon:
         raise ValueError(f"Invalid GeoJSON geometry: {exc}") from exc
     if geom is None or geom.is_empty:
         raise ValueError("geometry is empty")
-    if not geom.is_valid:
-        geom = make_valid(geom)
+    if repair and not geom.is_valid:
+        try:
+            geom = make_valid(geom)
+        except Exception as exc:
+            logger.warning("make_valid failed; continuing with raw geom: %s", exc)
     if geom.geom_type == "GeometryCollection":
         polys = [g for g in geom.geoms if g.geom_type in ("Polygon", "MultiPolygon")]
         if not polys:
             raise ValueError("geometry must contain a polygon")
-        geom = unary_union(polys)
+        try:
+            geom = unary_union(polys)
+        except Exception as exc:
+            raise ValueError(f"Could not merge geometry parts: {exc}") from exc
     if geom.geom_type not in ("Polygon", "MultiPolygon"):
         raise ValueError("geometry must resolve to a Polygon or MultiPolygon")
-    if geom.area <= 0:
+    try:
+        area = float(geom.area)
+    except Exception:
+        area = 0.0
+    if area <= 0:
         raise ValueError("geometry has no area")
 
     minx, miny, maxx, maxy = geom.bounds
@@ -523,26 +621,175 @@ def parse_geojson_polygon(geometry: dict) -> Polygon | MultiPolygon:
     coords = geometry.get("coordinates") or []
     flat = json.dumps(coords)
     vertex_est = flat.count("[") // 2
+    # Prefer a real GEOS count when available (bracket heuristic undercounts rings).
+    try:
+        vertex_est = max(vertex_est, _vertex_count(geom))
+    except Exception:
+        pass
     if vertex_est > _MAX_VERTICES:
         raise ValueError(f"geometry has too many vertices (max {_MAX_VERTICES})")
     return geom
 
 
+_AOI_CACHE_DIR = Path("/tmp/welllabs-aoi-cache")
+_AOI_CACHE_TTL_S = 30 * 60
+
+
+def _aoi_cache_path(token: str) -> Path:
+    safe = re.sub(r"[^A-Za-z0-9_-]", "", token)[:64]
+    if not safe:
+        raise ValueError("Invalid create token")
+    return _AOI_CACHE_DIR / f"{safe}.json"
+
+
+def stash_custom_aoi(payload: dict) -> str:
+    """Persist a validated custom AOI for a follow-up create (shared across workers)."""
+    import secrets
+    import time as _time
+
+    _AOI_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    # Opportunistic cleanup of expired tokens
+    try:
+        cutoff = _time.time() - _AOI_CACHE_TTL_S
+        for path in _AOI_CACHE_DIR.glob("*.json"):
+            if path.stat().st_mtime < cutoff:
+                path.unlink(missing_ok=True)
+    except Exception:
+        pass
+    token = secrets.token_urlsafe(18)
+    path = _aoi_cache_path(token)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return token
+
+
+def load_stashed_custom_aoi(token: str) -> dict:
+    path = _aoi_cache_path(token)
+    if not path.is_file():
+        raise ValueError("Custom AOI create token expired or missing — re-upload the file")
+    try:
+        age = time.time() - path.stat().st_mtime
+    except Exception:
+        age = 0
+    if age > _AOI_CACHE_TTL_S:
+        path.unlink(missing_ok=True)
+        raise ValueError("Custom AOI create token expired — re-upload the file")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise ValueError(f"Could not read cached AOI: {exc}") from exc
+    if not isinstance(data, dict) or not data.get("geometry"):
+        raise ValueError("Cached AOI is invalid — re-upload the file")
+    return data
+
+
+def _force_2d(geom: Polygon | MultiPolygon) -> Polygon | MultiPolygon:
+    """Strip Z coordinates. KML files carry Z=0; 3D geometries can crash some PostGIS builds."""
+    if not geom.has_z:
+        return geom
+    try:
+        import shapely
+        return shapely.force_2d(geom)
+    except Exception:
+        pass
+    # Fallback: reconstruct via WKB without Z
+    try:
+        from shapely.wkb import loads as wkb_loads, dumps as wkb_dumps
+        return wkb_loads(wkb_dumps(geom, include_srid=False), hex=False)
+    except Exception:
+        # Last resort: map exterior/interior coords
+        from shapely.geometry import Polygon as _Poly, MultiPolygon as _MP
+        if geom.geom_type == "Polygon":
+            ext = [(x, y) for x, y, *_ in geom.exterior.coords]
+            holes = [[(x, y) for x, y, *_ in ring.coords] for ring in geom.interiors]
+            return _Poly(ext, holes)
+        polys = []
+        for p in geom.geoms:
+            ext = [(x, y) for x, y, *_ in p.exterior.coords]
+            holes = [[(x, y) for x, y, *_ in ring.coords] for ring in p.interiors]
+            polys.append(_Poly(ext, holes))
+        return _MP(polys)
+
+
+def _dissolve_custom_aoi(geom: Polygon | MultiPolygon) -> Polygon | MultiPolygon:
+    """Merge overlapping GP / cadastral parts into one valid 2D polygon.
+
+    Overlapping MultiPolygons (e.g. adjacent GPs) stay ``is_valid=False``. Passing
+    those to PostGIS ``ST_MakeValid`` can yield GeometryCollection or hang the
+    connection on some hosts (Cloudflare Host Error 502). ``unary_union`` is fast
+    and safe for typical village/GP uploads; avoid ``make_valid`` here.
+
+    Z coordinates are stripped because some PostGIS builds crash on 3D geometry
+    operations (ST_CollectionExtract, ST_Multi on 3D) — KML files carry Z=0 which
+    is safe to drop.
+    """
+    # Always work in 2D — KML Z=0 causes PostGIS 3D geometry issues on some builds.
+    geom = _force_2d(geom)
+    if geom.geom_type == "Polygon":
+        if geom.is_valid:
+            return geom
+        parts = [geom]
+    else:
+        parts = [g for g in geom.geoms if g.geom_type == "Polygon" and not g.is_empty]
+        if not parts:
+            raise ValueError("geometry must contain a polygon")
+        if len(parts) == 1 and parts[0].is_valid:
+            return parts[0]
+    try:
+        merged = unary_union(parts)
+    except Exception as exc:
+        raise ValueError(f"Could not merge overlapping AOI parts: {exc}") from exc
+    if merged is None or merged.is_empty:
+        raise ValueError("geometry is empty after merge")
+    if merged.geom_type == "GeometryCollection":
+        polys = [g for g in merged.geoms if g.geom_type in ("Polygon", "MultiPolygon")]
+        if not polys:
+            raise ValueError("geometry must contain a polygon after merge")
+        merged = unary_union(polys) if len(polys) > 1 else polys[0]
+    if merged.geom_type not in ("Polygon", "MultiPolygon"):
+        raise ValueError("geometry must resolve to a Polygon or MultiPolygon after merge")
+    return merged
+
+
 def custom_aoi_from_geometry(geometry: dict, *, name: str | None = None) -> dict:
     """Treat an uploaded polygon as the clip boundary."""
-    geom = parse_geojson_polygon(geometry)
+    # Avoid GEOS make_valid here — it can crash the uvicorn worker on dense GP rings.
+    geom = parse_geojson_polygon(geometry, repair=False)
+    geom = _dissolve_custom_aoi(geom)
+    try:
+        # Mild simplify for storage / create payload size.
+        simple = geom.simplify(0.0005, preserve_topology=True)
+        if simple is not None and not simple.is_empty and simple.geom_type in ("Polygon", "MultiPolygon"):
+            geom = simple
+            if not geom.is_valid:
+                geom = _dissolve_custom_aoi(geom)
+    except Exception as exc:
+        logger.warning("custom AOI simplify skipped: %s", exc)
+    if geom is None or geom.is_empty:
+        raise ValueError("geometry is empty after simplify")
+    if geom.geom_type not in ("Polygon", "MultiPolygon"):
+        raise ValueError("geometry must resolve to a Polygon or MultiPolygon")
     label = (name or "").strip() or "Custom AOI"
-    centroid = geom.centroid
-    return {
+    try:
+        centroid = geom.representative_point()
+        seed_lng, seed_lat = float(centroid.x), float(centroid.y)
+    except Exception:
+        minx, miny, maxx, maxy = geom.bounds
+        seed_lng, seed_lat = (minx + maxx) / 2.0, (miny + maxy) / 2.0
+    payload = {
         "watershed_id": "custom",
         "watershed_name": label,
         "geometry": _geojson_geom(geom),
         "bounds": list(geom.bounds),
         "parts": [],
         "source": "custom",
-        "seed_lng": float(centroid.x),
-        "seed_lat": float(centroid.y),
+        "seed_lng": seed_lng,
+        "seed_lat": seed_lat,
     }
+    try:
+        payload["create_token"] = stash_custom_aoi(payload)
+    except Exception as exc:
+        logger.warning("Could not stash custom AOI token: %s", exc)
+    return payload
 
 
 def watersheds_intersecting(geom) -> list[dict]:
