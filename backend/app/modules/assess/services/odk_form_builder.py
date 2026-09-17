@@ -268,8 +268,7 @@ def enrich_indicators_for_odk(indicators: list[dict]) -> list[dict]:
         if hint is None:
             hint = build_hint(item) if not item.get("custom") else ""
         hint = (hint or "").strip()
-        # Locked meta fields keep stable names; all others derive from label.
-        if item.get("locked") and item.get("field_name"):
+        if item.get("field_name"):
             field_name = _slugify(str(item["field_name"])) or f"ind_{index:03d}"
         else:
             field_name = _slugify(label) or f"ind_{index:03d}"
@@ -398,7 +397,7 @@ def build_mel_form_xml(
     used_names: set[str] = set()
     for index, item in enumerate(fields, start=1):
         label = item.get("label") or item.get("indicator") or f"Question {index}"
-        if item.get("locked") and item.get("field_name"):
+        if item.get("field_name"):
             field_name = _slugify(str(item["field_name"])) or f"ind_{index:03d}"
         else:
             field_name = _slugify(label) or f"ind_{index:03d}"

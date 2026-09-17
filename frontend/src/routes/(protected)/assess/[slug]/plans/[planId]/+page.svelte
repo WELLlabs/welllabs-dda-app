@@ -4,7 +4,7 @@
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 	import { findBySlug, itemPath } from '$lib/shared/slug.js';
-	import MelPlanHome from '$lib/modules/assess/components/MelPlanHome.svelte';
+	import MelImplHome from '$lib/modules/assess/components/MelImplHome.svelte';
 	import { fetchMelPlan, fetchMelProjects } from '$lib/modules/assess/mel-api';
 
 	let slug = $derived(page.params.slug);
@@ -38,7 +38,7 @@
 </script>
 
 <svelte:head>
-	<title>{plan?.name || 'MEL plan'} · Assess</title>
+	<title>{plan?.name || 'MEL'} · Assess</title>
 </svelte:head>
 
 <div class="min-h-screen bg-transparent">
@@ -47,13 +47,13 @@
 	{:else if error || !project || !plan}
 		<div class="mx-auto max-w-lg p-6">
 			<p class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 font-body text-sm text-red-700">
-				{error || 'Plan not found'}
+				{error || 'Not found'}
 			</p>
 			<button type="button" class="action-btn mt-4" onclick={() => goto(appPath('/assess'))}>
-				Back to projects
+				Back to Assess
 			</button>
 		</div>
 	{:else}
-		<MelPlanHome {project} {plan} {projects} />
+		<MelImplHome {project} {plan} {projects} />
 	{/if}
 </div>

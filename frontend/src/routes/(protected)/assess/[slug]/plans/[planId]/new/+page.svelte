@@ -5,25 +5,49 @@
 	import { onMount } from 'svelte';
 	import { findBySlug, itemPath } from '$lib/shared/slug.js';
 	import { assessCrumbs } from '$lib/modules/assess/breadcrumbs.js';
-	import MelPlanDesigner from '$lib/modules/assess/components/MelPlanDesigner.svelte';
+	import MelPlanWizard from '$lib/modules/assess/components/MelPlanWizard.svelte';
+	import MelImplementationWizard from '$lib/modules/assess/components/MelImplementationWizard.svelte';
 	import { fetchMelPlan, fetchMelProjects } from '$lib/modules/assess/mel-api';
 
 	let slug = $derived(page.params.slug);
 	let planId = $derived(page.params.planId);
-	let odkFormsMode = $derived(page.url.searchParams.get('forms') === '1');
+	let startAtAssets = $derived(page.url.searchParams.get('assets') === '1');
+	let startAtForms = $derived(page.url.searchParams.get('forms') === '1');
+	let startNewAsset = $derived(page.url.searchParams.get('new') === '1');
+	let editAssetId = $derived(page.url.searchParams.get('asset') || '');
+	let planStartStep = $derived.by(() => {
+		const raw = page.url.searchParams.get('step');
+		if (raw === 'assets' || raw === '1') return 1;
+		if (raw === 'cm' || raw === '2') return 2;
+		if (raw === 'export' || raw === '3') return 3;
+		return 0;
+	});
 	let projects = $state([]);
 	let project = $state(null);
 	let plan = $state(null);
 	let loading = $state(true);
 	let error = $state('');
 
+	const isImpl = $derived((plan?.kind || 'plan') === 'implementation');
 	const crumbs = $derived(
 		project && plan
 			? assessCrumbs({
 					projects,
 					project,
 					plan,
-					tail: [{ label: odkFormsMode ? 'Edit forms' : 'Design plan' }]
+					tail: [
+						{
+							label: startNewAsset
+								? 'Add asset'
+								: editAssetId
+									? 'Edit asset'
+									: startAtAssets
+										? 'Assets'
+										: isImpl
+											? 'Edit forms'
+											: 'Design plan'
+						}
+					]
 				})
 			: []
 	);
@@ -62,7 +86,7 @@
 
 <svelte:head>
 	<title>
-		{odkFormsMode ? 'Edit ODK forms' : 'Design'} · {plan?.name || 'MEL plan'} · Assess
+		{isImpl ? 'Intervention' : 'Plan'} · {plan?.name || 'MEL'} · Assess
 	</title>
 </svelte:head>
 
@@ -75,20 +99,39 @@
 				{error || 'Plan not found'}
 			</p>
 			<button type="button" class="action-btn mt-4" onclick={() => goto(appPath('/assess'))}>
-				Back to projects
+				Back to Assess
 			</button>
 		</div>
-	{:else}
-		{#key `${plan.id}-${odkFormsMode}`}
-			<MelPlanDesigner
+	{:else if isImpl}
+		{#key `${plan.id}:${editAssetId}:${startNewAsset}:${startAtForms}`}
+			<MelImplementationWizard
 				{onBack}
 				{crumbs}
 				projectId={project.id}
 				planId={plan.id}
 				projectName={project.name}
 				planName={plan.name}
-				lockedInterventionSlug={plan.intervention_slug}
-				{odkFormsMode}
+				interventionSlug={plan.intervention_slug}
+				initialOutcomeIds={plan.plan_json?.outcome_ids || []}
+				{startAtAssets}
+				{startAtForms}
+				{startNewAsset}
+				{editAssetId}
+			/>
+		{/key}
+	{:else}
+		{#key plan.id}
+			<MelPlanWizard
+				{onBack}
+				{crumbs}
+				projectId={project.id}
+				planId={plan.id}
+				projectName={project.name}
+				planName={plan.name}
+				interventionSlug={plan.intervention_slug}
+				initialOutcomeIds={plan.plan_json?.outcome_ids || []}
+				initialPlanJson={plan.plan_json || null}
+				startStep={planStartStep}
 			/>
 		{/key}
 	{/if}

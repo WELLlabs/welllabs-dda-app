@@ -7,11 +7,13 @@ import json
 from pydantic import BaseModel, Field
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 
 from app.modules.assess.access import (
     assess_access_where,
     get_mel_plan,
     get_mel_project,
+    mel_asset_to_dict,
     mel_plan_to_dict,
     mel_project_to_dict,
     require_assess_access,
@@ -19,7 +21,21 @@ from app.modules.assess.access import (
     require_assess_owner,
 )
 from app.modules.assess.services.collect_qr import build_mel_collect_qr
+from app.modules.assess.services.mel_analyses import (
+    asset_label_from_answers,
+    compute_asset_metrics,
+    is_asset_select_field,
+    is_plot_intervention,
+)
 from app.modules.assess.services.mel_catalog import get_intervention
+from app.modules.assess.services.mel_mapping_catalog import (
+    get_mapping_intervention,
+    resolve_mapping_outcomes,
+)
+from app.modules.assess.services.mel_plan_docx import (
+    _apply_question_overrides,
+    build_mel_plan_docx,
+)
 from app.modules.assess.services.odk_submissions import normalize_submissions
 from app.shared.auth import get_current_user
 from app.shared.config import settings
@@ -35,15 +51,39 @@ class MelProjectCreate(BaseModel):
     description: str = Field(default="", max_length=2000)
 
 
+class MelProjectUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=2000)
+
+
 class MelPlanCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     intervention_slug: str = Field(..., min_length=1, max_length=120)
+    kind: str = Field(default="plan", pattern=r"^(plan|implementation)$")
 
 
 class MelPlanSave(BaseModel):
-    outcome_ids: list[str] = Field(default_factory=list)
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    outcome_ids: list[str] | None = None
     plan_json: dict | None = None
 
+
+class MelAssetCreate(BaseModel):
+    ot_answers: dict = Field(default_factory=dict)
+    label: str = Field(default="", max_length=300)
+
+
+class MelAssetUpdate(BaseModel):
+    ot_answers: dict | None = None
+    label: str | None = Field(default=None, max_length=300)
+
+
+def _resolve_intervention(slug: str) -> dict | None:
+    """Prefer mapping catalog (Farm pond); fall back to legacy outcomes catalog."""
+    mapped = get_mapping_intervention(slug)
+    if mapped:
+        return mapped
+    return get_intervention(slug)
 
 def _form_dict(row: dict) -> dict:
     return {
@@ -134,6 +174,39 @@ def get_mel_project_detail(project_id: str, user: dict = Depends(require_assess_
     return mel_project_to_dict(get_mel_project(project_id))
 
 
+@router.patch("/{project_id}")
+def update_mel_project(
+    project_id: str,
+    body: MelProjectUpdate,
+    user: dict = Depends(require_assess_admin),
+):
+    existing = get_mel_project(project_id)
+    if body.name is None and body.description is None:
+        return mel_project_to_dict(existing)
+    name = existing["name"]
+    description = existing.get("description") or ""
+    if body.name is not None:
+        name = body.name.strip()
+        if not name:
+            raise HTTPException(400, "Name is required")
+    if body.description is not None:
+        description = body.description.strip()
+
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            UPDATE assess_projects
+            SET name = %(name)s, description = %(description)s, updated_at = now()
+            WHERE id = %(id)s AND kind = 'mel'
+            RETURNING id
+            """,
+            {"id": project_id, "name": name, "description": description},
+        )
+        if not cur.fetchone():
+            raise HTTPException(404, "MEL project not found")
+    return mel_project_to_dict(get_mel_project(project_id))
+
+
 @router.delete("/{project_id}", status_code=204)
 def delete_mel_project(project_id: str, user: dict = Depends(require_assess_owner)):
     get_mel_project(project_id)
@@ -147,28 +220,42 @@ def delete_mel_project(project_id: str, user: dict = Depends(require_assess_owne
 
 
 @router.get("/{project_id}/plans")
-def list_mel_plans(project_id: str, user: dict = Depends(require_assess_access)):
+def list_mel_plans(
+    project_id: str,
+    kind: str | None = None,
+    user: dict = Depends(require_assess_access),
+):
     get_mel_project(project_id)
+    params: dict = {"project_id": project_id}
+    kind_sql = ""
+    if kind in ("plan", "implementation"):
+        kind_sql = "AND mp.kind = %(kind)s"
+        params["kind"] = kind
     with db_cursor() as cur:
         cur.execute(
-            """
+            f"""
             SELECT
                 mp.id,
                 mp.project_id,
                 mp.name,
                 mp.intervention_slug,
+                mp.kind,
                 mp.plan_json,
                 mp.created_by,
                 mp.created_at,
                 mp.updated_at,
                 (
                     SELECT COUNT(*)::int FROM mel_forms mf WHERE mf.plan_id = mp.id
-                ) AS form_count
+                ) AS form_count,
+                (
+                    SELECT COUNT(*)::int FROM mel_assets ma WHERE ma.plan_id = mp.id
+                ) AS asset_count
             FROM mel_plans mp
             WHERE mp.project_id = %(project_id)s
+            {kind_sql}
             ORDER BY mp.updated_at DESC
             """,
-            {"project_id": project_id},
+            params,
         )
         rows = cur.fetchall()
     return {"plans": [mel_plan_to_dict(row) for row in rows]}
@@ -181,31 +268,33 @@ def create_mel_plan(
     user: dict = Depends(require_assess_access),
 ):
     get_mel_project(project_id)
-    intervention = get_intervention(body.intervention_slug)
+    intervention = _resolve_intervention(body.intervention_slug)
     if intervention is None:
         raise HTTPException(404, "Intervention not found in catalog")
 
     name = body.name.strip()
     if not name:
         raise HTTPException(400, "Name is required")
+    kind = body.kind if body.kind in ("plan", "implementation") else "plan"
 
     with db_cursor() as cur:
         cur.execute(
             """
             INSERT INTO mel_plans (
-                project_id, name, intervention_slug, created_by
+                project_id, name, intervention_slug, kind, created_by
             )
             VALUES (
-                %(project_id)s, %(name)s, %(intervention_slug)s, %(created_by)s
+                %(project_id)s, %(name)s, %(intervention_slug)s, %(kind)s, %(created_by)s
             )
             RETURNING
-                id, project_id, name, intervention_slug, plan_json,
+                id, project_id, name, intervention_slug, kind, plan_json,
                 created_by, created_at, updated_at
             """,
             {
                 "project_id": project_id,
                 "name": name,
-                "intervention_slug": body.intervention_slug,
+                "intervention_slug": intervention.get("slug") or body.intervention_slug,
+                "kind": kind,
                 "created_by": user["id"],
             },
         )
@@ -215,7 +304,7 @@ def create_mel_plan(
             {"id": project_id},
         )
 
-    row = {**row, "form_count": 0}
+    row = {**row, "form_count": 0, "asset_count": 0}
     return mel_plan_to_dict(row)
 
 
@@ -235,24 +324,38 @@ def save_mel_plan(
     user: dict = Depends(require_assess_access),
 ):
     get_mel_project(project_id)
-    get_mel_plan(plan_id, project_id=project_id)
-    plan_json = body.plan_json if body.plan_json is not None else {"outcome_ids": body.outcome_ids}
-    if "outcome_ids" not in plan_json:
-        plan_json = {**plan_json, "outcome_ids": body.outcome_ids}
+    existing = get_mel_plan(plan_id, project_id=project_id)
+    assignments = ["updated_at = now()"]
+    params: dict = {"id": plan_id, "project_id": project_id}
+
+    if body.name is not None:
+        name = body.name.strip()
+        if not name:
+            raise HTTPException(400, "Name is required")
+        assignments.append("name = %(name)s")
+        params["name"] = name
+
+    if body.plan_json is not None or body.outcome_ids is not None:
+        plan_json = body.plan_json if body.plan_json is not None else dict(existing.get("plan_json") or {})
+        if body.outcome_ids is not None:
+            plan_json = {**plan_json, "outcome_ids": body.outcome_ids}
+        elif "outcome_ids" not in plan_json:
+            plan_json = {**plan_json, "outcome_ids": []}
+        assignments.append("plan_json = %(plan_json)s::jsonb")
+        params["plan_json"] = json.dumps(plan_json)
+
+    if len(assignments) == 1:
+        return mel_plan_to_dict(existing)
 
     with db_cursor() as cur:
         cur.execute(
-            """
+            f"""
             UPDATE mel_plans
-            SET plan_json = %(plan_json)s::jsonb, updated_at = now()
+            SET {", ".join(assignments)}
             WHERE id = %(id)s AND project_id = %(project_id)s
             RETURNING id
             """,
-            {
-                "id": plan_id,
-                "project_id": project_id,
-                "plan_json": json.dumps(plan_json),
-            },
+            params,
         )
         if not cur.fetchone():
             raise HTTPException(404, "MEL plan not found")
@@ -505,6 +608,10 @@ class UpdateUserRole(BaseModel):
     role: str
 
 
+class AddOrgAccess(BaseModel):
+    org_id: str
+
+
 @router.get("/{project_id}/access/users")
 def list_user_access(project_id: str, user: dict = Depends(require_assess_admin)):
     get_mel_project(project_id)
@@ -630,3 +737,554 @@ def remove_user_access(project_id: str, user_id: str, user: dict = Depends(requi
         )
         if not cur.fetchone():
             raise HTTPException(404, "That user does not have access to this project")
+
+
+@router.get("/{project_id}/access/orgs")
+def list_org_access(project_id: str, user: dict = Depends(require_assess_admin)):
+    get_mel_project(project_id)
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT o.id, o.name, apo.created_at
+            FROM assess_project_orgs apo
+            JOIN organizations o ON o.id = apo.org_id
+            WHERE apo.project_id = %(id)s
+            ORDER BY apo.created_at ASC
+            """,
+            {"id": project_id},
+        )
+        rows = cur.fetchall()
+    return {
+        "organizations": [
+            {"id": str(r["id"]), "name": r["name"], "created_at": r["created_at"].isoformat()}
+            for r in rows
+        ]
+    }
+
+
+@router.post("/{project_id}/access/orgs", status_code=201)
+def add_org_access(
+    project_id: str, body: AddOrgAccess, user: dict = Depends(require_assess_admin)
+):
+    get_mel_project(project_id)
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT o.id, o.name
+            FROM organizations o
+            JOIN org_members om ON om.org_id = o.id
+            WHERE o.id = %(org_id)s AND om.user_id = %(user_id)s
+            """,
+            {"org_id": body.org_id, "user_id": user["id"]},
+        )
+        org = cur.fetchone()
+        if not org:
+            raise HTTPException(404, "Organization not found, or you are not a member of it")
+        cur.execute(
+            """
+            INSERT INTO assess_project_orgs (project_id, org_id, added_by)
+            VALUES (%(project_id)s, %(org_id)s, %(added_by)s)
+            ON CONFLICT (project_id, org_id) DO NOTHING
+            RETURNING project_id
+            """,
+            {"project_id": project_id, "org_id": org["id"], "added_by": user["id"]},
+        )
+        if not cur.fetchone():
+            raise HTTPException(409, "That organization already has access to this project")
+    return {"id": str(org["id"]), "name": org["name"]}
+
+
+@router.delete("/{project_id}/access/orgs/{org_id}", status_code=204)
+def remove_org_access(project_id: str, org_id: str, user: dict = Depends(require_assess_admin)):
+    get_mel_project(project_id)
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            DELETE FROM assess_project_orgs
+            WHERE project_id = %(project_id)s AND org_id = %(org_id)s
+            RETURNING org_id
+            """,
+            {"project_id": project_id, "org_id": org_id},
+        )
+        if not cur.fetchone():
+            raise HTTPException(404, "That organization does not have access to this project")
+
+
+# --- Assets (one_time allocation) + dashboards + docx ---
+
+
+@router.get("/{project_id}/plans/{plan_id}/assets")
+def list_mel_assets(project_id: str, plan_id: str, user: dict = Depends(require_assess_access)):
+    get_mel_project(project_id)
+    get_mel_plan(plan_id, project_id=project_id)
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, project_id, plan_id, intervention_slug, label, ot_answers,
+                   created_by, created_at, updated_at
+            FROM mel_assets
+            WHERE plan_id = %(plan_id)s AND project_id = %(project_id)s
+            ORDER BY created_at ASC
+            """,
+            {"plan_id": plan_id, "project_id": project_id},
+        )
+        rows = cur.fetchall()
+    return {"assets": [mel_asset_to_dict(r) for r in rows]}
+
+
+@router.post("/{project_id}/plans/{plan_id}/assets", status_code=201)
+def create_mel_asset(
+    project_id: str,
+    plan_id: str,
+    body: MelAssetCreate,
+    user: dict = Depends(require_assess_access),
+):
+    get_mel_project(project_id)
+    plan = get_mel_plan(plan_id, project_id=project_id)
+    if (plan.get("kind") or "plan") != "implementation":
+        raise HTTPException(400, "Assets can only be added to an implementation")
+
+    answers = body.ot_answers or {}
+    fallback = "Farm plot" if is_plot_intervention(plan.get("intervention_slug")) else "Farm pond"
+    label = (body.label or "").strip() or asset_label_from_answers(answers, fallback)
+
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO mel_assets (
+                project_id, plan_id, intervention_slug, label, ot_answers, created_by
+            )
+            VALUES (
+                %(project_id)s, %(plan_id)s, %(intervention_slug)s,
+                %(label)s, %(ot_answers)s::jsonb, %(created_by)s
+            )
+            RETURNING id, project_id, plan_id, intervention_slug, label, ot_answers,
+                      created_by, created_at, updated_at
+            """,
+            {
+                "project_id": project_id,
+                "plan_id": plan_id,
+                "intervention_slug": plan["intervention_slug"],
+                "label": label,
+                "ot_answers": json.dumps(answers),
+                "created_by": user["id"],
+            },
+        )
+        row = cur.fetchone()
+        cur.execute(
+            "UPDATE assess_projects SET updated_at = now() WHERE id = %(id)s",
+            {"id": project_id},
+        )
+    return mel_asset_to_dict(row)
+
+
+@router.get("/{project_id}/plans/{plan_id}/assets/{asset_id}")
+def get_mel_asset(
+    project_id: str, plan_id: str, asset_id: str, user: dict = Depends(require_assess_access)
+):
+    get_mel_project(project_id)
+    get_mel_plan(plan_id, project_id=project_id)
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, project_id, plan_id, intervention_slug, label, ot_answers,
+                   created_by, created_at, updated_at
+            FROM mel_assets
+            WHERE id = %(id)s AND plan_id = %(plan_id)s AND project_id = %(project_id)s
+            """,
+            {"id": asset_id, "plan_id": plan_id, "project_id": project_id},
+        )
+        row = cur.fetchone()
+    if not row:
+        raise HTTPException(404, "Asset not found")
+    return mel_asset_to_dict(row)
+
+
+@router.patch("/{project_id}/plans/{plan_id}/assets/{asset_id}")
+def update_mel_asset(
+    project_id: str,
+    plan_id: str,
+    asset_id: str,
+    body: MelAssetUpdate,
+    user: dict = Depends(require_assess_access),
+):
+    get_mel_project(project_id)
+    get_mel_plan(plan_id, project_id=project_id)
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, ot_answers, label FROM mel_assets
+            WHERE id = %(id)s AND plan_id = %(plan_id)s AND project_id = %(project_id)s
+            """,
+            {"id": asset_id, "plan_id": plan_id, "project_id": project_id},
+        )
+        existing = cur.fetchone()
+        if not existing:
+            raise HTTPException(404, "Asset not found")
+        answers = body.ot_answers if body.ot_answers is not None else (existing.get("ot_answers") or {})
+        label = (
+            body.label.strip()
+            if body.label is not None
+            else (existing.get("label") or asset_label_from_answers(answers))
+        )
+        cur.execute(
+            """
+            UPDATE mel_assets
+            SET ot_answers = %(ot_answers)s::jsonb, label = %(label)s, updated_at = now()
+            WHERE id = %(id)s
+            RETURNING id, project_id, plan_id, intervention_slug, label, ot_answers,
+                      created_by, created_at, updated_at
+            """,
+            {"id": asset_id, "ot_answers": json.dumps(answers), "label": label},
+        )
+        row = cur.fetchone()
+    return mel_asset_to_dict(row)
+
+
+@router.delete("/{project_id}/plans/{plan_id}/assets/{asset_id}", status_code=204)
+def delete_mel_asset(
+    project_id: str, plan_id: str, asset_id: str, user: dict = Depends(require_assess_access)
+):
+    get_mel_project(project_id)
+    get_mel_plan(plan_id, project_id=project_id)
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            DELETE FROM mel_assets
+            WHERE id = %(id)s AND plan_id = %(plan_id)s AND project_id = %(project_id)s
+            RETURNING id
+            """,
+            {"id": asset_id, "plan_id": plan_id, "project_id": project_id},
+        )
+        if not cur.fetchone():
+            raise HTTPException(404, "Asset not found")
+
+
+def _empty_cm_stats() -> dict:
+    return {
+        "submission_count": 0,
+        "last_submission_at": None,
+        "first_reading_date": None,
+        "last_reading_date": None,
+        "source": "none",
+    }
+
+
+def _cm_stats_from_rows(
+    rows: list[dict],
+    *,
+    source: str,
+    last_submission_at: str | None = None,
+) -> dict:
+    dates: list[str] = []
+    submitted: list[str] = []
+    for row in rows:
+        reading = row.get("fp_cm_date_of_reading") or row.get("observation_date")
+        if reading:
+            dates.append(str(reading)[:10])
+        ts = row.get("_submittedAt")
+        if ts:
+            submitted.append(str(ts))
+    dates.sort()
+    last_at = last_submission_at
+    if not last_at and submitted:
+        last_at = max(submitted)
+    return {
+        "submission_count": len(rows),
+        "last_submission_at": last_at,
+        "first_reading_date": dates[0] if dates else None,
+        "last_reading_date": dates[-1] if dates else None,
+        "source": source,
+    }
+
+
+def _local_cm_rows(plan_id: str, project_id: str) -> list[dict]:
+    rows: list[dict] = []
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT asset_id, reading_date, rainfall_mm, water_level_m, payload
+            FROM mel_cm_readings
+            WHERE plan_id = %(plan_id)s AND project_id = %(project_id)s
+            ORDER BY reading_date ASC NULLS LAST, created_at ASC
+            """,
+            {"plan_id": plan_id, "project_id": project_id},
+        )
+        for row in cur.fetchall():
+            payload = dict(row.get("payload") or {})
+            asset_id = str(row["asset_id"])
+            payload.setdefault("fp_cm_select_the_asset_id", asset_id)
+            payload.setdefault("bm_cm_select_the_asset_id", asset_id)
+            if row.get("reading_date") is not None:
+                iso = row["reading_date"].isoformat()
+                payload.setdefault("fp_cm_date_of_reading", iso)
+                payload.setdefault("bm_cm_date_of_reading", iso)
+            if row.get("rainfall_mm") is not None:
+                payload.setdefault("fp_cm_rainfall", row["rainfall_mm"])
+                payload.setdefault(
+                    "bm_cm_rainfall_recorded_since_last_irrigation", row["rainfall_mm"]
+                )
+            if row.get("water_level_m") is not None:
+                payload.setdefault("fp_cm_staff_gauge_reading", row["water_level_m"])
+            rows.append(payload)
+    return rows
+
+
+async def _odk_cm_rows(plan_id: str, project_id: str) -> tuple[list[dict], str | None]:
+    if settings.odk_project_id is None:
+        return [], None
+
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT xml_form_id, package_id
+            FROM mel_forms
+            WHERE plan_id = %(plan_id)s AND project_id = %(project_id)s
+            ORDER BY created_at ASC
+            """,
+            {"plan_id": plan_id, "project_id": project_id},
+        )
+        forms = cur.fetchall()
+    if not forms:
+        return [], None
+
+    preferred = [f for f in forms if (f.get("package_id") or "") == "cm-mapping"]
+    to_fetch = preferred or forms
+
+    client = ODKClient()
+    odk_project_id = int(settings.odk_project_id)
+    rows: list[dict] = []
+    last_submission_at: str | None = None
+    for form in to_fetch:
+        try:
+            odata_rows = await _fetch_all_odata_submissions(
+                client, odk_project_id, form["xml_form_id"]
+            )
+        except Exception:
+            continue
+        for raw in odata_rows:
+            system = raw.get("__system") if isinstance(raw, dict) else None
+            ts = system.get("submissionDate") if isinstance(system, dict) else None
+            if ts and (last_submission_at is None or str(ts) > last_submission_at):
+                last_submission_at = str(ts)
+        normalized = normalize_submissions(odata_rows)
+        for sub in normalized.get("rows") or []:
+            if isinstance(sub, dict):
+                rows.append(sub)
+    return rows, last_submission_at
+
+
+async def _collect_plan_cm_bundle(plan_id: str, project_id: str) -> tuple[list[dict], dict]:
+    """Prefer ODK CM submissions; fall back to local readings if ODK is empty."""
+    odk_rows, last_submission_at = await _odk_cm_rows(plan_id, project_id)
+    if odk_rows:
+        return odk_rows, _cm_stats_from_rows(
+            odk_rows, source="odk", last_submission_at=last_submission_at
+        )
+    local = _local_cm_rows(plan_id, project_id)
+    if local:
+        return local, _cm_stats_from_rows(local, source="local")
+    return [], _empty_cm_stats()
+
+
+async def _collect_plan_cm_submissions(plan_id: str, project_id: str) -> list[dict]:
+    rows, _stats = await _collect_plan_cm_bundle(plan_id, project_id)
+    return rows
+
+
+@router.get("/{project_id}/plans/{plan_id}/dashboard")
+async def implementation_dashboard(
+    project_id: str, plan_id: str, user: dict = Depends(require_assess_access)
+):
+    get_mel_project(project_id)
+    plan = get_mel_plan(plan_id, project_id=project_id)
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, project_id, plan_id, intervention_slug, label, ot_answers,
+                   created_by, created_at, updated_at
+            FROM mel_assets
+            WHERE plan_id = %(plan_id)s AND project_id = %(project_id)s
+            ORDER BY created_at ASC
+            """,
+            {"plan_id": plan_id, "project_id": project_id},
+        )
+        assets = cur.fetchall()
+
+    cm_data, cm_stats = await _collect_plan_cm_bundle(plan_id, project_id)
+    asset_summaries = []
+    for a in assets:
+        sibling_ot = [
+            (str(other["id"]), other.get("ot_answers") or {})
+            for other in assets
+            if str(other["id"]) != str(a["id"])
+        ]
+        metrics = compute_asset_metrics(
+            a.get("intervention_slug") or plan.get("intervention_slug"),
+            ot_answers=a.get("ot_answers") or {},
+            cm_submissions=cm_data,
+            asset_id=str(a["id"]),
+            sibling_ot=sibling_ot,
+        )
+        asset_summaries.append(
+            {
+                **mel_asset_to_dict(a),
+                "calculations": metrics["calculations"],
+                "reading_count": metrics["reading_count"],
+            }
+        )
+
+    totals = {
+        "asset_count": len(asset_summaries),
+        "volumetric_storage_m3": sum(
+            (s["calculations"].get("volumetric_storage_m3") or 0) for s in asset_summaries
+        ),
+        "sm_water_savings_m3": sum(
+            (s["calculations"].get("sm_water_savings_m3") or 0) for s in asset_summaries
+        ),
+        "irrigation_applied_m3": sum(
+            (s["calculations"].get("irrigation_applied_m3") or 0) for s in asset_summaries
+        ),
+        "cumulative_rainfall_mm": sum(
+            (s["calculations"].get("cumulative_rainfall_mm") or 0) for s in asset_summaries
+        ),
+        **cm_stats,
+    }
+    return {
+        "plan": mel_plan_to_dict(plan),
+        "assets": asset_summaries,
+        "totals": totals,
+    }
+
+
+@router.get("/{project_id}/plans/{plan_id}/assets/{asset_id}/dashboard")
+async def asset_dashboard(
+    project_id: str,
+    plan_id: str,
+    asset_id: str,
+    user: dict = Depends(require_assess_access),
+):
+    get_mel_project(project_id)
+    plan = get_mel_plan(plan_id, project_id=project_id)
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, project_id, plan_id, intervention_slug, label, ot_answers,
+                   created_by, created_at, updated_at
+            FROM mel_assets
+            WHERE plan_id = %(plan_id)s AND project_id = %(project_id)s
+            ORDER BY created_at ASC
+            """,
+            {"plan_id": plan_id, "project_id": project_id},
+        )
+        assets = cur.fetchall()
+    asset = next((a for a in assets if str(a["id"]) == str(asset_id)), None)
+    if not asset:
+        raise HTTPException(404, "Asset not found")
+
+    cm_data = await _collect_plan_cm_submissions(plan_id, project_id)
+    sibling_ot = [
+        (str(other["id"]), other.get("ot_answers") or {})
+        for other in assets
+        if str(other["id"]) != str(asset["id"])
+    ]
+    metrics = compute_asset_metrics(
+        asset.get("intervention_slug") or plan.get("intervention_slug"),
+        ot_answers=asset.get("ot_answers") or {},
+        cm_submissions=cm_data,
+        asset_id=str(asset["id"]),
+        sibling_ot=sibling_ot,
+    )
+    return {
+        "plan": mel_plan_to_dict(plan),
+        "asset": mel_asset_to_dict(asset),
+        **metrics,
+    }
+
+
+@router.get("/{project_id}/plans/{plan_id}/export-docx")
+def export_mel_plan_docx(
+    project_id: str, plan_id: str, user: dict = Depends(require_assess_access)
+):
+    project = get_mel_project(project_id)
+    plan = get_mel_plan(plan_id, project_id=project_id)
+    plan_json = plan.get("plan_json") or {}
+    outcome_ids = plan_json.get("outcome_ids") or []
+    outcomes = resolve_mapping_outcomes(plan["intervention_slug"], outcome_ids)
+    intervention = get_mapping_intervention(plan["intervention_slug"])
+    intervention_name = (
+        intervention["name"] if intervention else plan["intervention_slug"]
+    )
+    ot_qs = _apply_question_overrides(
+        (intervention or {}).get("one_time_questions") or [],
+        plan_json.get("asset_allocation"),
+    )
+    cm_qs = _apply_question_overrides(
+        (intervention or {}).get("cm_questions") or [],
+        plan_json.get("cm_form"),
+    )
+    content = build_mel_plan_docx(
+        project_name=project["name"],
+        plan_name=plan["name"],
+        intervention_name=intervention_name,
+        outcomes=outcomes,
+        one_time_questions=ot_qs,
+        cm_questions=cm_qs,
+    )
+    filename = f"{plan['name'].replace(' ', '_')}_MEL_plan.docx"
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/{project_id}/plans/{plan_id}/one-time-questions")
+def list_one_time_questions(
+    project_id: str, plan_id: str, user: dict = Depends(require_assess_access)
+):
+    get_mel_project(project_id)
+    plan = get_mel_plan(plan_id, project_id=project_id)
+    intervention = get_mapping_intervention(plan["intervention_slug"])
+    if not intervention:
+        raise HTTPException(404, "Mapping catalog not found for this intervention")
+    return {
+        "intervention_slug": intervention["slug"],
+        "questions": intervention["one_time_questions"],
+    }
+
+
+@router.get("/{project_id}/plans/{plan_id}/cm-questions")
+def list_cm_questions(
+    project_id: str, plan_id: str, user: dict = Depends(require_assess_access)
+):
+    get_mel_project(project_id)
+    plan = get_mel_plan(plan_id, project_id=project_id)
+    intervention = get_mapping_intervention(plan["intervention_slug"])
+    if not intervention:
+        raise HTTPException(404, "Mapping catalog not found for this intervention")
+    # Inject live asset choices into asset-id select
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, label FROM mel_assets
+            WHERE plan_id = %(plan_id)s ORDER BY created_at ASC
+            """,
+            {"plan_id": plan_id},
+        )
+        assets = cur.fetchall()
+    asset_choices = [f"{a['label']}|{a['id']}" for a in assets]  # unused format
+    asset_options = [{"value": str(a["id"]), "label": a["label"] or str(a["id"])} for a in assets]
+
+    questions = []
+    for q in intervention["cm_questions"]:
+        q2 = dict(q)
+        if is_asset_select_field(q.get("variable_name")):
+            q2["selectors"] = [o["label"] for o in asset_options]
+            q2["options"] = asset_options
+        questions.append(q2)
+    return {
+        "intervention_slug": intervention["slug"],
+        "questions": questions,
+        "assets": asset_options,
+    }

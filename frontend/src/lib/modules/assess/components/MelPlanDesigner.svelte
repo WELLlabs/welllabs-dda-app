@@ -280,7 +280,9 @@
 				}
 			} else {
 				const interventionRes = await fetchMelInterventions();
-				interventions = interventionRes.interventions ?? [];
+				interventions = (interventionRes.interventions ?? []).filter(
+					(i) => i.from_mapping && (i.outcome_count || 0) > 0
+				);
 			}
 		} catch (err) {
 			error = String(err);

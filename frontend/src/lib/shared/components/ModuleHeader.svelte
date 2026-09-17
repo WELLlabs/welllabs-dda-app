@@ -274,6 +274,15 @@
 	.actions :global(button.primary:hover:not(:disabled)) {
 		background: color-mix(in srgb, #1b75e0 22%, white);
 	}
+	.actions :global(button.filled) {
+		border-color: #1b75e0;
+		background: #1b75e0;
+		color: #fff;
+	}
+	.actions :global(button.filled:hover:not(:disabled)) {
+		background: #1565c0;
+		border-color: #1565c0;
+	}
 	.actions :global(button.icon-btn) {
 		display: inline-grid;
 		place-items: center;

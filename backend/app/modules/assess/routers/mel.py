@@ -16,11 +16,17 @@ from app.modules.assess.access import (
 from app.modules.assess.services.collect_qr import build_mel_collect_qr
 from app.modules.assess.services.mel_catalog import (
     get_intervention,
-    list_interventions,
     resolve_selected_outcomes,
 )
+from app.modules.assess.services.mel_mapping_catalog import (
+    get_mapping_intervention,
+    list_mapping_interventions,
+    resolve_mapping_outcomes,
+)
+from app.modules.assess.services.mel_analyses import is_asset_select_field
 from app.modules.assess.services.mel_measurement_catalog import build_schedule_packages
 from app.modules.assess.services.odk_form_builder import (
+    INPUT_TYPES,
     build_mel_form_xml,
     enrich_indicators_for_odk,
     list_input_types,
@@ -177,16 +183,118 @@ def _insert_mel_form(
 
 @router.get("/interventions")
 def mel_interventions(_user: dict = Depends(get_current_user)):
-    return {"interventions": list_interventions()}
+    """Interventions that have mapping-catalog outcomes and indicators (new plan / implementation)."""
+    return {"interventions": list_mapping_interventions()}
 
 
 @router.get("/interventions/{slug}")
 def mel_intervention_detail(slug: str, _user: dict = Depends(get_current_user)):
+    mapped = get_mapping_intervention(slug)
+    if mapped:
+        return mapped
     intervention = get_intervention(slug)
     if intervention is None:
         raise HTTPException(404, "Intervention not found")
     return intervention
 
+
+@router.get("/mapping/interventions/{slug}/outcomes")
+def mel_mapping_outcomes(
+    slug: str,
+    outcome_ids: str | None = None,
+    _user: dict = Depends(get_current_user),
+):
+    ids = [x.strip() for x in (outcome_ids or "").split(",") if x.strip()]
+    intervention = get_mapping_intervention(slug)
+    if not intervention:
+        raise HTTPException(404, "Intervention not found in mapping catalog")
+    return {
+        "intervention": {"slug": intervention["slug"], "name": intervention["name"]},
+        "outcomes": resolve_mapping_outcomes(slug, ids),
+    }
+
+
+def _map_input_type(raw: str) -> str:
+    t = (raw or "text").strip().lower()
+    aliases = {
+        "single select": "select_one",
+        "multi select": "select_multiple",
+        "coordinate": "geopoint",
+        "coordinates": "geopoint",
+        "lat,long": "geopoint",
+        "yes/no": "select_one_yes_no",
+    }
+    t = aliases.get(t, t.replace(" ", "_"))
+    if t in INPUT_TYPES:
+        return t
+    return "text"
+
+
+@router.post("/plans/mapping-packages")
+def mel_mapping_packages(body: MelPlanPreviewRequest, user: dict = Depends(get_current_user)):
+    """Build a single CM package from intervention-mapping.csv questions."""
+    del user
+    slug = body.intervention_slug
+    if body.plan_id and body.project_id:
+        plan = get_mel_plan(body.plan_id, project_id=body.project_id)
+        slug = plan["intervention_slug"]
+    intervention = get_mapping_intervention(slug or "")
+    if not intervention:
+        raise HTTPException(404, "Intervention not found in mapping catalog")
+
+    # Asset options for picker
+    asset_options: list[dict] = []
+    if body.plan_id and body.project_id:
+        with db_cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, label FROM mel_assets
+                WHERE plan_id = %(plan_id)s ORDER BY created_at ASC
+                """,
+                {"plan_id": body.plan_id},
+            )
+            asset_options = [
+                {"value": str(r["id"]), "label": r["label"] or str(r["id"])}
+                for r in cur.fetchall()
+            ]
+
+    fields = []
+    for q in intervention["cm_questions"]:
+        var = q.get("variable_name") or ""
+        if not var:
+            continue
+        input_type = _map_input_type(q.get("input_type") or "text")
+        choices = list(q.get("selectors") or [])
+        options = [{"value": c, "label": c} for c in choices]
+        if is_asset_select_field(var):
+            options = asset_options
+            choices = [o["label"] for o in asset_options]
+            input_type = "select_one"
+        fields.append(
+            {
+                "id": var,
+                "field_name": var,
+                "label": q.get("question") or var,
+                "input_type": input_type,
+                "choices": choices,
+                "options": options,
+                "required": is_asset_select_field(var),
+                "hint": q.get("skip_logic") or "",
+                "custom": False,
+            }
+        )
+
+    return {
+        "intervention_slug": intervention["slug"],
+        "packages": [
+            {
+                "package_id": "cm-mapping",
+                "title": f"{intervention['name']} — continuous monitoring",
+                "schedule": "cm",
+                "fields": fields,
+            }
+        ],
+    }
 
 @router.get("/forms")
 def mel_list_forms_deprecated(_user: dict = Depends(get_current_user)):
@@ -229,6 +337,23 @@ def mel_plan_preview(body: MelPlanPreviewRequest, user: dict = Depends(get_curre
     return resolved
 
 
+def _resolve_publish_intervention(slug: str, outcome_ids: list[str]) -> dict:
+    """Resolve an intervention from the mapping catalog or the legacy outcomes catalog."""
+    mapped = get_mapping_intervention(slug)
+    if mapped:
+        return {
+            "intervention": {"slug": mapped["slug"], "name": mapped["name"]},
+            "outcomes": resolve_mapping_outcomes(slug, outcome_ids),
+            "indicators": [],
+            "from_mapping": True,
+        }
+    try:
+        resolved = resolve_selected_outcomes(slug, outcome_ids)
+    except KeyError:
+        raise HTTPException(404, "Intervention not found")
+    return {**resolved, "from_mapping": False}
+
+
 def _resolve_form_fields(catalog_indicators: list[dict], fields: list[MelFieldSpec]) -> list[dict]:
     if not fields:
         return enrich_indicators_for_odk(catalog_indicators)
@@ -237,6 +362,8 @@ def _resolve_form_fields(catalog_indicators: list[dict], fields: list[MelFieldSp
     merged: list[dict] = []
     for index, spec in enumerate(fields, start=1):
         input_type = spec.input_type or "decimal"
+        if input_type == "note":
+            input_type = "text"
         if input_type not in _INPUT_TYPE_IDS:
             raise HTTPException(400, f"Unsupported input_type: {input_type}")
 
@@ -250,10 +377,10 @@ def _resolve_form_fields(catalog_indicators: list[dict], fields: list[MelFieldSp
             if spec.options is not None
             else (spec.choices if spec.choices is not None else base.get("options") or base.get("choices"))
         )
-        if input_type in {"select_one", "select_multiple"} and len(choices) < 2:
+        if input_type in {"select_one", "select_multiple"} and len(choices) < 1:
             raise HTTPException(
                 400,
-                f"Field '{label}' needs at least two choices for {input_type}",
+                f"Field '{label}' needs at least one choice for {input_type}",
             )
 
         merged.append(
@@ -268,8 +395,7 @@ def _resolve_form_fields(catalog_indicators: list[dict], fields: list[MelFieldSp
                     else ("" if spec.custom else base.get("hint"))
                 ),
                 "input_type": input_type,
-                # field_name is derived from label in enrich_indicators_for_odk / XML builder
-                "field_name": "",
+                "field_name": (spec.field_name or base.get("field_name") or spec.id or "").strip(),
                 "options": choices,
                 "choices": [opt["label"] for opt in choices],
                 "outcome": spec.outcome if spec.outcome is not None else base.get("outcome") or ("Custom" if spec.custom else ""),
@@ -411,12 +537,12 @@ async def mel_plan_create_forms(body: MelPlanCreateFormsRequest, user: dict = De
     if not intervention_slug:
         raise HTTPException(400, "Plan is missing an intervention")
 
-    try:
-        resolved = resolve_selected_outcomes(intervention_slug, body.outcome_ids)
-    except KeyError:
-        raise HTTPException(404, "Intervention not found")
-
-    packaged = build_schedule_packages(resolved["indicators"])
+    resolved = _resolve_publish_intervention(intervention_slug, body.outcome_ids)
+    packaged = (
+        {"packages": []}
+        if resolved.get("from_mapping")
+        else build_schedule_packages(resolved["indicators"])
+    )
     package_by_id = {item["id"]: item for item in packaged["packages"]}
 
     client = ODKClient()
@@ -425,6 +551,13 @@ async def mel_plan_create_forms(body: MelPlanCreateFormsRequest, user: dict = De
 
     for spec in body.packages:
         package = package_by_id.get(spec.package_id)
+        if package is None and spec.fields:
+            package = {
+                "id": spec.package_id,
+                "title": spec.form_title or spec.package_id.replace("-", " ").title(),
+                "schedule": "cm" if spec.package_id == "cm-mapping" else spec.package_id,
+                "suggested_fields": [],
+            }
         if package is None:
             raise HTTPException(400, f"Unknown or empty package: {spec.package_id}")
 
@@ -518,6 +651,7 @@ async def mel_plan_create_forms(body: MelPlanCreateFormsRequest, user: dict = De
     except Exception as exc:
         logger.warning("Could not build Collect QR after publish: %s", exc)
 
+    existing_plan_json = plan.get("plan_json") if isinstance(plan.get("plan_json"), dict) else {}
     with db_cursor() as cur:
         cur.execute(
             """
@@ -530,7 +664,10 @@ async def mel_plan_create_forms(body: MelPlanCreateFormsRequest, user: dict = De
                 "project_id": body.project_id,
                 "plan_json": json.dumps(
                     {
-                        "outcome_ids": body.outcome_ids,
+                        **existing_plan_json,
+                        "outcome_ids": body.outcome_ids
+                        or existing_plan_json.get("outcome_ids")
+                        or [],
                         "published_packages": [s.package_id for s in body.packages],
                     }
                 ),

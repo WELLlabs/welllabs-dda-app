@@ -137,6 +137,7 @@ CREATE TABLE mel_plans (
     project_id          UUID NOT NULL REFERENCES assess_projects(id) ON DELETE CASCADE,
     name                TEXT NOT NULL,
     intervention_slug   TEXT NOT NULL,
+    kind                TEXT NOT NULL DEFAULT 'plan' CHECK (kind IN ('plan', 'implementation')),
     plan_json           JSONB,
     created_by          UUID REFERENCES users(id),
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -145,6 +146,39 @@ CREATE TABLE mel_plans (
 
 CREATE INDEX mel_plans_project_id_idx ON mel_plans (project_id);
 CREATE INDEX mel_plans_intervention_slug_idx ON mel_plans (intervention_slug);
+CREATE INDEX mel_plans_kind_idx ON mel_plans (kind);
+
+-- Farm-pond (and later) assets allocated via one_time survey answers
+CREATE TABLE mel_assets (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    project_id          UUID NOT NULL REFERENCES assess_projects(id) ON DELETE CASCADE,
+    plan_id             UUID NOT NULL REFERENCES mel_plans(id) ON DELETE CASCADE,
+    intervention_slug   TEXT NOT NULL,
+    label               TEXT NOT NULL DEFAULT '',
+    ot_answers          JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_by          UUID REFERENCES users(id),
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX mel_assets_project_id_idx ON mel_assets (project_id);
+CREATE INDEX mel_assets_plan_id_idx ON mel_assets (plan_id);
+
+CREATE TABLE mel_cm_readings (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    project_id      UUID NOT NULL REFERENCES assess_projects(id) ON DELETE CASCADE,
+    plan_id         UUID NOT NULL REFERENCES mel_plans(id) ON DELETE CASCADE,
+    asset_id        UUID NOT NULL REFERENCES mel_assets(id) ON DELETE CASCADE,
+    reading_date    DATE,
+    rainfall_mm     DOUBLE PRECISION,
+    water_level_m   DOUBLE PRECISION,
+    payload         JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX mel_cm_readings_plan_id_idx ON mel_cm_readings (plan_id);
+CREATE INDEX mel_cm_readings_asset_id_idx ON mel_cm_readings (asset_id);
+CREATE INDEX mel_cm_readings_date_idx ON mel_cm_readings (reading_date);
 
 -- MEL forms published into the shared ODK_PROJECT_ID, owned by a mel plan
 CREATE TABLE mel_forms (
@@ -288,6 +322,10 @@ CREATE TRIGGER assess_projects_updated_at
 
 CREATE TRIGGER mel_plans_updated_at
     BEFORE UPDATE ON mel_plans
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TRIGGER mel_assets_updated_at
+    BEFORE UPDATE ON mel_assets
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 CREATE TRIGGER observation_zones_updated_at

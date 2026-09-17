@@ -3,6 +3,7 @@ import { assessCrumbs } from '../modules/assess/breadcrumbs.js';
 
 const project = { id: 'p1', name: 'Yavatmal', slug: 'yavatmal' };
 const plan = { id: 'pl1', name: 'BME plan' };
+const impl = { id: 'pl2', name: 'Medak farm pond', kind: 'implementation' };
 
 describe('assessCrumbs', () => {
 	it('shows Assess on the project picker', () => {
@@ -19,15 +20,23 @@ describe('assessCrumbs', () => {
 	it('includes project and plan on a plan page', () => {
 		expect(assessCrumbs({ projects: [project], project, plan })).toEqual([
 			{ label: 'Assess', href: '/assess' },
-			{ label: 'Yavatmal', href: '/wst/assess/yavatmal' },
+			{ label: 'Yavatmal', href: '/wst/assess/yavatmal?tab=plans' },
 			{ label: 'BME plan' }
+		]);
+	});
+
+	it('links the project crumb to the implementation tab', () => {
+		expect(assessCrumbs({ projects: [project], project, plan: impl })).toEqual([
+			{ label: 'Assess', href: '/assess' },
+			{ label: 'Yavatmal', href: '/wst/assess/yavatmal?tab=implementation' },
+			{ label: 'Medak farm pond' }
 		]);
 	});
 
 	it('includes form name on form explore', () => {
 		expect(assessCrumbs({ projects: [project], project, plan, form: 'Survey A' })).toEqual([
 			{ label: 'Assess', href: '/assess' },
-			{ label: 'Yavatmal', href: '/wst/assess/yavatmal' },
+			{ label: 'Yavatmal', href: '/wst/assess/yavatmal?tab=plans' },
 			{ label: 'BME plan', href: '/wst/assess/yavatmal/plans/pl1' },
 			{ label: 'Survey A' }
 		]);

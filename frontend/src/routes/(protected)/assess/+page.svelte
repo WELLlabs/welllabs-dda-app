@@ -3,7 +3,7 @@
 </script>
 
 <svelte:head>
-	<title>Assess · MEL projects</title>
+	<title>Assess</title>
 </svelte:head>
 
 <div class="min-h-screen bg-transparent">

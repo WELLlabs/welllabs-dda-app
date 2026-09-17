@@ -2,7 +2,6 @@
 	import { appPath } from '$lib/shared/paths.js';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
-	import { onMount } from 'svelte';
 	import { findBySlug } from '$lib/shared/slug.js';
 	import MelProjectHome from '$lib/modules/assess/components/MelProjectHome.svelte';
 	import { fetchMelProjects } from '$lib/modules/assess/mel-api';
@@ -13,7 +12,10 @@
 	let loading = $state(true);
 	let error = $state('');
 
-	onMount(load);
+	$effect(() => {
+		void slug;
+		load();
+	});
 
 	async function load() {
 		loading = true;
