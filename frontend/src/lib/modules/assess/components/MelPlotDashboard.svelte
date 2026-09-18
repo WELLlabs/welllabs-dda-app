@@ -75,7 +75,13 @@
 			projects,
 			project,
 			plan,
-			tail: [{ label: data?.asset?.label || 'Farm plot' }]
+			tail: [
+				{
+					label: controlAsset
+						? `Pair · ${(treatAsset?.label || 'Treatment').replace(/\s*—\s*.*$/, '')}`
+						: data?.asset?.label || 'Farm plot'
+				}
+			]
 		})
 	);
 
@@ -86,8 +92,13 @@
 	const latestSm = $derived(series.length ? series[series.length - 1] : null);
 	const latestPoints = $derived(calcs.latest_sm_points || data?.visual?.latest_sm_points || {});
 
-	const location = $derived.by(() => {
-		const raw = String(ot.bm_ot_location || '').trim();
+	const treatAsset = $derived(data?.pair?.treatment || data?.asset || null);
+	const controlAsset = $derived(data?.pair?.control || null);
+	const treatOt = $derived(treatAsset?.ot_answers || ot);
+	const controlOt = $derived(controlAsset?.ot_answers || {});
+
+	function parseLoc(answers) {
+		const raw = String(answers?.bm_ot_location || '').trim();
 		let lat = null;
 		let lon = null;
 		if (raw) {
@@ -100,7 +111,7 @@
 				lon = parts[1];
 			}
 		}
-		const place = [ot.bm_ot_village_name, ot.bm_ot_block_name, ot.bm_ot_district_name]
+		const place = [answers?.bm_ot_village_name, answers?.bm_ot_block_name, answers?.bm_ot_district_name]
 			.map((v) => String(v || '').trim())
 			.filter(Boolean);
 		return {
@@ -109,11 +120,18 @@
 			coordsLabel:
 				lat != null && lon != null ? `${lat.toFixed(5)}, ${lon.toFixed(5)}` : raw || null,
 			placeLabel: place.length ? place.join(' · ') : null,
-			farmer: String(ot.bm_ot_farmer_name || '').trim() || null,
-			crop: String(ot.bm_ot_crop_grown || '').trim() || null,
-			season: String(ot.bm_ot_agriculture_season || '').trim() || null
+			farmer: String(answers?.bm_ot_farmer_name || '').trim() || null,
+			crop: String(answers?.bm_ot_crop_grown || '').trim() || null,
+			season: String(answers?.bm_ot_agriculture_season || '').trim() || null,
+			role: String(answers?.bm_ot_plot_role || '').trim() || null,
+			area: answers?.bm_ot_area_under_the_crop,
+			areaUnit: String(answers?.bm_ot_area_unit || '').trim() || null
 		};
-	});
+	}
+
+	const treatLoc = $derived(parseLoc(treatOt));
+	const controlLoc = $derived(parseLoc(controlOt));
+	const location = $derived(treatLoc);
 
 	const heatValueField = $derived(heatMetric === 'soil_moisture' ? 'sm_plot_pct' : null);
 	const heatScale = $derived(heatMetric === 'soil_moisture' ? SM_SCALE : null);
@@ -334,8 +352,26 @@
 
 	$effect(() => {
 		if (!mapEl || loading || error) return;
-		const { lat, lon } = location;
-		if (lat == null || lon == null) {
+		const points = [];
+		if (treatLoc.lat != null && treatLoc.lon != null) {
+			points.push({
+				id: 'treatment',
+				lat: treatLoc.lat,
+				lon: treatLoc.lon,
+				color: '#166534',
+				label: 'T'
+			});
+		}
+		if (controlLoc.lat != null && controlLoc.lon != null) {
+			points.push({
+				id: 'control',
+				lat: controlLoc.lat,
+				lon: controlLoc.lon,
+				color: '#2563eb',
+				label: 'C'
+			});
+		}
+		if (!points.length) {
 			if (map) {
 				map.remove();
 				map = null;
@@ -343,30 +379,43 @@
 			return;
 		}
 
+		const centerLon = points.reduce((s, p) => s + p.lon, 0) / points.length;
+		const centerLat = points.reduce((s, p) => s + p.lat, 0) / points.length;
+
 		if (!map) {
 			map = new maplibregl.Map({
 				container: mapEl,
 				style: {
 					version: 8,
 					sources: {
-						osm: {
+						satellite: {
 							type: 'raster',
-							tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+							tiles: [
+								'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+							],
 							tileSize: 256,
-							attribution: '© OpenStreetMap'
+							attribution: 'Esri World Imagery'
 						}
 					},
-					layers: [{ id: 'osm', type: 'raster', source: 'osm' }]
+					layers: [{ id: 'satellite', type: 'raster', source: 'satellite' }]
 				},
-				center: [lon, lat],
-				zoom: 13,
+				center: [centerLon, centerLat],
+				zoom: points.length > 1 ? 16 : 15,
 				interactive: true
 			});
 			map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
-			map.on('load', () => ensureMarker(lat, lon));
+			map.on('load', () => ensurePairMarkers(points));
 		} else {
-			map.setCenter([lon, lat]);
-			ensureMarker(lat, lon);
+			map.setCenter([centerLon, centerLat]);
+			ensurePairMarkers(points);
+			if (points.length > 1) {
+				const bounds = new maplibregl.LngLatBounds(
+					[points[0].lon, points[0].lat],
+					[points[0].lon, points[0].lat]
+				);
+				for (const p of points) bounds.extend([p.lon, p.lat]);
+				map.fitBounds(bounds, { padding: 48, maxZoom: 17 });
+			}
 		}
 
 		const ro = new ResizeObserver(() => {
@@ -430,44 +479,75 @@
 	}
 
 	const assetInfoRows = $derived.by(() => {
-		const entries = Object.entries(ot || {}).filter(([, v]) => v != null && v !== '');
-		entries.sort(([a], [b]) => a.localeCompare(b));
-		return entries.map(([key, value]) => ({
-			key,
-			label: humanizeOtKey(key),
-			value: fmtOtValue(value)
-		}));
+		/** @type {{key: string, label: string, value: string}[]} */
+		const rows = [];
+		function pushAnswers(prefix, answers) {
+			const entries = Object.entries(answers || {}).filter(([, v]) => v != null && v !== '');
+			entries.sort(([a], [b]) => a.localeCompare(b));
+			for (const [key, value] of entries) {
+				rows.push({
+					key: `${prefix}:${key}`,
+					label: `${prefix} · ${humanizeOtKey(key)}`,
+					value: fmtOtValue(value)
+				});
+			}
+		}
+		pushAnswers('T', treatOt);
+		if (controlAsset) pushAnswers('C', controlOt);
+		return rows;
 	});
 
-	function ensureMarker(lat, lon) {
+	function ensurePairMarkers(points) {
 		if (!map) return;
-		const id = 'asset-point';
+		const id = 'pair-points';
 		const src = {
 			type: 'FeatureCollection',
-			features: [
-				{
-					type: 'Feature',
-					geometry: { type: 'Point', coordinates: [lon, lat] },
-					properties: {}
-				}
-			]
+			features: points.map((p) => ({
+				type: 'Feature',
+				geometry: { type: 'Point', coordinates: [p.lon, p.lat] },
+				properties: { id: p.id, color: p.color, label: p.label }
+			}))
 		};
 		if (map.getSource(id)) {
 			/** @type {any} */ (map.getSource(id)).setData(src);
-			return;
+		} else {
+			map.addSource(id, { type: 'geojson', data: src });
+			map.addLayer({
+				id: `${id}-circle`,
+				type: 'circle',
+				source: id,
+				paint: {
+					'circle-radius': 9,
+					'circle-color': ['get', 'color'],
+					'circle-stroke-width': 2,
+					'circle-stroke-color': '#ffffff'
+				}
+			});
+			map.addLayer({
+				id: `${id}-label`,
+				type: 'symbol',
+				source: id,
+				layout: {
+					'text-field': ['get', 'label'],
+					'text-size': 11,
+					'text-offset': [0, 1.25],
+					'text-anchor': 'top'
+				},
+				paint: {
+					'text-color': '#ffffff',
+					'text-halo-color': '#0f172a',
+					'text-halo-width': 1.4
+				}
+			});
 		}
-		map.addSource(id, { type: 'geojson', data: src });
-		map.addLayer({
-			id: `${id}-circle`,
-			type: 'circle',
-			source: id,
-			paint: {
-				'circle-radius': 8,
-				'circle-color': '#166534',
-				'circle-stroke-width': 2,
-				'circle-stroke-color': '#ffffff'
-			}
-		});
+		if (points.length > 1) {
+			const bounds = new maplibregl.LngLatBounds(
+				[points[0].lon, points[0].lat],
+				[points[0].lon, points[0].lat]
+			);
+			for (const p of points) bounds.extend([p.lon, p.lat]);
+			map.fitBounds(bounds, { padding: 48, maxZoom: 17 });
+		}
 	}
 
 	function panCalendar(deltaMonths) {
@@ -917,9 +997,21 @@
 		<button
 			type="button"
 			onclick={() =>
-				goto(`${slugBase}/plans/${plan.id}/new?assets=1&asset=${encodeURIComponent(assetId)}`)}
-			>Edit farm plot</button
+				goto(
+					`${slugBase}/plans/${plan.id}/new?assets=1&asset=${encodeURIComponent(treatAsset?.id || assetId)}`
+				)}
+			>Edit treatment plot</button
 		>
+		{#if controlAsset?.id}
+			<button
+				type="button"
+				onclick={() =>
+					goto(
+						`${slugBase}/plans/${plan.id}/new?assets=1&asset=${encodeURIComponent(controlAsset.id)}`
+					)}
+				>Edit control plot</button
+			>
+		{/if}
 		<button type="button" onclick={() => goto(`${slugBase}/plans/${plan.id}`)}>Back to intervention</button>
 	</ModuleHeader>
 
@@ -940,41 +1032,96 @@
 									/></svg>
 								</div>
 								<div class="loc-text">
-									<p class="info-kicker">Farm plot</p>
-									<h1 class="info-title">{data.asset?.label || 'Farm plot'}</h1>
-									{#if location.coordsLabel || location.placeLabel}
+									<p class="info-kicker">{controlAsset ? 'Treatment · Control pair' : 'Farm plot'}</p>
+									<h1 class="info-title">
+										{(treatAsset?.label || data.asset?.label || 'Treatment').replace(/\s*—\s*.*$/, '')}
+										{#if controlAsset}
+											<span class="info-sep"> · </span>
+											{(controlAsset.label || 'Control').replace(/\s*—\s*.*$/, '')}
+										{/if}
+									</h1>
+									{#if treatLoc.placeLabel || controlLoc.placeLabel}
 										<p class="info-sub">
-											{#if location.coordsLabel}<span class="info-coords">{location.coordsLabel}</span>{/if}
-											{#if location.coordsLabel && location.placeLabel}<span class="info-sep"> · </span>{/if}
-											{#if location.placeLabel}<span class="info-place">{location.placeLabel}</span>{/if}
+											<span class="info-place">{treatLoc.placeLabel || controlLoc.placeLabel}</span>
 										</p>
 									{/if}
 								</div>
 							</div>
 
+							<div class="pair-panels">
+								<div class="pair-panel pair-panel-t">
+									<p class="pair-kicker">Treatment</p>
+									<p class="pair-name">{treatAsset?.label || '—'}</p>
+									<dl class="info-list">
+										{#if treatLoc.farmer}
+											<div class="info-row">
+												<dt class="info-dt">Farmer</dt>
+												<dd class="info-dd">{treatLoc.farmer}</dd>
+											</div>
+										{/if}
+										{#if treatLoc.crop || treatLoc.season}
+											<div class="info-row">
+												<dt class="info-dt">Crop</dt>
+												<dd class="info-dd">{[treatLoc.crop, treatLoc.season].filter(Boolean).join(' · ')}</dd>
+											</div>
+										{/if}
+										{#if treatLoc.area != null}
+											<div class="info-row">
+												<dt class="info-dt">Area</dt>
+												<dd class="info-dd">{fmt(treatLoc.area)} {treatLoc.areaUnit || ''}</dd>
+											</div>
+										{/if}
+										{#if treatLoc.coordsLabel}
+											<div class="info-row">
+												<dt class="info-dt">Coords</dt>
+												<dd class="info-dd info-coords">{treatLoc.coordsLabel}</dd>
+											</div>
+										{/if}
+									</dl>
+								</div>
+								{#if controlAsset}
+									<div class="pair-panel pair-panel-c">
+										<p class="pair-kicker">Control</p>
+										<p class="pair-name">{controlAsset.label || '—'}</p>
+										<dl class="info-list">
+											{#if controlLoc.farmer}
+												<div class="info-row">
+													<dt class="info-dt">Farmer</dt>
+													<dd class="info-dd">{controlLoc.farmer}</dd>
+												</div>
+											{/if}
+											{#if controlLoc.crop || controlLoc.season}
+												<div class="info-row">
+													<dt class="info-dt">Crop</dt>
+													<dd class="info-dd">{[controlLoc.crop, controlLoc.season].filter(Boolean).join(' · ')}</dd>
+												</div>
+											{/if}
+											{#if controlLoc.area != null}
+												<div class="info-row">
+													<dt class="info-dt">Area</dt>
+													<dd class="info-dd">{fmt(controlLoc.area)} {controlLoc.areaUnit || ''}</dd>
+												</div>
+											{/if}
+											{#if controlLoc.coordsLabel}
+												<div class="info-row">
+													<dt class="info-dt">Coords</dt>
+													<dd class="info-dd info-coords">{controlLoc.coordsLabel}</dd>
+												</div>
+											{/if}
+										</dl>
+									</div>
+								{:else}
+									<div class="pair-panel pair-panel-missing">
+										<p class="pair-kicker">Control</p>
+										<p class="pair-name">Not linked</p>
+										<p class="m-0 text-xs text-amber-800">
+											Set plot role to Treatment and choose a paired control in farm-plot allocation.
+										</p>
+									</div>
+								{/if}
+							</div>
+
 							<dl class="info-list">
-								{#if location.farmer}
-									<div class="info-row">
-										<dt class="info-dt">
-											<svg class="info-ico" viewBox="0 0 16 16" aria-hidden="true"
-												><path fill="currentColor" d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm0 1.5c-2.5 0-4.5 1.3-4.5 3V14h9v-1.5c0-1.7-2-3-4.5-3z"
-											/></svg>
-											Farmer
-										</dt>
-										<dd class="info-dd">{location.farmer}</dd>
-									</div>
-								{/if}
-								{#if location.crop || location.season}
-									<div class="info-row">
-										<dt class="info-dt">
-											<svg class="info-ico" viewBox="0 0 16 16" aria-hidden="true"
-												><path fill="currentColor" d="M8 1.2C5.8 3.8 4 5.9 4 8a4 4 0 1 0 8 0c0-2.1-1.8-4.2-4-6.8z"
-											/></svg>
-											Crop
-										</dt>
-										<dd class="info-dd">{[location.crop, location.season].filter(Boolean).join(' · ')}</dd>
-									</div>
-								{/if}
 								<div class="info-row">
 									<dt class="info-dt">
 										<svg class="info-ico" viewBox="0 0 16 16" aria-hidden="true"
@@ -984,20 +1131,6 @@
 									</dt>
 									<dd class="info-dd">{data.reading_count ?? series.length}</dd>
 								</div>
-								{#if calcs.area_under_crop != null}
-									<div class="info-row">
-										<dt class="info-dt">
-											<svg class="info-ico" viewBox="0 0 16 16" aria-hidden="true"
-												><rect x="2.5" y="2.5" width="11" height="11" rx="1" stroke="currentColor" stroke-width="1.4" fill="none"
-											/></svg>
-											Plot area
-										</dt>
-										<dd class="info-dd">
-											{fmt(calcs.area_under_crop)} {calcs.area_unit || ''}
-											{#if calcs.area_m2 != null}<span class="info-place"> · {fmt(calcs.area_m2)} m²</span>{/if}
-										</dd>
-									</div>
-								{/if}
 								<div class="info-row">
 									<dt class="info-dt">
 										<svg class="info-ico" viewBox="0 0 16 16" aria-hidden="true"
@@ -1020,14 +1153,17 @@
 								<h2 class="panel-title">Location map</h2>
 							</div>
 							<div class="map-frame">
-								{#if location.lat != null && location.lon != null}
+								{#if (treatLoc.lat != null && treatLoc.lon != null) || (controlLoc.lat != null && controlLoc.lon != null)}
 									<div bind:this={mapEl} class="map-host"></div>
 								{:else}
 									<div class="map-fallback">No coordinates available.</div>
 								{/if}
 							</div>
 							<div class="map-legend">
-								<span class="legend-item"><span class="legend-dot legend-dot-plot"></span> Farm plot</span>
+								<span class="legend-item"><span class="legend-dot legend-dot-plot"></span> Treatment</span>
+								{#if controlAsset}
+									<span class="legend-item"><span class="legend-dot legend-dot-control"></span> Control</span>
+								{/if}
 							</div>
 						</div>
 					</section>
@@ -2122,6 +2258,59 @@
 	.legend-dot-plot {
 		background: #166534;
 		box-shadow: 0 0 0 1px rgba(22, 101, 52, 0.35);
+	}
+	.legend-dot-control {
+		background: #2563eb;
+		box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.35);
+	}
+	.pair-panels {
+		display: flex;
+		flex-direction: column;
+		gap: 0.4rem;
+		margin: 0.35rem 0 0.15rem;
+		flex: none;
+	}
+	.pair-panel {
+		border-radius: 0.5rem;
+		border: 1px solid rgba(22, 101, 52, 0.18);
+		background: #f0fdf4;
+		padding: 0.45rem 0.55rem;
+	}
+	.pair-panel-c {
+		border-color: rgba(37, 99, 235, 0.22);
+		background: #eff6ff;
+	}
+	.pair-panel-missing {
+		border-color: rgba(180, 83, 9, 0.25);
+		background: #fffbeb;
+	}
+	.pair-kicker {
+		margin: 0;
+		font-size: 9px;
+		font-weight: 700;
+		letter-spacing: 0.1em;
+		text-transform: uppercase;
+		color: #166534;
+	}
+	.pair-panel-c .pair-kicker {
+		color: #1d4ed8;
+	}
+	.pair-name {
+		margin: 0.1rem 0 0.25rem;
+		font-size: 0.82rem;
+		font-weight: 700;
+		color: #0f2744;
+		line-height: 1.25;
+	}
+	.pair-panel .info-list {
+		padding: 0;
+	}
+	.pair-panel .info-row {
+		padding: 0.28rem 0;
+	}
+	.pair-panel .info-dd {
+		padding-left: 0;
+		font-size: 0.78rem;
 	}
 	.dims-swatch-ridge {
 		background: #bbf7d0;

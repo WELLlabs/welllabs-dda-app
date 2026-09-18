@@ -293,7 +293,7 @@ def seed_db(plots: dict[str, dict]) -> dict:
                     if role == "treatment"
                     else ["Flood irrigation"],
                     "bm_ot_last_irrigation_applied": "No",
-                    "bm_ot_plot_role": role,
+                    "bm_ot_plot_role": "Treatment" if role == "treatment" else "Control",
                 }
                 if not asset_id:
                     asset_id = str(uuid.uuid4())
@@ -324,7 +324,7 @@ def seed_db(plots: dict[str, dict]) -> dict:
                 row = cur.fetchone() or {}
                 answers = dict(row.get("ot_answers") or {})
                 answers["bm_ot_paired_control_asset_id"] = control_id
-                answers["bm_ot_plot_role"] = "treatment"
+                answers["bm_ot_plot_role"] = "Treatment"
                 cur.execute(
                     """
                     UPDATE mel_assets

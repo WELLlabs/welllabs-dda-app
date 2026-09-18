@@ -1021,6 +1021,7 @@ def _local_cm_rows(plan_id: str, project_id: str) -> list[dict]:
                 payload.setdefault("bm_cm_date_of_reading", iso)
             if row.get("rainfall_mm") is not None:
                 payload.setdefault("fp_cm_rainfall", row["rainfall_mm"])
+                payload.setdefault("bm_cm_rainfall", row["rainfall_mm"])
                 payload.setdefault(
                     "bm_cm_rainfall_recorded_since_last_irrigation", row["rainfall_mm"]
                 )
@@ -1195,9 +1196,49 @@ async def asset_dashboard(
         asset_id=str(asset["id"]),
         sibling_ot=sibling_ot,
     )
+    calcs = metrics.get("calculations") or {}
+    treat_id = calcs.get("paired_treatment_asset_id")
+    control_id = calcs.get("paired_control_asset_id")
+    by_id = {str(a["id"]): a for a in assets}
+    treat_asset = by_id.get(str(treat_id)) if treat_id else None
+    control_asset = by_id.get(str(control_id)) if control_id else None
+    role = str((asset.get("ot_answers") or {}).get("bm_ot_plot_role") or "").strip().lower()
+    # Prefer opening the treatment asset as the canonical pair dashboard entry.
+    if (
+        treat_asset
+        and str(asset["id"]) != str(treat_asset["id"])
+        and role == "control"
+    ):
+        sibling_ot = [
+            (str(other["id"]), other.get("ot_answers") or {})
+            for other in assets
+            if str(other["id"]) != str(treat_asset["id"])
+        ]
+        metrics = compute_asset_metrics(
+            treat_asset.get("intervention_slug") or plan.get("intervention_slug"),
+            ot_answers=treat_asset.get("ot_answers") or {},
+            cm_submissions=cm_data,
+            asset_id=str(treat_asset["id"]),
+            sibling_ot=sibling_ot,
+        )
+        asset = treat_asset
+        calcs = metrics.get("calculations") or {}
+        treat_id = calcs.get("paired_treatment_asset_id") or str(treat_asset["id"])
+        control_id = calcs.get("paired_control_asset_id")
+        treat_asset = by_id.get(str(treat_id)) if treat_id else treat_asset
+        control_asset = by_id.get(str(control_id)) if control_id else None
+    elif treat_asset is None:
+        # Unpaired plot — surface the opened asset alone.
+        treat_asset = asset
+        if control_asset and str(control_asset["id"]) == str(asset["id"]):
+            control_asset = None
     return {
         "plan": mel_plan_to_dict(plan),
         "asset": mel_asset_to_dict(asset),
+        "pair": {
+            "treatment": mel_asset_to_dict(treat_asset) if treat_asset else None,
+            "control": mel_asset_to_dict(control_asset) if control_asset else None,
+        },
         **metrics,
     }
 

@@ -84,6 +84,22 @@
 		otCards.filter((c) => c.included && evaluateSkip(c.skip_logic, answers))
 	);
 
+	/** Control-plot options for treatment→control pairing (value = asset id). */
+	const controlPairOptions = $derived.by(() => {
+		return (assets || [])
+			.filter((a) => a.id !== editingAssetId)
+			.map((a) => {
+				const ot = a.ot_answers || a.otAnswers || {};
+				const role = String(ot.bm_ot_plot_role || '').trim().toLowerCase();
+				return {
+					value: String(a.id),
+					label: a.label || String(a.id),
+					isControl: role === 'control'
+				};
+			})
+			.sort((a, b) => Number(b.isControl) - Number(a.isControl) || a.label.localeCompare(b.label));
+	});
+
 	const includedCmCards = $derived(includedCards(cmCards));
 	const plotMode = $derived(interventionSlug === 'pmds' || interventionSlug === 'bio-mulching');
 	const assetNoun = $derived(plotMode ? 'farm plot' : 'asset');
@@ -249,6 +265,19 @@
 			const payload = {};
 			for (const c of visibleOtCards) {
 				payload[c.id] = answers[c.id] ?? '';
+			}
+			// Always persist pairing fields when present on cards (even if skip-hidden).
+			const roleCard = otCards.find((c) => c.id === 'bm_ot_plot_role');
+			if (roleCard?.included) {
+				payload.bm_ot_plot_role = answers.bm_ot_plot_role ?? payload.bm_ot_plot_role ?? '';
+			}
+			const pairCard = otCards.find((c) => c.id === 'bm_ot_paired_control_asset_id');
+			if (pairCard?.included) {
+				const role = String(payload.bm_ot_plot_role || answers.bm_ot_plot_role || '')
+					.trim()
+					.toLowerCase();
+				payload.bm_ot_paired_control_asset_id =
+					role === 'treatment' ? answers.bm_ot_paired_control_asset_id || '' : '';
 			}
 			if (editingAssetId) {
 				await updateMelAsset(projectId, planId, editingAssetId, { otAnswers: payload });
@@ -610,13 +639,24 @@
 					{#if assets.length}
 						<ul class="mt-3 m-0 grid list-none gap-2 p-0 sm:grid-cols-2">
 							{#each assets as asset (asset.id)}
+								{@const ot = asset.ot_answers || {}}
+								{@const role = String(ot.bm_ot_plot_role || '').trim()}
+								{@const pairId = String(ot.bm_ot_paired_control_asset_id || '').trim()}
+								{@const pairLabel = pairId
+									? assets.find((a) => String(a.id) === pairId)?.label || pairId.slice(0, 8)
+									: null}
 								<li
 									class="flex items-center justify-between gap-2 rounded-xl border border-brand-navy/10 px-3 py-3"
 								>
 									<span class="min-w-0">
 										<span class="block truncate text-sm font-medium text-brand-navy"
-											>{asset.label || (plotMode ? 'Farm plot' : 'Asset')}</span>
+											>{asset.label || (plotMode ? 'Farm plot' : 'Asset')}</span
 										>
+										{#if plotMode && (role || pairLabel)}
+											<span class="mt-0.5 block truncate text-[11px] text-brand-steel">
+												{role || 'Unassigned role'}{#if pairLabel} · Control: {pairLabel}{/if}
+											</span>
+										{/if}
 									</span>
 									<span class="flex shrink-0 gap-2 text-xs">
 										<button
@@ -657,7 +697,25 @@
 										{#if card.metric}
 											<span class="mt-0.5 block text-[11px] text-brand-steel">{card.metric}</span>
 										{/if}
-										{#if card.input_type === 'select_one' || card.input_type === 'select_one_yes_no'}
+										{#if card.id === 'bm_ot_paired_control_asset_id'}
+											<select
+												class="mt-2 w-full rounded-lg border border-brand-navy/20 px-2.5 py-1.5"
+												value={answers[card.id] ?? ''}
+												onchange={(e) => setAnswer(card.id, e.currentTarget.value)}
+											>
+												<option value="">Select control plot…</option>
+												{#each controlPairOptions as opt}
+													<option value={opt.value}
+														>{opt.label}{opt.isControl ? '' : ' (not marked control)'}</option
+													>
+												{/each}
+											</select>
+											{#if !controlPairOptions.length}
+												<span class="mt-1 block text-[11px] text-amber-700"
+													>Add a control farm plot first, then link it here.</span
+												>
+											{/if}
+										{:else if card.input_type === 'select_one' || card.input_type === 'select_one_yes_no'}
 											<select
 												class="mt-2 w-full rounded-lg border border-brand-navy/20 px-2.5 py-1.5"
 												value={answers[card.id] ?? ''}

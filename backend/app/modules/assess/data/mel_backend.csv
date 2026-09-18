@@ -36,6 +36,8 @@ Bio-mulching,,District name,one time,,,,text,bm_ot_district_name,,
 Bio-mulching,,Block name,one time,,,,text,bm_ot_block_name,,
 Bio-mulching,,Village name,one time,,,,text,bm_ot_village_name,,
 Bio-mulching,,Farmer name,one time,,,,text,bm_ot_farmer_name,,
+Bio-mulching,,Plot role,one time,,,,single select,bm_ot_plot_role,Treatment | Control,
+Bio-mulching,,Paired control plot,one time,,,,single select,bm_ot_paired_control_asset_id,,show if bm_ot_plot_role = Treatment
 Bio-mulching,,Agriculture season,one time,,,,single select,bm_ot_agriculture_season,Kharif | Rabi | Zaid,
 Bio-mulching,,Crop grown,one time,,CM survey has a lifecycle of a season,,text,bm_ot_crop_grown,,
 Bio-mulching,Reduced irrigation water applied (rabi/zaid) (availability),Area under the crop,one time,Irrigation water volumetric savings (m3),Agriculture acreage and crop mix remains the same,acre/bigha,decimal,bm_ot_area_under_the_crop,,

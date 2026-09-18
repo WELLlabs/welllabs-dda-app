@@ -159,13 +159,46 @@
 		const unit = String(ot?.bm_ot_area_unit || '').trim();
 		const crop = String(ot?.bm_ot_crop_grown || '').trim();
 		const season = String(ot?.bm_ot_agriculture_season || '').trim();
+		const role = String(ot?.bm_ot_plot_role || '').trim();
 		return {
 			area: Number.isFinite(area) && area > 0 ? area : null,
 			unit: unit || 'acre',
 			crop: crop || null,
-			season: season || null
+			season: season || null,
+			role: role || null
 		};
 	}
+
+	/** Group PMDS assets into treatment–control pair cards for the home grid. */
+	const plotCards = $derived.by(() => {
+		const list = dashboard?.assets || [];
+		if (!isPlot) return list.map((a) => ({ kind: 'asset', id: a.id, asset: a }));
+		const byId = new Map(list.map((a) => [String(a.id), a]));
+		const used = new Set();
+		/** @type {any[]} */
+		const cards = [];
+		for (const a of list) {
+			const ot = a.ot_answers || {};
+			const role = String(ot.bm_ot_plot_role || '').trim().toLowerCase();
+			const controlId = String(ot.bm_ot_paired_control_asset_id || '').trim();
+			if (role === 'treatment' || controlId) {
+				const control = controlId ? byId.get(controlId) : null;
+				used.add(String(a.id));
+				if (control) used.add(String(control.id));
+				cards.push({
+					kind: 'pair',
+					id: a.id,
+					treatment: a,
+					control: control || null
+				});
+			}
+		}
+		for (const a of list) {
+			if (used.has(String(a.id))) continue;
+			cards.push({ kind: 'solo', id: a.id, asset: a });
+		}
+		return cards;
+	});
 
 	function addAssetHref() {
 		return `${slugBase}/plans/${plan.id}/new?assets=1&new=1`;
@@ -430,23 +463,27 @@
 						</p>
 					{:else}
 						<div class="asset-grid">
-							{#each dashboard.assets as asset, i (asset.id)}
-								{@const ot = asset.ot_answers || {}}
+							{#each isPlot ? plotCards : (dashboard.assets || []).map((a) => ({ kind: 'asset', id: a.id, asset: a })) as card, i (card.id)}
+								{@const primary = card.treatment || card.asset}
+								{@const control = card.control || null}
+								{@const ot = primary?.ot_answers || {}}
 								{@const loc = assetCoords(ot)}
 								{@const rect = pondRect(ot)}
 								{@const plot = plotMeta(ot)}
+								{@const controlPlot = control ? plotMeta(control.ot_answers || {}) : null}
+								{@const dashId = primary?.id}
 								<div
 									class="card asset-card"
 									class:in={mounted}
-									style="--accent: #1b75e0; --delay: {i * 50}ms"
+									style="--accent: {isPlot ? '#166534' : '#1b75e0'}; --delay: {i * 50}ms"
 									role="button"
 									tabindex="0"
 									onpointermove={handlePointer}
-									onclick={() => goto(`${slugBase}/plans/${plan.id}/assets/${asset.id}`)}
+									onclick={() => goto(`${slugBase}/plans/${plan.id}/assets/${dashId}`)}
 									onkeydown={(e) => {
 										if (e.key === 'Enter' || e.key === ' ') {
 											e.preventDefault();
-											goto(`${slugBase}/plans/${plan.id}/assets/${asset.id}`);
+											goto(`${slugBase}/plans/${plan.id}/assets/${dashId}`);
 										}
 									}}
 								>
@@ -518,30 +555,60 @@
 												</svg>
 											</div>
 										</div>
-										<h3 class="card-title m-0 font-display text-xl">{asset.label || asset.id}</h3>
-										<p class="card-desc m-0 text-sm">
-											{#if isPlot}
-												{[plot.crop, plot.season, plot.area != null ? `${fmt(plot.area)} ${plot.unit}` : null]
+										{#if isPlot && card.kind === 'pair'}
+											<p class="m-0 text-[10px] font-bold uppercase tracking-wider text-[#166534]">
+												Treatment · Control pair
+											</p>
+											<h3 class="card-title m-0 font-display text-xl">
+												{(primary?.label || 'Treatment').replace(/\s*—\s*.*$/, '')}
+												{#if control}
+													<span class="text-[#6b7885]"> · </span>
+													{(control.label || 'Control').replace(/\s*—\s*.*$/, '')}
+												{/if}
+											</h3>
+											<p class="card-desc m-0 text-sm">
+												T: {[plot.crop, plot.season, plot.area != null ? `${fmt(plot.area)} ${plot.unit}` : null]
 													.filter(Boolean)
-													.join(' · ') || 'Plot details —'}
-											{:else if rect.length && rect.breadth && rect.height}
-												{fmt(rect.length)} × {fmt(rect.breadth)} × {fmt(rect.height)} m
-											{:else}
-												Dimensions —
-											{/if}
-										</p>
-										<p class="m-0 font-mono text-[11px] tracking-wide text-[#6b7885]">
-											{#if isPlot}
-												SM savings {fmt(asset.calculations?.sm_water_savings_m3)} m³ · Readings
-												{asset.reading_count ?? 0}
-											{:else}
-												Storage {fmt(asset.calculations?.volumetric_storage_m3)} m³ · Readings
-												{asset.reading_count ?? 0}
-											{/if}
-										</p>
+													.join(' · ') || '—'}
+												{#if control}
+													<br />
+													C: {[controlPlot?.crop, controlPlot?.season, controlPlot?.area != null ? `${fmt(controlPlot.area)} ${controlPlot.unit}` : null]
+														.filter(Boolean)
+														.join(' · ') || control.label}
+												{:else}
+													<br /><span class="text-amber-700">No control linked yet</span>
+												{/if}
+											</p>
+											<p class="m-0 font-mono text-[11px] tracking-wide text-[#6b7885]">
+												SM savings {fmt(primary?.calculations?.sm_water_savings_m3)} m³ · Readings
+												{(primary?.reading_count ?? 0) + (control?.reading_count ?? 0)}
+											</p>
+										{:else}
+											<h3 class="card-title m-0 font-display text-xl">{primary?.label || primary?.id}</h3>
+											<p class="card-desc m-0 text-sm">
+												{#if isPlot}
+													{[plot.role, plot.crop, plot.season, plot.area != null ? `${fmt(plot.area)} ${plot.unit}` : null]
+														.filter(Boolean)
+														.join(' · ') || 'Plot details —'}
+												{:else if rect.length && rect.breadth && rect.height}
+													{fmt(rect.length)} × {fmt(rect.breadth)} × {fmt(rect.height)} m
+												{:else}
+													Dimensions —
+												{/if}
+											</p>
+											<p class="m-0 font-mono text-[11px] tracking-wide text-[#6b7885]">
+												{#if isPlot}
+													SM savings {fmt(primary?.calculations?.sm_water_savings_m3)} m³ · Readings
+													{primary?.reading_count ?? 0}
+												{:else}
+													Storage {fmt(primary?.calculations?.volumetric_storage_m3)} m³ · Readings
+													{primary?.reading_count ?? 0}
+												{/if}
+											</p>
+										{/if}
 										<div class="flex w-full items-center justify-between gap-2">
 											<span class="cta mt-1 font-mono text-[12px]">
-												{isPlot ? 'Open plot' : 'Open asset'}
+												{isPlot ? (card.kind === 'pair' ? 'Open pair' : 'Open plot') : 'Open asset'}
 												<svg
 													xmlns="http://www.w3.org/2000/svg"
 													viewBox="0 0 24 24"
@@ -558,7 +625,7 @@
 												class="asset-edit"
 												onclick={(e) => {
 													e.stopPropagation();
-													goto(editAssetHref(asset.id));
+													goto(editAssetHref(dashId));
 												}}
 											>
 												Edit
