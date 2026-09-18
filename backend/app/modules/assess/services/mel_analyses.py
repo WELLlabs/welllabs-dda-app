@@ -281,7 +281,15 @@ def compute_farm_pond_metrics(
             }
         )
 
+    # Simple box volume (L × B × H) used for the "Volume m3" calculation card.
+    volume_m3 = (
+        surface_area * height
+        if surface_area is not None and height is not None
+        else None
+    )
+
     calcs = {
+        "volume_m3": volume_m3,
         "surface_area_m2": surface_area,
         "cum_wl_height_increase_m": cum_wl,
         "number_of_fillings": fillings,
@@ -378,6 +386,7 @@ def compute_pmds_metrics(
     diffs: list[float] = []
     irrigation_vals: list[float] = []
     rain_vals: list[float] = []
+    rain_by_date: dict = {}
     latest_layout = "flat"
     latest_points: dict[str, float | None] = {}
     paired_assets = bool(treat_id and control_id and str(treat_id) != str(control_id))
@@ -390,10 +399,14 @@ def compute_pmds_metrics(
             irrigation_vals.append(ot_irr)
 
     for r in this_rows:
-        rain = _num(r.get("bm_cm_rainfall_recorded_since_last_irrigation"))
+        # Use bm_cm_rainfall (general daily rainfall, same field as farm pond).
+        rain = _num(r.get("bm_cm_rainfall"))
         irr = _irrigation_m3(r, discharge)
         if rain is not None:
             rain_vals.append(rain)
+            d_key = r.get("_date")
+            if d_key is not None:
+                rain_by_date[d_key] = rain
         if irr is not None:
             irrigation_vals.append(irr)
         latest_layout = _plot_sm(r)["layout"] or latest_layout
@@ -431,16 +444,19 @@ def compute_pmds_metrics(
                 "sm_plot_pct": plot_sm,
                 "sm_diff_pct": sm_diff_d,
                 "layout": layout,
+                "daily_rainfall_mm": rain_by_date.get(d),
             }
         )
 
     sm_diff = _mean(diffs)
-    sm_diff_per_unit = (sm_diff / area) if sm_diff is not None and area and area > 0 else None
+    # Total SM water savings: root-zone depth × plot area × Σ(SM_Tn − SM_Cn) / 100.
     sm_savings = (
-        ROOT_ZONE_DEPTH_M * area_m2 * (sm_diff / 100.0)
-        if sm_diff is not None and area_m2 is not None
+        ROOT_ZONE_DEPTH_M * area_m2 * (sum(diffs) / 100.0)
+        if diffs and area_m2 is not None
         else None
     )
+    # Normalized savings: SM water savings (m³) ÷ plot area in survey units.
+    sm_diff_per_unit = (sm_savings / area) if sm_savings is not None and area and area > 0 else None
     irrigation_total = sum(irrigation_vals) if irrigation_vals else 0.0
     cum_rain = sum(rain_vals) if rain_vals else 0.0
     kpi_pct = (sm_savings / kpi * 100.0) if sm_savings is not None and kpi and kpi > 0 else None

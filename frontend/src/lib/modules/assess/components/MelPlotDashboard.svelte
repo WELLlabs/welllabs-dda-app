@@ -158,7 +158,9 @@
 		const smDiff = calcs.sm_diff_pct;
 		const smPer = calcs.sm_diff_per_unit_area_pct;
 		const savings = calcs.sm_water_savings_m3;
+		const cumRain = calcs.cumulative_rainfall_mm;
 		const rz = calcs.root_zone_depth_m ?? 0.4;
+		const nDiffs = series.filter((p) => p.sm_diff_pct != null).length;
 		const pairLabel = hasTcPair
 			? `${smStats.pairedDates} paired dates`
 			: layout === 'raised'
@@ -168,7 +170,7 @@
 		return [
 			{
 				key: 'sm_diff',
-				label: 'SM difference',
+				label: 'Avg SM difference',
 				value: smDiff,
 				unit: '%',
 				icon: 'wl',
@@ -182,34 +184,49 @@
 				raws: [pairLabel, `${smStats.smPts} SM readings`]
 			},
 			{
-				key: 'sm_per',
-				label: 'SM diff / area',
-				value: smPer,
-				unit: `% / ${unit}`,
-				icon: 'fill',
-				formula: 'SM difference ÷ plot area',
-				description:
-					cards.sm_diff_per_unit_area_pct?.description ||
-					'Normalizes treatment-vs-control soil-moisture difference by treated plot area.',
-				how:
-					cards.sm_diff_per_unit_area_pct?.methodology ||
-					'Compute SM_diff (%) as above. Divide by treated plot area from the one-time survey (acre or bigha; 1 bigha ≈ 2529 m²).',
-				raws: [`SM diff ${fmt(smDiff)} %`, `Area ${fmt(area)} ${unit}`]
-			},
-			{
 				key: 'savings',
-				label: 'SM water savings',
+				label: 'Total SM water savings',
 				value: savings,
 				unit: 'm³',
 				icon: 'cube',
-				formula: '0.40 m × area (m²) × SM_diff / 100',
+				formula: '0.40 m × area (m²) × Σ(SM_Tn − SM_Cn) / 100',
 				description:
 					cards.sm_water_savings_m3?.description ||
-					'Converts soil-moisture difference into volumetric water retained in the root zone.',
+					'Converts sum of soil-moisture differences into volumetric water retained in the root zone (m³).',
 				how:
 					cards.sm_water_savings_m3?.methodology ||
-					'Convert plot area to m² (1 bigha ≈ 2529 m²). Apply a 40 cm root-zone depth. SM water savings (m³) = root-zone depth × area × SM difference as a fraction.',
-				raws: [`Root zone ${fmt(rz, 2)} m`, `Area ${fmt(areaM2)} m²`, `SM diff ${fmt(smDiff)} %`]
+					'Apply a fixed 40 cm root-zone depth. SM water savings (m³) = root-zone depth × surface area of treated plot (m²) × Σ(SM_Tn − SM_Cn) / 100.',
+				raws: [`Root zone ${fmt(rz, 2)} m`, `Area ${fmt(areaM2)} m²`, `${nDiffs} paired readings`]
+			},
+			{
+				key: 'sm_per',
+				label: 'Normalized savings',
+				value: smPer,
+				unit: `m³ / ${unit}`,
+				icon: 'fill',
+				formula: 'SM water savings ÷ plot area',
+				description:
+					cards.sm_diff_per_unit_area_pct?.description ||
+					'Normalizes SM water savings (m³) by treated plot area.',
+				how:
+					cards.sm_diff_per_unit_area_pct?.methodology ||
+					'Compute SM water savings (m³) as above. Divide by treated plot area from the one-time survey (acre or bigha; 1 bigha ≈ 2529 m²).',
+				raws: [`SM savings ${fmt(savings)} m³`, `Area ${fmt(area)} ${unit}`]
+			},
+			{
+				key: 'rain',
+				label: 'Cumulative rainfall',
+				value: cumRain,
+				unit: 'mm',
+				icon: 'rain',
+				formula: 'Σ daily rainfall',
+				description:
+					cards.cumulative_rainfall_mm?.description ||
+					'Sums reported daily rainfall over the CM monitoring period for the PMDS plot.',
+				how:
+					cards.cumulative_rainfall_mm?.methodology ||
+					'Sum all CM rainfall (mm) readings for the selected asset over the analysis window.',
+				raws: [`Total ${fmt(cumRain)} mm`]
 			}
 		];
 	});
@@ -474,7 +491,7 @@
 
 		const width = Math.max(280, chartEl.clientWidth || 480);
 		const height = Math.max(180, Math.min(340, chartEl.clientHeight || 240));
-		const margin = { top: 28, right: 18, bottom: 44, left: 48 };
+		const margin = { top: 28, right: 46, bottom: 44, left: 48 };
 
 		const parsed = series
 			.map((p) => ({
@@ -492,6 +509,8 @@
 		const maxSm = Math.max(30, ...(sms.length ? sms : [30]));
 		const hasT = parsed.some((d) => d.sm_t_pct != null);
 		const hasC = parsed.some((d) => d.sm_c_pct != null);
+		const rains = parsed.map((p) => p.daily_rainfall_mm || 0);
+		const maxRain = Math.max(...rains, 1);
 
 		const x = d3
 			.scaleUtc()
@@ -500,6 +519,11 @@
 		const ySm = d3
 			.scaleLinear()
 			.domain([0, maxSm])
+			.range([height - margin.bottom, margin.top]);
+		const yRain = d3
+			.scaleLinear()
+			.domain([0, maxRain * 1.1])
+			.nice()
 			.range([height - margin.bottom, margin.top]);
 
 		const svg = d3
@@ -568,6 +592,26 @@
 			.attr('text-anchor', 'middle')
 			.text('Soil moisture (%)');
 
+		// Right axis for rainfall
+		svg
+			.append('g')
+			.attr('transform', `translate(${width - margin.right},0)`)
+			.call(d3.axisRight(yRain).ticks(5))
+			.call((g) => g.select('.domain').attr('stroke', '#c5ced6'))
+			.selectAll('text')
+			.attr('fill', '#2563eb')
+			.style('font-size', '10px');
+
+		svg
+			.append('text')
+			.attr('x', width - 12)
+			.attr('y', margin.top - 8)
+			.attr('text-anchor', 'end')
+			.attr('fill', '#2563eb')
+			.attr('font-size', 11)
+			.attr('font-weight', 600)
+			.text('Rainfall (mm)');
+
 		svg
 			.append('text')
 			.attr('x', (margin.left + width - margin.right) / 2)
@@ -576,6 +620,22 @@
 			.attr('fill', '#3b4a58')
 			.attr('font-size', 11)
 			.text('Date');
+
+		// Rainfall bars (behind SM lines)
+		const innerW = width - margin.left - margin.right;
+		const barW = Math.max(2, Math.min(10, (innerW / Math.max(parsed.length, 1)) * 0.55));
+		svg
+			.append('g')
+			.selectAll('rect.rain')
+			.data(parsed)
+			.join('rect')
+			.attr('class', 'rain')
+			.attr('x', (d) => x(d._date) - barW / 2)
+			.attr('y', (d) => yRain(d.daily_rainfall_mm || 0))
+			.attr('width', barW)
+			.attr('height', (d) => Math.max(0, yRain(0) - yRain(d.daily_rainfall_mm || 0)))
+			.attr('fill', '#93c5fd')
+			.attr('opacity', 0.75);
 
 		const tColor = '#3f7d3f';
 		const cColor = '#2563eb';
@@ -692,7 +752,8 @@
 					`<strong>${dateLabel}</strong><br/>` +
 						`T: <strong>${d.sm_t_pct != null ? fmt(d.sm_t_pct) + ' %' : '—'}</strong><br/>` +
 						`C: <strong>${d.sm_c_pct != null ? fmt(d.sm_c_pct) + ' %' : '—'}</strong>` +
-						(d.sm_diff_pct != null ? `<br/>SM diff: <strong>${fmt(d.sm_diff_pct)} %</strong>` : '')
+						(d.sm_diff_pct != null ? `<br/>SM diff: <strong>${fmt(d.sm_diff_pct)} %</strong>` : '') +
+						(d.daily_rainfall_mm != null ? `<br/>Daily rain: <strong>${fmt(d.daily_rainfall_mm)} mm</strong>` : '')
 				);
 				tip.style('left', `${event.clientX + 14}px`).style('top', `${event.clientY + 14}px`);
 			});
@@ -1100,12 +1161,13 @@
 								<div class="panel-head">
 									<svg class="panel-ico" viewBox="0 0 16 16" aria-hidden="true"
 										><path fill="currentColor" d="M1.5 12.5 5 8l3 3 5.5-7.5V12.5H1.5z"/></svg>
-									<h2 class="panel-title">{data.visual?.title || 'Soil moisture treatment vs control'}</h2>
+									<h2 class="panel-title">{data.visual?.title || 'Visual interpretation'}</h2>
 								</div>
-								<div class="chart-legend">
-									<span class="chart-leg"><span class="leg-swatch" style="background:#3f7d3f"></span> T</span>
-									<span class="chart-leg"><span class="leg-swatch" style="background:#2563eb"></span> C</span>
-								</div>
+							<div class="chart-legend">
+								<span class="chart-leg"><span class="leg-swatch" style="background:#3f7d3f"></span> T (treatment)</span>
+								<span class="chart-leg"><span class="leg-swatch" style="background:#2563eb"></span> C (control)</span>
+								<span class="chart-leg"><span class="leg-swatch" style="background:#93c5fd"></span> Daily rain</span>
+							</div>
 							</div>
 							<div bind:this={chartEl} class="chart-host relative"></div>
 						</section>

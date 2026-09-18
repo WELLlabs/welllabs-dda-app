@@ -22,7 +22,7 @@ def _split_deps(text: str) -> list[str]:
     return [p.strip() for p in str(text).split(";") if p.strip()]
 
 
-@lru_cache(maxsize=1)
+@lru_cache(maxsize=1)  # cleared on service restart; call load_analyses_catalog.cache_clear() if hot-reloading
 def load_analyses_catalog() -> dict[str, Any]:
     if not _CSV_PATH.is_file():
         return {"analyses": []}

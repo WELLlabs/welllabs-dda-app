@@ -337,6 +337,7 @@
 		const cumWl = calcs.cum_wl_height_increase_m;
 		const fillings = calcs.number_of_fillings;
 		const vol = calcs.volumetric_storage_m3;
+		const volSimple = calcs.volume_m3;
 		const recharge = calcs.recharge_m;
 		const kpiTarget = Number(ot.fp_ot_what_is_the_volumetric_water_savings_kpi_decided_);
 		const kpiPctVal = calcs.volumetric_savings_kpi_progress_pct;
@@ -344,6 +345,21 @@
 		const cards = calcCardsByVar;
 
 		return [
+			{
+				key: 'volume',
+				label: 'Volume',
+				value: volSimple,
+				unit: 'm³',
+				icon: 'cube',
+				formula: 'L × B × H',
+				description:
+					cards.volume_m3?.description ||
+					'Pond capacity: length × breadth × height (box volume).',
+				how:
+					cards.volume_m3?.methodology ||
+					'Multiply pond length by breadth and height from the one-time survey. Result is the maximum storage volume in m³.',
+				raws: [`L ${fmt(L)} m`, `B ${fmt(B)} m`, `H ${fmt(H)} m`]
+			},
 			{
 				key: 'cum_wl',
 				label: 'Cum. WL increase',
@@ -384,7 +400,7 @@
 			},
 			{
 				key: 'storage',
-				label: 'Vol. storage',
+				label: 'Runoff harvested',
 				value: vol,
 				unit: 'm³',
 				icon: 'cube',
@@ -422,11 +438,11 @@
 			},
 			{
 				key: 'kpi',
-				label: 'KPI progress',
+				label: 'Target achieved',
 				value: kpiPctVal,
 				unit: '%',
 				icon: 'kpi',
-				formula: 'Vol. storage ÷ KPI target × 100',
+				formula: 'Runoff harvested ÷ KPI target × 100',
 				description:
 					cards.volumetric_savings_kpi_progress_pct?.description ||
 					'Tracks progress (%) of realized volumetric storage against the savings KPI.',
@@ -442,7 +458,7 @@
 			},
 			{
 				key: 'rain',
-				label: 'Cum. rainfall',
+				label: 'Cumulative rainfall',
 				value: cumRain,
 				unit: 'mm',
 				icon: 'rain',
