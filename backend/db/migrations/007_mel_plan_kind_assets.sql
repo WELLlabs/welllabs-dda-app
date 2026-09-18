@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS mel_assets (
 CREATE INDEX IF NOT EXISTS mel_assets_project_id_idx ON mel_assets (project_id);
 CREATE INDEX IF NOT EXISTS mel_assets_plan_id_idx ON mel_assets (plan_id);
 
+DROP TRIGGER IF EXISTS mel_assets_updated_at ON mel_assets;
 CREATE TRIGGER mel_assets_updated_at
     BEFORE UPDATE ON mel_assets
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
