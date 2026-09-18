@@ -25,6 +25,7 @@ packages/
 
 # Large local geo caches (download/S3 at runtime)
 backend/app/modules/diagnose/data/*.fgb
+!backend/app/modules/diagnose/data/india_state_boundaries.fgb
 .tmp_hierarchy_fgb/
 .tmp_pdf_compare/
 

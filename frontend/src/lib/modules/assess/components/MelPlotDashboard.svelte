@@ -39,7 +39,8 @@
 	let heatMetric = $state('collected');
 	/** @type {string|null} */
 	let processKey = $state(null);
-	let showAssetInfo = $state(false);
+	/** @type {'t'|'c'|null} */
+	let showAssetInfo = $state(null);
 
 	/** @type {maplibregl.Map | null} */
 	let map = null;
@@ -477,22 +478,23 @@
 	}
 
 	const assetInfoRows = $derived.by(() => {
-		/** @type {{key: string, label: string, value: string}[]} */
-		const rows = [];
-		function pushAnswers(prefix, answers) {
-			const entries = Object.entries(answers || {}).filter(([, v]) => v != null && v !== '');
-			entries.sort(([a], [b]) => a.localeCompare(b));
-			for (const [key, value] of entries) {
-				rows.push({
-					key: `${prefix}:${key}`,
-					label: `${prefix} · ${humanizeOtKey(key)}`,
-					value: fmtOtValue(value)
-				});
-			}
+		const side = showAssetInfo;
+		if (!side) return [];
+		const answers = side === 'c' ? controlOt : treatOt;
+		const entries = Object.entries(answers || {}).filter(([, v]) => v != null && v !== '');
+		entries.sort(([a], [b]) => a.localeCompare(b));
+		return entries.map(([key, value]) => ({
+			key,
+			label: humanizeOtKey(key),
+			value: fmtOtValue(value)
+		}));
+	});
+
+	const assetInfoTitle = $derived.by(() => {
+		if (showAssetInfo === 'c') {
+			return `${controlAsset?.label || 'Control'} — full information`;
 		}
-		pushAnswers('T', treatOt);
-		if (controlAsset) pushAnswers('C', controlOt);
-		return rows;
+		return `${treatAsset?.label || data?.asset?.label || 'Treatment'} — full information`;
 	});
 
 	function ensurePairMarkers(points) {
@@ -855,15 +857,13 @@
 			const days = d3.utcDays(start, end);
 			const weekCount = Math.max(1, d3.utcWeek.count(start, d3.utcDay.offset(end, -1)) + 1);
 
-			const availW = Math.max(200, heatEl.clientWidth || 400);
-			const availH = Math.max(140, heatEl.clientHeight || 160);
-			const leftPad = 28;
-			const topPad = 22;
-			const gap = 3;
-			const cellW = Math.max(10, (availW - leftPad - 6) / weekCount - gap);
-			const cellH = Math.max(10, (availH - topPad - 4) / 7 - gap);
-			const width = leftPad + weekCount * (cellW + gap);
-			const height = topPad + 7 * (cellH + gap);
+			const avail = Math.max(280, heatEl.clientWidth || 400);
+			const leftPad = 22;
+			const topPad = 18;
+			const gap = 2;
+			const cell = Math.max(7, Math.min(12, Math.floor((avail - leftPad - 8) / weekCount) - gap));
+			const width = leftPad + weekCount * (cell + gap);
+			const height = topPad + 7 * (cell + gap) + 4;
 
 			const valueVals = activity
 				.map((d) => d.value)
@@ -885,9 +885,9 @@
 				.select(heatEl)
 				.append('svg')
 				.attr('width', '100%')
-				.attr('height', '100%')
 				.attr('viewBox', `0 0 ${width} ${height}`)
-				.attr('preserveAspectRatio', 'xMinYMin meet')
+				.attr('preserveAspectRatio', 'xMidYMin meet')
+				.style('max-width', '100%')
 				.style('display', 'block');
 
 			const tip = d3
@@ -906,7 +906,7 @@
 						: monthNames[first.getUTCMonth()];
 				monthMarks.push({
 					label,
-					x: d3.utcWeek.count(start, first) * (cellW + gap)
+					x: d3.utcWeek.count(start, first) * (cell + gap)
 				});
 				t = Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 1);
 			}
@@ -921,29 +921,30 @@
 				.attr('x', (d) => d.x)
 				.attr('y', 14)
 				.attr('fill', '#56646f')
-				.attr('font-size', Math.max(10, Math.min(13, cellH * 0.45)))
+				.attr('font-size', 10)
+				.attr('font-family', 'var(--font-body)')
 				.text((d) => d.label);
 
 			const g = svg.append('g').attr('transform', `translate(${leftPad},${topPad})`);
-			const weekdays = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+			const weekdays = ['M', '', 'W', '', 'F', '', ''];
 			g.selectAll('text.wd')
 				.data(weekdays)
 				.join('text')
 				.attr('x', -8)
-				.attr('y', (_, i) => i * (cellH + gap) + cellH * 0.72)
+				.attr('y', (_, i) => i * (cell + gap) + cell * 0.75)
 				.attr('text-anchor', 'end')
 				.attr('fill', '#6b7885')
-				.attr('font-size', Math.max(9, Math.min(12, cellH * 0.4)))
+				.attr('font-size', 9)
 				.text((d) => d);
 
 			g.selectAll('rect.day')
 				.data(days)
 				.join('rect')
-				.attr('width', cellW)
-				.attr('height', cellH)
-				.attr('rx', Math.min(4, cellW, cellH) * 0.22)
-				.attr('x', (d) => d3.utcWeek.count(start, d) * (cellW + gap))
-				.attr('y', (d) => ((d.getUTCDay() + 6) % 7) * (cellH + gap))
+				.attr('width', cell)
+				.attr('height', cell)
+				.attr('rx', 2)
+				.attr('x', (d) => d3.utcWeek.count(start, d) * (cell + gap))
+				.attr('y', (d) => ((d.getUTCDay() + 6) % 7) * (cell + gap))
 				.attr('fill', (d) => {
 					const key = d.toISOString().slice(0, 10);
 					const hit = byKey.get(key);
@@ -1144,37 +1145,44 @@
 								</div>
 							</dl>
 
-							<button type="button" class="asset-info-btn" onclick={() => (showAssetInfo = true)}>
-								View full plot information
-							</button>
-						</div>
-					</section>
-
-					<section class="dash-col dash-vis">
-						<div class="dash-card map-card">
-							<div class="panel-head panel-head-spread">
-								<div class="panel-head">
-									<svg class="panel-ico" viewBox="0 0 16 16" aria-hidden="true"
-										><path fill="currentColor" d="M8 1.5C5.5 1.5 3.5 3.6 3.5 6.2c0 3.4 3.6 7.5 4.2 8.1.2.2.5.2.6 0 .6-.6 4.2-4.7 4.2-8.1C12.5 3.6 10.5 1.5 8 1.5zm0 7a2 2 0 1 1 0-4 2 2 0 0 1 0 4z"
-									/></svg>
-									<h2 class="panel-title">Location map</h2>
-								</div>
-								<div class="map-legend map-legend-inline">
-									<span class="legend-item"><span class="legend-dot legend-dot-plot"></span> Treatment</span>
-									{#if controlAsset}
-										<span class="legend-item"><span class="legend-dot legend-dot-control"></span> Control</span>
-									{/if}
-								</div>
+							<div class="asset-info-actions">
+								<button type="button" class="asset-info-btn" onclick={() => (showAssetInfo = 't')}>
+									View treatment info
+								</button>
+								{#if controlAsset}
+									<button
+										type="button"
+										class="asset-info-btn asset-info-btn-control"
+										onclick={() => (showAssetInfo = 'c')}
+									>
+										View control info
+									</button>
+								{/if}
 							</div>
-							<div class="map-frame map-frame-tall">
+
+							<div class="panel-head map-inline-head">
+								<svg class="panel-ico" viewBox="0 0 16 16" aria-hidden="true"
+									><path fill="currentColor" d="M8 1.5C5.5 1.5 3.5 3.6 3.5 6.2c0 3.4 3.6 7.5 4.2 8.1.2.2.5.2.6 0 .6-.6 4.2-4.7 4.2-8.1C12.5 3.6 10.5 1.5 8 1.5zm0 7a2 2 0 1 1 0-4 2 2 0 0 1 0 4z"
+								/></svg>
+								<h2 class="panel-title">Location map</h2>
+							</div>
+							<div class="map-frame map-frame-compact">
 								{#if (treatLoc.lat != null && treatLoc.lon != null) || (controlLoc.lat != null && controlLoc.lon != null)}
 									<div bind:this={mapEl} class="map-host"></div>
 								{:else}
 									<div class="map-fallback">No coordinates available.</div>
 								{/if}
 							</div>
+							<div class="map-legend">
+								<span class="legend-item"><span class="legend-dot legend-dot-plot"></span> Treatment</span>
+								{#if controlAsset}
+									<span class="legend-item"><span class="legend-dot legend-dot-control"></span> Control</span>
+								{/if}
+							</div>
 						</div>
+					</section>
 
+					<section class="dash-col dash-vis">
 						<div class="dash-card dash-card-fill stats-card">
 							<div class="panel-head">
 								<svg class="panel-ico" viewBox="0 0 16 16" aria-hidden="true"
@@ -1378,11 +1386,11 @@
 				{/if}
 
 				{#if showAssetInfo}
-					<div class="process-backdrop" role="presentation" onclick={() => (showAssetInfo = false)}></div>
+					<div class="process-backdrop" role="presentation" onclick={() => (showAssetInfo = null)}></div>
 					<div class="process-panel asset-info-panel" role="dialog" aria-modal="true" aria-labelledby="asset-info-title">
 						<div class="process-panel-head">
-							<h3 id="asset-info-title" class="process-title">{data.asset?.label || 'Farm plot'} — full information</h3>
-							<button type="button" class="process-close" aria-label="Close" onclick={() => (showAssetInfo = false)}>×</button>
+							<h3 id="asset-info-title" class="process-title">{assetInfoTitle}</h3>
+							<button type="button" class="process-close" aria-label="Close" onclick={() => (showAssetInfo = null)}>×</button>
 						</div>
 						{#if assetInfoRows.length}
 							<dl class="asset-info-list">
@@ -1447,10 +1455,10 @@
 	.asset-info-btn {
 		flex: none;
 		align-self: stretch;
-		margin: 0.35rem 0 0.15rem;
-		border: 1px solid rgba(27, 117, 224, 0.35);
+		margin: 0;
+		border: 1px solid rgba(22, 101, 52, 0.35);
 		background: #fff;
-		color: #1b75e0;
+		color: #166534;
 		font-size: 0.72rem;
 		font-weight: 600;
 		padding: 0.4rem 0.55rem;
@@ -1459,9 +1467,24 @@
 		text-align: center;
 		line-height: 1.2;
 	}
+	.asset-info-actions {
+		flex: none;
+		display: flex;
+		flex-direction: column;
+		gap: 0.3rem;
+		margin: 0.35rem 0 0.15rem;
+	}
 	.asset-info-btn:hover {
-		background: #eef5fc;
-		border-color: #1b75e0;
+		background: #f0fdf4;
+		border-color: #166534;
+	}
+	.asset-info-btn-control {
+		color: #1d4ed8;
+		border-color: rgba(37, 99, 235, 0.35);
+	}
+	.asset-info-btn-control:hover {
+		background: #eff6ff;
+		border-color: #2563eb;
 	}
 	.asset-info-panel {
 		width: min(34rem, calc(100% - 2rem));
@@ -1502,25 +1525,15 @@
 		word-break: break-word;
 	}
 	.info-card .map-frame {
-		flex: 1;
-		min-height: 120px;
+		flex: 0 0 auto;
+		height: 300px;
+		min-height: 300px;
 		margin-top: 0.15rem;
 	}
-	.map-card {
-		flex: 1.35;
-		min-height: 0;
-		display: flex;
-		flex-direction: column;
-		overflow: hidden;
-	}
-	.map-frame-tall {
-		flex: 1;
-		min-height: 220px;
-		margin-top: 0.1rem;
-	}
-	.map-legend-inline {
-		padding: 0;
-		gap: 0.45rem 0.75rem;
+	.map-frame-compact {
+		flex: 0 0 auto;
+		height: 300px;
+		min-height: 300px;
 	}
 	.map-identity {
 		flex: none;
@@ -2164,17 +2177,10 @@
 		min-height: 240px;
 	}
 	.heat-host {
-		position: relative;
 		width: 100%;
-		flex: 1 1 auto;
-		min-height: 160px;
+		flex: 1;
+		min-height: 0;
 		overflow: hidden;
-	}
-	.heat-host :global(svg) {
-		position: absolute;
-		inset: 0;
-		width: 100%;
-		height: 100%;
 	}
 	.year-toggle {
 		display: inline-flex;
@@ -2245,17 +2251,10 @@
 			overflow: visible;
 			min-height: auto;
 		}
-		.info-card .map-frame {
-			min-height: 180px;
-			flex: none;
-			height: 200px;
-		}
-		.map-frame-tall {
-			min-height: 240px;
-			height: 280px;
-			flex: none;
-		}
-		.map-card {
+		.info-card .map-frame,
+		.map-frame-compact {
+			min-height: 300px;
+			height: 300px;
 			flex: none;
 		}
 		.pond-diagrams-row {
@@ -2367,11 +2366,11 @@
 	.panel-ico {
 		color: #166534;
 	}
-	.asset-info-btn {
+	.asset-info-btn:not(.asset-info-btn-control) {
 		color: #166534;
 		border-color: rgba(22, 101, 52, 0.35);
 	}
-	.asset-info-btn:hover {
+	.asset-info-btn:not(.asset-info-btn-control):hover {
 		background: #f0fdf4;
 		border-color: #166534;
 	}
