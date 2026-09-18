@@ -399,8 +399,9 @@ def compute_pmds_metrics(
             irrigation_vals.append(ot_irr)
 
     for r in this_rows:
-        # Use bm_cm_rainfall (general daily rainfall, same field as farm pond).
-        rain = _num(r.get("bm_cm_rainfall"))
+        # Use bm_cm_rainfall (renamed from bm_cm_rainfall_recorded_since_last_irrigation).
+        # Fall back to old key for existing ODK submissions that pre-date the rename.
+        rain = _num(r.get("bm_cm_rainfall") or r.get("bm_cm_rainfall_recorded_since_last_irrigation"))
         irr = _irrigation_m3(r, discharge)
         if rain is not None:
             rain_vals.append(rain)

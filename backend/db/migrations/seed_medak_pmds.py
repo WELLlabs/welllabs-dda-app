@@ -505,7 +505,7 @@ def _row_values(asset: dict, row: dict, date_iso: str) -> dict[str, str]:
     }
     rain = _num(row.get("Rainfall_on_day_mm"))
     if rain is not None:
-        values["bm_cm_rainfall_recorded_since_last_irrigation"] = str(rain)
+        values["bm_cm_rainfall"] = str(rain)
     for col, key in zip(F_COLS, FLAT_KEYS):
         val = _num(row.get(col))
         if val is not None:
