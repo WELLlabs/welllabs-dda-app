@@ -1,0 +1,77 @@
+intervention,category,question,outcome,indicator,assumption,metric,input_type,variable_name,selectors,skip_logic
+Farm pond,one time,"Location (lat,long)",,,,"lat,long",coordinate,fp_ot_location,,
+Farm pond,one time,Date,,,,,date,fp_ot_date,,
+Farm pond,one time,District name,,,,,text,fp_ot_district_name,,
+Farm pond,one time,Block name,,,,,text,fp_ot_block_name,,
+Farm pond,one time,Village name,,,,,text,fp_ot_village_name,,
+Farm pond,one time,Farmer name,,,,,text,fp_ot_farmer_name,,
+Farm pond,one time,Farm Pond Type,,,,,single select,fp_ot_farm_pond_type,Community | MGNREGA | Individual,
+Farm pond,one time,Number of beneficiaries connected to the farm pond,,,,,,,,
+Farm pond,one time,Is the farm pond lined or unlined?,,,,,single select,fp_ot_is_the_farm_pond_lined_or_unlined,Lined | Unlined,
+Farm pond,one time,Is this new structure or rejuvenated?,,,,,single select,fp_ot_structure_status,New structure | Rejuvenated,
+Farm pond,one time,Date of Construction of the farm pond,,,,,date,fp_ot_date_of_construction_of_the_farm_pond,,show if fp_ot_structure_status = New structure
+Farm pond,one time,What earthworks were done?,,,,,multi select,fp_ot_what_was_done,Deepening | Bunding | Pitching,show if fp_ot_structure_status = Rejuvenated
+Farm pond,one time,Additional depth created (m)?,,,,m,decimal,fp_ot_additional_depth_created,,show if fp_ot_structure_status = Rejuvenated
+Farm pond,one time,Length (m),,,,m,decimal,fp_ot_length,,
+Farm pond,one time,Breadth (m),,,,m,decimal,fp_ot_breadth,,
+Farm pond,one time,Height (m),,,,m,decimal,fp_ot_height,,
+Farm pond,one time,Source of water in farm pond,,,,,multi select,fp_ot_source_of_water_in_farm_pond,Dugwell | Borewell | Canal | Rainfall runoff | River,
+Farm pond,one time,Is there a flow meter?,,,,,single select,fp_ot_has_flow_meter,Yes | No,
+Farm pond,one time,What is the rate of discharge through an irrigation pipe (liters per second)?,,,,liters/sec,decimal,fp_ot_what_is_the_rate_of_discharge_through_an_irrigati,,show if fp_ot_has_flow_meter = No
+Farm pond,one time,Use of Farm Pond,,,,,multi select,fp_ot_use_of_farm_pond,Fishery | Agriculture (irrigation) | Foxnut | Chesnut | Domestic use | Village Water Supply | None,
+Farm pond,one time,Staff Gauge Installation Date,,,,,date,fp_ot_staff_gauge_installation_date,,
+Farm pond,one time,What is the volumetric water savings KPI decided for the farm pond (m3) ?,,,,,text,fp_ot_what_is_the_volumetric_water_savings_kpi_decided_,,
+Farm pond,one time,Farm Pond Filled,,,,,single select,fp_ot_farm_pond_filled,Yes | No,
+Farm pond,one time,Staff Gauge Reading at Start (m),Rainfall runoff harvested during monsoon (availability); Post-monsoon increased water availability,Volume of water in structure in monsoon/post-monsoon; Number of fillings,Farm Pond harvests surface runoff as a primary source. however there might be seasonality in how the FP is filled for the rest of the year. It is a normal rainfall year and adequate runoff is generated.,m,decimal,fp_ot_staff_gauge_reading_at_start,,show if fp_ot_farm_pond_filled = Yes
+Farm pond,cm,Select the Asset ID,,,,,single select,fp_cm_select_the_asset_id,,
+Farm pond,cm,Date of reading,,,,,date,fp_cm_date_of_reading,,
+Farm pond,cm,Source of water in farm pond,Volume of groundwater pumped in the structure,Volumetric water pumped (m3),Farm pond has seasonality in the source of water used to fill it where groundwater is pumped in dry season.,,multi select,fp_cm_water_source,Dugwell | Borewell | Canal | Rainfall,
+Farm pond,cm,Number of hours of pumping groundwater (hr),Volume of groundwater pumped in the structure,Volumetric water pumped (m3),Farm pond has seasonality in the source of water used to fill it where groundwater is pumped in dry season.,hours,decimal,fp_cm_number_of_hours_of_pumping,,show if fp_cm_water_source includes Dugwell OR Borewell OR Canal
+Farm pond,cm,Rainfall (mm),Rainfall runoff harvested during monsoon (availability); Post-monsoon increased water availability,Volume of water in structure in monsoon/post-monsoon; Number of fillings,It is a normal rainfall year.,mm,decimal,fp_cm_rainfall,,
+Farm pond,cm,Staff Gauge Reading (m),Rainfall runoff harvested during monsoon (availability); Post-monsoon increased water availability,Volume of water in structure in monsoon/post-monsoon; Number of fillings,Farm Pond harvests surface runoff as a primary source however there might be seasonality in how the FP is filled for the rest of the year. It is a normal rainfall year and adequate runoff is generated.,m,decimal,fp_cm_staff_gauge_reading,,
+Farm pond,cm,Did you use farm pond water for irrigation?,Improved crop water productivity (Rs/m3),Irrigation water applied (m3),,,single select,fp_cm_used_for_irrigation,Yes | No,
+Farm pond,cm,Number of hours of pumping irrigation water from farm pond (hr),Improved crop water productivity (Rs/m3),Irrigation water applied (m3),,liters/sec,decimal,fp_cm_what_is_the_rate_of_discharge_through_an_irrigati,,show if fp_cm_used_for_irrigation = Yes
+PMDS,one time,"Location (lat,long)",,,,"lat,long",coordinate,bm_ot_location
+PMDS,one time,Date,,,,,date,bm_ot_date
+PMDS,one time,District name,,,,,text,bm_ot_district_name
+PMDS,one time,Block name,,,,,text,bm_ot_block_name
+PMDS,one time,Village name,,,,,text,bm_ot_village_name
+PMDS,one time,Farmer name,,,,,text,bm_ot_farmer_name
+PMDS,one time,Plot role,,,,,single select,bm_ot_plot_role,Treatment | Control
+PMDS,one time,Paired control plot,,,,,single select,bm_ot_paired_control_asset_id,,show if bm_ot_plot_role = Treatment
+PMDS,one time,Agriculture season,,,,,single select,bm_ot_agriculture_season,Kharif | Rabi | Zaid
+PMDS,one time,Crop grown,,,CM survey has a lifecycle of a single season,,text,bm_ot_crop_grown
+PMDS,one time,Year and month of adoption of PMDS,,,,,date,bm_ot_year_month_of_adoption
+PMDS,one time,Area under the crop,,,Agriculture acreage and crop mix remains the same | Assuming all the area is under intervention,acre/bigha,decimal,bm_ot_area_under_the_crop
+PMDS,one time,Area unit,,,Agriculture acreage and crop mix remains the same,,single select,bm_ot_area_unit,acre | bigha
+PMDS,one time,What is the volumetric water savings KPI decided for PMDS?,,,,,text,bm_ot_what_is_the_volumetric_water_savings_kpi_decided_
+PMDS,one time,Source of irrigation water,,,,,multi select,bm_ot_source_of_irrigation_water,Dug well | Borewell | Canal | Pond | Rainfed
+PMDS,one time,Is there a flow meter?,,,,,single select,bm_ot_has_flow_meter,Yes | No
+PMDS,one time,What is the rate of discharge through an irrigation pipe (liters per second)?,,,,liters/sec,decimal,bm_ot_what_is_the_rate_of_discharge_through_an_irrigati,,show if bm_ot_has_flow_meter = No
+PMDS,one time,Method of irrigation,,,,,multi select,bm_ot_method_of_irrigation,Flood irrigation | Micro-irrigation | Raised bed farming
+PMDS,one time,Frequency of irrigation,,,,,text,bm_ot_frequency_of_irrigation
+PMDS,one time,Last irrigation applied,,,,,single select,bm_ot_last_irrigation_applied,Yes | No
+PMDS,one time,Duration of pumping or flow meter reading (m3),Reduced irrigation water applied (rabi/zaid) (availability),Irrigation water volumetric savings (m3),Agriculture acreage and crop mix remains the same,hours or m3,decimal,bm_ot_duration_of_pumping_or_flow_meter_reading,,show if bm_ot_last_irrigation_applied = Yes
+PMDS,cm,Select the Asset ID,Reduced irrigation water applied (rabi/zaid) (availability),Irrigation water volumetric savings (m3),,,single select,bm_cm_select_the_asset_id
+PMDS,cm,Date of reading,Reduced irrigation water applied (rabi/zaid) (availability),Irrigation water volumetric savings (m3),,,date,bm_cm_date_of_reading
+PMDS,cm,Date of irrigation,Reduced irrigation water applied (rabi/zaid) (availability),Irrigation water volumetric savings (m3),,,date,bm_cm_date_of_irrigation
+PMDS,cm,Is there a flow meter?,Reduced irrigation water applied (rabi/zaid) (availability),Irrigation water volumetric savings (m3),,,single select,bm_cm_has_flow_meter,Yes | No
+PMDS,cm,Volume of irrigation water applied through Flow meter reading (m3),Reduced irrigation water applied (rabi/zaid) (availability),Irrigation water volumetric savings (m3),Agriculture acreage and crop mix remains the same,m3,decimal,bm_cm_volume_of_irrigation_water_applied_through_flow_m,,show if bm_cm_has_flow_meter = Yes
+PMDS,cm,Number of hours of pumping (hr),Reduced irrigation water applied (rabi/zaid) (availability),Irrigation water volumetric savings (m3),Agriculture acreage and crop mix remains the same,hours,decimal,bm_cm_number_of_hours_of_pumping,,show if bm_cm_has_flow_meter = No
+PMDS,cm,Rainfall (mm),Reduced irrigation water applied (rabi/zaid) (availability),Irrigation water volumetric savings (m3),,mm,decimal,bm_cm_rainfall
+PMDS,cm,Are you practicing raised bed farming?,"If kharif crop is rainfed, increased green water availability in the soil to support plant growth. ",Improved soil moisture (m3),,,single select,bm_cm_raised_bed_farming,Yes | No
+PMDS,cm,Soil moisture reading - Raised bed (R) - Corner A,"If kharif crop is rainfed, increased green water availability in the soil to support plant growth. ",Improved soil moisture (m3),,% or m3,decimal,bm_cm_soil_moisture_raised_r_corner_a,,show if bm_cm_raised_bed_farming = Yes
+PMDS,cm,Soil moisture reading - Raised bed (R) - Corner B,"If kharif crop is rainfed, increased green water availability in the soil to support plant growth. ",Improved soil moisture (m3),,% or m3,decimal,bm_cm_soil_moisture_raised_r_corner_b,,show if bm_cm_raised_bed_farming = Yes
+PMDS,cm,Soil moisture reading - Raised bed (R) - Corner C,"If kharif crop is rainfed, increased green water availability in the soil to support plant growth. ",Improved soil moisture (m3),,% or m3,decimal,bm_cm_soil_moisture_raised_r_corner_c,,show if bm_cm_raised_bed_farming = Yes
+PMDS,cm,Soil moisture reading - Raised bed (R) - Corner D,"If kharif crop is rainfed, increased green water availability in the soil to support plant growth. ",Improved soil moisture (m3),,% or m3,decimal,bm_cm_soil_moisture_raised_r_corner_d,,show if bm_cm_raised_bed_farming = Yes
+PMDS,cm,Soil moisture reading - Raised bed (R) - Centre,"If kharif crop is rainfed, increased green water availability in the soil to support plant growth. ",Improved soil moisture (m3),,% or m3,decimal,bm_cm_soil_moisture_raised_r_centre,,show if bm_cm_raised_bed_farming = Yes
+PMDS,cm,Soil moisture reading - Raised bed (F) - Corner A,"If kharif crop is rainfed, increased green water availability in the soil to support plant growth. ",Improved soil moisture (m3),,% or m3,decimal,bm_cm_soil_moisture_raised_f_corner_a,,show if bm_cm_raised_bed_farming = Yes
+PMDS,cm,Soil moisture reading - Raised bed (F) - Corner B,"If kharif crop is rainfed, increased green water availability in the soil to support plant growth. ",Improved soil moisture (m3),,% or m3,decimal,bm_cm_soil_moisture_raised_f_corner_b,,show if bm_cm_raised_bed_farming = Yes
+PMDS,cm,Soil moisture reading - Raised bed (F) - Corner C,"If kharif crop is rainfed, increased green water availability in the soil to support plant growth. ",Improved soil moisture (m3),,% or m3,decimal,bm_cm_soil_moisture_raised_f_corner_c,,show if bm_cm_raised_bed_farming = Yes
+PMDS,cm,Soil moisture reading - Raised bed (F) - Corner D,"If kharif crop is rainfed, increased green water availability in the soil to support plant growth. ",Improved soil moisture (m3),,% or m3,decimal,bm_cm_soil_moisture_raised_f_corner_d,,show if bm_cm_raised_bed_farming = Yes
+PMDS,cm,Soil moisture reading - Raised bed (F) - Centre,"If kharif crop is rainfed, increased green water availability in the soil to support plant growth. ",Improved soil moisture (m3),,% or m3,decimal,bm_cm_soil_moisture_raised_f_centre,,show if bm_cm_raised_bed_farming = Yes
+PMDS,cm,Soil moisture reading - Flat plot - Corner A,"If kharif crop is rainfed, increased green water availability in the soil to support plant growth. ",Improved soil moisture (m3),,% or m3,decimal,bm_cm_soil_moisture_flat_corner_a,,show if bm_cm_raised_bed_farming = No
+PMDS,cm,Soil moisture reading - Flat plot - Corner B,"If kharif crop is rainfed, increased green water availability in the soil to support plant growth. ",Improved soil moisture (m3),,% or m3,decimal,bm_cm_soil_moisture_flat_corner_b,,show if bm_cm_raised_bed_farming = No
+PMDS,cm,Soil moisture reading - Flat plot - Corner C,"If kharif crop is rainfed, increased green water availability in the soil to support plant growth. ",Improved soil moisture (m3),,% or m3,decimal,bm_cm_soil_moisture_flat_corner_c,,show if bm_cm_raised_bed_farming = No
+PMDS,cm,Soil moisture reading - Flat plot - Corner D,"If kharif crop is rainfed, increased green water availability in the soil to support plant growth. ",Improved soil moisture (m3),,% or m3,decimal,bm_cm_soil_moisture_flat_corner_d,,show if bm_cm_raised_bed_farming = No
+PMDS,cm,Soil moisture reading - Flat plot - Centre,"If kharif crop is rainfed, increased green water availability in the soil to support plant growth. ",Improved soil moisture (m3),,% or m3,decimal,bm_cm_soil_moisture_flat_centre,,show if bm_cm_raised_bed_farming = No

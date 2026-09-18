@@ -29,6 +29,11 @@
 		clearDiagnoseNav
 	} from '$lib/modules/diagnose/nav-lock.js';
 	import { MAX_FIELD_NOTE_MEDIA_BYTES, OBSERVATION_ZONE_COLOR, FIELD_NOTE_COLOR, HYPOTHESIS_COLOR, ZONE_COLORS } from '$lib/modules/diagnose/map-constants';
+	import {
+		ZONE_TEMPLATES,
+		matchZoneTemplate,
+		suggestedHypothesesForZones
+	} from '$lib/modules/diagnose/zone-templates.js';
 	import FieldNoteIcon from '$lib/modules/diagnose/components/icons/FieldNoteIcon.svelte';
 	import HypothesisIcon from '$lib/modules/diagnose/components/icons/HypothesisIcon.svelte';
 	import ObservationZoneIcon from '$lib/modules/diagnose/components/icons/ObservationZoneIcon.svelte';
@@ -107,11 +112,17 @@
 	}
 
 	function isOverlayLayer(layer) {
+		// Explicit catalog flag wins (AOI boundary is outline but thematic).
+		if (layer?.overlay === true) return true;
+		if (layer?.overlay === false) return false;
 		return (
-			layer?.overlay === true ||
 			OVERLAY_LAYER_IDS.has(layer?.id) ||
 			layer?.render_type === 'outline'
 		);
+	}
+
+	function isProjectAoiLayer(layer) {
+		return layer?.id === 'aoi_boundary';
 	}
 
 	const UUID_RE =
@@ -124,13 +135,56 @@
 
 	/** @param {string} hex */
 	function contrastTextColor(hex) {
-		const normalized = String(hex || '#000000').replace('#', '');
-		if (normalized.length !== 6) return '#ffffff';
-		const r = parseInt(normalized.slice(0, 2), 16);
-		const g = parseInt(normalized.slice(2, 4), 16);
-		const b = parseInt(normalized.slice(4, 6), 16);
-		const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-		return luminance > 0.55 ? '#000000' : '#ffffff';
+		const raw = String(hex || '').trim();
+		const fromPalette = ZONE_COLORS.find(
+			(c) => c.hex.toLowerCase() === raw.toLowerCase() || c.id.toLowerCase() === raw.toLowerCase()
+		);
+		const value = (fromPalette?.hex || raw).replace('#', '');
+		let r = 0;
+		let g = 0;
+		let b = 0;
+		if (value.length === 3) {
+			r = parseInt(value[0] + value[0], 16);
+			g = parseInt(value[1] + value[1], 16);
+			b = parseInt(value[2] + value[2], 16);
+		} else if (value.length === 6 || value.length === 8) {
+			r = parseInt(value.slice(0, 2), 16);
+			g = parseInt(value.slice(2, 4), 16);
+			b = parseInt(value.slice(4, 6), 16);
+		} else {
+			return '#0f172a';
+		}
+		if ([r, g, b].some((n) => Number.isNaN(n))) return '#0f172a';
+		const toLinear = (c) => {
+			const s = c / 255;
+			return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+		};
+		const luminance = 0.2126 * toLinear(r) + 0.7152 * toLinear(g) + 0.0722 * toLinear(b);
+		const contrastWhite = 1.05 / (luminance + 0.05);
+		const contrastBlack = (luminance + 0.05) / 0.05;
+		return contrastBlack > contrastWhite ? '#0f172a' : '#ffffff';
+	}
+
+	/** @param {string} color */
+	function zoneFillColor(color) {
+		const raw = String(color || '').trim();
+		const fromPalette = ZONE_COLORS.find(
+			(c) => c.hex.toLowerCase() === raw.toLowerCase() || c.id.toLowerCase() === raw.toLowerCase()
+		);
+		return fromPalette?.hex || raw || OBSERVATION_ZONE_COLOR;
+	}
+
+	function openZoneFromList(zone, { toggle = true } = {}) {
+		if (!zone) return;
+		if (toggle && selectedZone?.id === zone.id && !editingSelectedZone) {
+			closeSelectedZone();
+			return;
+		}
+		editingSelectedZone = null;
+		showSelectedZoneMenu = false;
+		selectedZone = { ...zone };
+		closeSelectedFieldNote();
+		status = 'Observation zone selected';
 	}
 
 	function closeSelectedZone() {
@@ -230,7 +284,11 @@
 
 			if (mapReady) {
 				const meta = secondaryLayers.find((l) => l.id === layer.id);
-				if (meta?.kind === 'vector' && meta.map_render !== false) {
+				if (
+					meta?.kind === 'vector' &&
+					meta.map_render !== false &&
+					!isProjectAoiLayer(meta)
+				) {
 					await ensureVectorLayerOnMap(meta, { signal: vectorSelectAbort.signal });
 				}
 				if (isOverlayLayer(meta)) {
@@ -272,6 +330,7 @@
 		zoneText = '';
 		zoneObservations = '';
 		zoneQuestions = '';
+		selectedZoneTemplateId = null;
 		resetDrawState();
 	}
 
@@ -739,7 +798,15 @@
 		}
 		const ordered = [];
 		for (const cat of SIDEBAR_CATEGORY_ORDER) {
-			if (byCat.has(cat)) ordered.push({ category: cat, layers: byCat.get(cat) });
+			if (byCat.has(cat)) {
+				const layers = byCat.get(cat);
+				layers.sort((a, b) => {
+					if (a.id === 'aoi_boundary') return -1;
+					if (b.id === 'aoi_boundary') return 1;
+					return 0;
+				});
+				ordered.push({ category: cat, layers });
+			}
 			byCat.delete(cat);
 		}
 		for (const [category, layers] of byCat) {
@@ -787,6 +854,8 @@
 	let zoneText = $state('');
 	let zoneObservations = $state('');
 	let zoneQuestions = $state('');
+	/** @type {string | null} */
+	let selectedZoneTemplateId = $state(null);
 	let zoneColor = $state(OBSERVATION_ZONE_COLOR);
 	let savingZone = $state(false);
 	let selectedZone = $state(null);
@@ -1295,6 +1364,7 @@
 		cursorLngLat = null;
 		zoneObservations = '';
 		zoneQuestions = '';
+		selectedZoneTemplateId = null;
 		status = 'Enter title, observations, and questions — drag vertices to adjust';
 		setDrawPreviewFromState();
 	}
@@ -1328,17 +1398,17 @@
 					const f = hit[0];
 					const id = zoneIdFromFeature(f);
 					if (id) {
-						editingSelectedZone = null;
-						showSelectedZoneMenu = false;
-						selectedZone = {
-							id,
-							text: String(f.properties?.text ?? ''),
-							observations: String(f.properties?.observations ?? ''),
-							questions: String(f.properties?.questions ?? ''),
-							color: String(f.properties?.color ?? OBSERVATION_ZONE_COLOR)
-						};
-						closeSelectedFieldNote();
-						status = 'Observation zone selected';
+						const fromSaved = savedZones.find((z) => z.id === id);
+						openZoneFromList(
+							fromSaved || {
+								id,
+								text: String(f.properties?.text ?? ''),
+								observations: String(f.properties?.observations ?? ''),
+								questions: String(f.properties?.questions ?? ''),
+								color: String(f.properties?.color ?? OBSERVATION_ZONE_COLOR)
+							},
+							{ toggle: false }
+						);
 						return;
 					}
 				}
@@ -1756,14 +1826,14 @@
 		return features.map((f) => {
 			const p = { ...(f.properties || {}) };
 			if (needPctScst && (p.pct_scst == null || p.pct_scst === '')) {
-				const pop = Number(p.Total_Popu ?? p.total_popu ?? 0);
-				const sc = Number(p.Total_SC_P ?? p.total_sc_p ?? 0);
-				const st = Number(p.Total_ST_P ?? p.total_st_p ?? 0);
+				const pop = Number(p.Total_Popu ?? p.total_popu ?? p.tot_p ?? 0);
+				const sc = Number(p.Total_SC_P ?? p.total_sc_p ?? p.p_sc ?? 0);
+				const st = Number(p.Total_ST_P ?? p.total_st_p ?? p.p_st ?? 0);
 				p.pct_scst = pop > 0 ? ((sc + st) / pop) * 100 : 0;
 			}
 			if (needPctLiterate && (p.pct_literate == null || p.pct_literate === '')) {
-				const pop = Number(p.Total_Popu ?? p.total_popu ?? 0);
-				const literate = Number(p.Total_Lite ?? p.total_lite ?? 0);
+				const pop = Number(p.Total_Popu ?? p.total_popu ?? p.tot_p ?? 0);
+				const literate = Number(p.Total_Lite ?? p.total_lite ?? p.p_lit ?? 0);
 				p.pct_literate = pop > 0 ? (literate / pop) * 100 : 0;
 			}
 			return { ...f, properties: p };
@@ -1861,12 +1931,12 @@
 				const raw = pickProp(p, ['aquifer', 'Major_Aqui', 'aquifers']);
 				p[column] = raw != null ? String(raw) : 'Other';
 			} else if (atype === 'demographics_literacy' || column === 'pct_literate') {
-				const raw = pickProp(p, ['pct_literate', 'Total_Lite', 'total_lite']);
+				const raw = pickProp(p, ['pct_literate', 'Total_Lite', 'total_lite', 'p_lit']);
 				if (raw != null && raw !== '') {
 					p[column] = Number(raw);
 				} else {
-					const pop = Number(pickProp(p, ['Total_Popu', 'total_popu']) ?? 0);
-					const literate = Number(pickProp(p, ['Total_Lite', 'total_lite']) ?? 0);
+					const pop = Number(pickProp(p, ['Total_Popu', 'total_popu', 'tot_p']) ?? 0);
+					const literate = Number(pickProp(p, ['Total_Lite', 'total_lite', 'p_lit']) ?? 0);
 					p[column] = pop > 0 ? (literate / pop) * 100 : 0;
 				}
 			}
@@ -1915,10 +1985,11 @@
 		if (!props) return '';
 		const keys = [
 			labelColumn,
+			'name',
+			'name_1',
 			'Village Na',
 			'Village Name',
 			'village_name',
-			'name',
 			'NAME'
 		].filter(Boolean);
 		for (const k of keys) {
@@ -2055,7 +2126,7 @@
 		const isOutline = layer.render_type === 'outline';
 		const isLine = layer.render_type === 'line' || layer.geometry_kind === 'line';
 		const fillColor = isOutline ? '#1f2937' : vectorFillColor(layer);
-		const labelColumn = layer.label_column || 'Village Na';
+		const labelColumn = layer.label_column || 'name';
 		const fillOpacity = layer.fill_opacity ?? 0.65;
 
 		if (map.getSource(sourceId)) {
@@ -2161,6 +2232,8 @@
 						'text-field': [
 							'coalesce',
 							['to-string', ['get', labelColumn]],
+							['to-string', ['get', 'name']],
+							['to-string', ['get', 'name_1']],
 							['to-string', ['get', 'Village Name']],
 							['to-string', ['get', 'Village Na']],
 							''
@@ -2207,7 +2280,7 @@
 			};
 		}
 
-		// Do NOT preload vector GeoJSON (villages.fgb is large). Load on demand when
+		// Do NOT preload vector GeoJSON (village FGB is large). Load on demand when
 		// the user toggles/selects a layer; the API always returns watershed-clipped data.
 
 		try {
@@ -2263,6 +2336,23 @@
 		if (!project?.id || !layerId) return;
 		const meta = secondaryLayers.find((l) => l.id === layerId);
 		if (!meta || isOverlayLayer(meta)) return;
+		if (isProjectAoiLayer(meta)) {
+			const meaning = meta.meaning || meta.interpretation || '';
+			layerAnalysis = {
+				...layerAnalysis,
+				[layerId]: {
+					layer_id: layerId,
+					stats: {},
+					evidence: '',
+					meaning,
+					uncertainty: meta.uncertainty || '',
+					interpretation: meaning,
+					field_check: meta.field_check || '',
+					status: 'ok'
+				}
+			};
+			return;
+		}
 		if (hasLoadedAnalysis(layerAnalysis[layerId]) || layerAnalysisLoading[layerId]) return;
 
 		// Cancel any in-flight background batch so the server's _batch_sem slot is
@@ -2498,6 +2588,7 @@
 			zoneText = '';
 			zoneObservations = '';
 			zoneQuestions = '';
+			selectedZoneTemplateId = null;
 			resetDrawState();
 			await reloadObservationZones();
 			status = 'Observation zone saved';
@@ -2513,6 +2604,7 @@
 		zoneText = '';
 		zoneObservations = '';
 		zoneQuestions = '';
+		selectedZoneTemplateId = null;
 		resetDrawState();
 		status = 'Ready';
 	}
@@ -2580,6 +2672,98 @@
 		return text.length > 60 ? `${text.slice(0, 60)}…` : text || 'Untitled hypothesis';
 	}
 
+	function hypothesesForZone(zoneId) {
+		if (!zoneId) return [];
+		const id = String(zoneId);
+		return hypotheses.filter((h) =>
+			(h.observation_zone_ids ?? []).map(String).includes(id)
+		);
+	}
+
+	function fieldNotesForHypothesis(hypothesisId) {
+		if (!hypothesisId) return [];
+		const id = String(hypothesisId);
+		return savedFieldNotes.filter((n) => n.hypothesis_id && String(n.hypothesis_id) === id);
+	}
+
+	function noteLabel(n) {
+		const title = String(n?.title ?? '').trim();
+		if (title) return title.length > 50 ? `${title.slice(0, 50)}…` : title;
+		const text = String(n?.text ?? '').trim();
+		return text.length > 50 ? `${text.slice(0, 50)}…` : text || 'Untitled note';
+	}
+
+	function openHypothesisFromZone(h) {
+		activePrimaryTab = 'hypotheses';
+		selectedLayer = { kind: 'primary', id: 'hypotheses' };
+		creatingHypothesis = false;
+		editingHypothesis = null;
+		openHypothesis(h);
+	}
+
+	function openFieldNoteFromHypothesis(noteId) {
+		const note = savedFieldNotes.find((n) => n.id === noteId);
+		if (!note) return;
+		activePrimaryTab = 'field-notes';
+		selectedLayer = { kind: 'primary', id: 'field-notes' };
+		selectedFieldNote = { ...note };
+		editingSelectedFieldNote = null;
+		showSelectedFieldNoteMenu = false;
+	}
+
+	function applyZoneTemplate(tpl) {
+		if (!tpl) return;
+		selectedZoneTemplateId = tpl.id;
+		zoneText = tpl.title;
+		zoneObservations = tpl.observations;
+		zoneQuestions = tpl.questions;
+	}
+
+	function applyZoneTemplateToEdit(tpl) {
+		if (!tpl || !editingSelectedZone) return;
+		editingSelectedZone = {
+			...editingSelectedZone,
+			text: tpl.title,
+			observations: tpl.observations,
+			questions: tpl.questions
+		};
+	}
+
+	let suggestedHypotheses = $derived(
+		suggestedHypothesesForZones(
+			savedZones.filter((z) => newHypothesisZoneIds.includes(z.id))
+		)
+	);
+
+	let suggestedEditHypotheses = $derived(
+		editingHypothesis
+			? suggestedHypothesesForZones(
+					savedZones.filter((z) => editingHypothesis.observation_zone_ids.includes(z.id))
+				)
+			: []
+	);
+
+	function applyHypothesisSuggestion(tpl) {
+		if (!tpl) return;
+		newHypothesisText = tpl.hypothesis;
+		const matching = savedZones.filter((z) => matchZoneTemplate(z.text)?.id === tpl.id);
+		const ids = new Set(newHypothesisZoneIds);
+		for (const z of matching) ids.add(z.id);
+		newHypothesisZoneIds = [...ids];
+	}
+
+	function applyEditHypothesisSuggestion(tpl) {
+		if (!tpl || !editingHypothesis) return;
+		const matching = savedZones.filter((z) => matchZoneTemplate(z.text)?.id === tpl.id);
+		const ids = new Set(editingHypothesis.observation_zone_ids);
+		for (const z of matching) ids.add(z.id);
+		editingHypothesis = {
+			...editingHypothesis,
+			hypothesis: tpl.hypothesis,
+			observation_zone_ids: [...ids]
+		};
+	}
+
 	function zoneTitleById(zoneId) {
 		return savedZones.find((z) => z.id === zoneId)?.text?.trim() || 'Untitled zone';
 	}
@@ -2591,6 +2775,13 @@
 		selectedHypothesis = null;
 		editingHypothesis = null;
 		hypothesisError = '';
+		if (selectedZone) {
+			const tpl = matchZoneTemplate(selectedZone.text);
+			if (tpl) {
+				newHypothesisText = tpl.hypothesis;
+				newHypothesisZoneIds = [selectedZone.id];
+			}
+		}
 	}
 
 	function cancelCreateHypothesis() {
@@ -2603,8 +2794,13 @@
 	function toggleNewHypothesisZone(zoneId) {
 		if (newHypothesisZoneIds.includes(zoneId)) {
 			newHypothesisZoneIds = newHypothesisZoneIds.filter((id) => id !== zoneId);
-		} else {
-			newHypothesisZoneIds = [...newHypothesisZoneIds, zoneId];
+			return;
+		}
+		newHypothesisZoneIds = [...newHypothesisZoneIds, zoneId];
+		const zone = savedZones.find((z) => z.id === zoneId);
+		const tpl = matchZoneTemplate(zone?.text);
+		if (tpl && !newHypothesisText.trim()) {
+			newHypothesisText = tpl.hypothesis;
 		}
 	}
 
@@ -2666,8 +2862,13 @@
 		const ids = editingHypothesis.observation_zone_ids;
 		if (ids.includes(zoneId)) {
 			editingHypothesis.observation_zone_ids = ids.filter((id) => id !== zoneId);
-		} else {
-			editingHypothesis.observation_zone_ids = [...ids, zoneId];
+			return;
+		}
+		editingHypothesis.observation_zone_ids = [...ids, zoneId];
+		const zone = savedZones.find((z) => z.id === zoneId);
+		const tpl = matchZoneTemplate(zone?.text);
+		if (tpl && !String(editingHypothesis.hypothesis || '').trim()) {
+			editingHypothesis.hypothesis = tpl.hypothesis;
 		}
 	}
 
@@ -3186,7 +3387,7 @@
 				class:text-brand-navy={mapMode !== 'flat'}
 				onclick={() => setMapMode('flat')}
 			>
-				Flat
+				2D
 			</button>
 			<button
 				type="button"
@@ -3339,7 +3540,7 @@
 				<div class="rounded-lg border border-brand-navy/10 bg-white p-4">
 					<h3 class="m-0 mb-1 text-base font-semibold">Observation zones</h3>
 					<p class="m-0 mb-3 text-xs text-gray-500">
-						Click a zone on the map to view details, or add a new polygon.
+						All zones are listed below. Click a title to expand details, or add a new polygon.
 					</p>
 					<button
 						type="button"
@@ -3366,12 +3567,36 @@
 				{#if pendingZone}
 					<div class="rounded-lg border border-brand-navy/10 bg-white p-4">
 						<h3 class="m-0 mb-3 text-base font-semibold">New observation zone</h3>
+						<label for="annot-suggest" class="text-sm text-gray-600">Suggested title</label>
+						<select
+							id="annot-suggest"
+							class="my-1.5 mb-3 box-border w-full rounded border border-gray-300 bg-white p-2 text-sm"
+							value={selectedZoneTemplateId ?? ''}
+							onchange={(e) => {
+								const id = e.currentTarget.value;
+								if (!id) {
+									selectedZoneTemplateId = null;
+									return;
+								}
+								const tpl = ZONE_TEMPLATES.find((t) => t.id === id);
+								if (tpl) applyZoneTemplate(tpl);
+							}}
+						>
+							<option value="">Custom / choose a suggestion…</option>
+							{#each ZONE_TEMPLATES as tpl (tpl.id)}
+								<option value={tpl.id}>{tpl.title}</option>
+							{/each}
+						</select>
 						<label for="annot-text" class="text-sm text-gray-600">Title</label>
 						<input
 							id="annot-text"
 							type="text"
 							class="my-1.5 mb-3 box-border w-full rounded border border-gray-300 p-2 text-sm"
 							bind:value={zoneText}
+							oninput={() => {
+								const match = matchZoneTemplate(zoneText);
+								selectedZoneTemplateId = match?.id ?? null;
+							}}
 							placeholder="Zone title"
 						/>
 						<label for="annot-observations" class="text-sm text-gray-600">Observations</label>
@@ -3390,6 +3615,14 @@
 							placeholder="What questions arise?"
 							rows="3"
 						></textarea>
+						{#if selectedZoneTemplateId}
+							{@const selectedTpl = ZONE_TEMPLATES.find((t) => t.id === selectedZoneTemplateId)}
+							{#if selectedTpl}
+								<p class="m-0 mb-3 rounded border border-brand-blue/20 bg-brand-blue/5 px-2.5 py-2 text-xs text-brand-navy">
+									Suggested hypothesis: <span class="font-semibold">{selectedTpl.hypothesis}</span>
+								</p>
+							{/if}
+						{/if}
 						<p class="m-0 mb-2 text-sm text-gray-600">Colour</p>
 						<div class="mb-4 flex flex-wrap gap-2">
 							{#each ZONE_COLORS as c}
@@ -3421,152 +3654,313 @@
 							</button>
 						</div>
 					</div>
-				{:else if editingSelectedZone}
-					<div class="rounded-lg border border-brand-navy/10 bg-white p-4">
-						<h3 class="m-0 mb-3 text-base font-semibold">Edit observation zone</h3>
-						<label for="edit-text" class="text-sm text-gray-600">Title</label>
-						<input
-							id="edit-text"
-							type="text"
-							class="my-1.5 mb-3 box-border w-full rounded border border-gray-300 p-2 text-sm"
-							bind:value={editingSelectedZone.text}
-						/>
-						<label for="edit-observations" class="text-sm text-gray-600">Observations</label>
-						<textarea
-							id="edit-observations"
-							class="my-1.5 mb-3 box-border w-full rounded border border-gray-300 p-2 text-sm"
-							bind:value={editingSelectedZone.observations}
-							rows="3"
-						></textarea>
-						<label for="edit-questions" class="text-sm text-gray-600">Questions</label>
-						<textarea
-							id="edit-questions"
-							class="my-1.5 mb-3 box-border w-full rounded border border-gray-300 p-2 text-sm"
-							bind:value={editingSelectedZone.questions}
-							rows="3"
-						></textarea>
-						<p class="m-0 mb-2 text-sm text-gray-600">Colour</p>
-						<div class="mb-4 flex flex-wrap gap-2">
-							{#each ZONE_COLORS as c}
+				{:else if savedZones.length === 0}
+					<p class="m-0 rounded-lg border border-dashed border-gray-200 bg-white px-3 py-6 text-center text-sm text-gray-500">
+						No observation zones yet. Draw a polygon on the map to add one.
+					</p>
+				{:else}
+					<ul class="m-0 list-none space-y-2 p-0">
+						{#each savedZones as zone (zone.id)}
+							{@const fill = zoneFillColor(zone.color)}
+							{@const ink = contrastTextColor(fill)}
+							{@const isOpen = selectedZone?.id === zone.id}
+							<li class="overflow-hidden rounded-lg border border-brand-navy/10 bg-white shadow-sm">
 								<button
 									type="button"
-									class="h-8 w-8 cursor-pointer rounded-full border-2"
-									class:border-gray-900={editingSelectedZone.color === c.hex}
-									class:border-transparent={editingSelectedZone.color !== c.hex}
-									style="background-color: {c.hex}"
-									title={c.label}
-									onclick={() => (editingSelectedZone.color = c.hex)}
-								></button>
-							{/each}
-						</div>
-						<div class="flex gap-2">
-							<button
-								class="cursor-pointer rounded border-0 bg-brand-blue px-3 py-1.5 font-body text-sm text-white disabled:opacity-60"
-								disabled={savingZone}
-								onclick={saveSelectedZone}
-							>
-								Save
-							</button>
-							<button
-								class="cursor-pointer rounded border-0 bg-brand-steel px-3 py-1.5 font-body text-sm text-white hover:bg-brand-navy"
-								onclick={cancelEditSelectedZone}
-							>
-								Cancel
-							</button>
-						</div>
-					</div>
-				{:else if selectedZone}
-					{@const zoneTitleColor = contrastTextColor(selectedZone.color)}
-					<div class="overflow-hidden rounded-lg border border-brand-navy/10 bg-white">
-						<div
-							class="flex items-center justify-between gap-2 px-4 py-3"
-							style:background-color={selectedZone.color}
-							style:color={zoneTitleColor}
-						>
-							<h3 class="m-0 min-w-0 flex-1 font-headline text-base leading-snug font-semibold">
-								{selectedZone.text || 'Untitled zone'}
-							</h3>
-							<div class="flex shrink-0 items-center gap-1">
-								<div class="relative">
-									<button
-										type="button"
-										class="flex h-8 w-8 cursor-pointer items-center justify-center rounded border-0 bg-transparent hover:bg-black/10"
-										style:color={zoneTitleColor}
-										aria-label="More actions"
-										onclick={() => (showSelectedZoneMenu = !showSelectedZoneMenu)}
+									class="flex w-full cursor-pointer items-center gap-2 border-0 px-3 py-2.5 text-left"
+									style:background-color={fill}
+									style:color={ink}
+									aria-expanded={isOpen}
+									onclick={() => openZoneFromList(zone)}
+								>
+									<span class="min-w-0 flex-1 truncate font-headline text-sm font-semibold leading-snug">
+										{zone.text || 'Untitled zone'}
+									</span>
+									<svg
+										xmlns="http://www.w3.org/2000/svg"
+										viewBox="0 0 20 20"
+										fill="currentColor"
+										class="h-4 w-4 shrink-0 opacity-80 transition-transform"
+										class:rotate-180={isOpen}
+										aria-hidden="true"
 									>
-										<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="h-5 w-5">
-											<circle cx="12" cy="5" r="1.5" />
-											<circle cx="12" cy="12" r="1.5" />
-											<circle cx="12" cy="19" r="1.5" />
-										</svg>
-									</button>
-									{#if showSelectedZoneMenu}
-										<div
-											class="absolute right-0 z-20 mt-1 min-w-28 overflow-hidden rounded border border-gray-200 bg-white text-brand-navy shadow-lg"
-										>
-											<button
-												type="button"
-												class="block w-full cursor-pointer border-0 bg-white px-3 py-2 text-left text-sm hover:bg-gray-50"
-												onclick={startEditSelectedZone}
+										<path
+											fill-rule="evenodd"
+											d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"
+											clip-rule="evenodd"
+										/>
+									</svg>
+								</button>
+								{#if isOpen}
+									{#if editingSelectedZone}
+										<div class="border-t border-brand-navy/10 p-4">
+											<label for="edit-suggest" class="text-sm text-gray-600">Suggested title</label>
+											<select
+												id="edit-suggest"
+												class="my-1.5 mb-3 box-border w-full rounded border border-gray-300 bg-white p-2 text-sm"
+												value={matchZoneTemplate(editingSelectedZone.text)?.id ?? ''}
+												onchange={(e) => {
+													const id = e.currentTarget.value;
+													if (!id) return;
+													const tpl = ZONE_TEMPLATES.find((t) => t.id === id);
+													if (tpl) applyZoneTemplateToEdit(tpl);
+												}}
 											>
-												Edit
-											</button>
-											<button
-												type="button"
-												class="block w-full cursor-pointer border-0 bg-white px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
-												onclick={deleteSelectedZone}
-											>
-												Delete
-											</button>
+												<option value="">Custom / choose a suggestion…</option>
+												{#each ZONE_TEMPLATES as tpl (tpl.id)}
+													<option value={tpl.id}>{tpl.title}</option>
+												{/each}
+											</select>
+											<label for="edit-text" class="text-sm text-gray-600">Title</label>
+											<input
+												id="edit-text"
+												type="text"
+												class="my-1.5 mb-3 box-border w-full rounded border border-gray-300 p-2 text-sm"
+												bind:value={editingSelectedZone.text}
+											/>
+											<label for="edit-observations" class="text-sm text-gray-600">Observations</label>
+											<textarea
+												id="edit-observations"
+												class="my-1.5 mb-3 box-border w-full rounded border border-gray-300 p-2 text-sm"
+												bind:value={editingSelectedZone.observations}
+												rows="3"
+											></textarea>
+											<label for="edit-questions" class="text-sm text-gray-600">Questions</label>
+											<textarea
+												id="edit-questions"
+												class="my-1.5 mb-3 box-border w-full rounded border border-gray-300 p-2 text-sm"
+												bind:value={editingSelectedZone.questions}
+												rows="3"
+											></textarea>
+											{#if matchZoneTemplate(editingSelectedZone.text)}
+												{@const editTpl = matchZoneTemplate(editingSelectedZone.text)}
+												{#if editTpl}
+													<p
+														class="m-0 mb-3 rounded border border-brand-blue/20 bg-brand-blue/5 px-2.5 py-2 text-xs text-brand-navy"
+													>
+														Suggested hypothesis: <span class="font-semibold">{editTpl.hypothesis}</span>
+													</p>
+												{/if}
+											{/if}
+											<p class="m-0 mb-2 text-sm text-gray-600">Colour</p>
+											<div class="mb-4 flex flex-wrap gap-2">
+												{#each ZONE_COLORS as c}
+													<button
+														type="button"
+														class="h-8 w-8 cursor-pointer rounded-full border-2"
+														class:border-gray-900={editingSelectedZone.color === c.hex}
+														class:border-transparent={editingSelectedZone.color !== c.hex}
+														style="background-color: {c.hex}"
+														title={c.label}
+														onclick={() => (editingSelectedZone.color = c.hex)}
+													></button>
+												{/each}
+											</div>
+											<div class="flex gap-2">
+												<button
+													class="cursor-pointer rounded border-0 bg-brand-blue px-3 py-1.5 font-body text-sm text-white disabled:opacity-60"
+													disabled={savingZone}
+													onclick={saveSelectedZone}
+												>
+													Save
+												</button>
+												<button
+													class="cursor-pointer rounded border-0 bg-brand-steel px-3 py-1.5 font-body text-sm text-white hover:bg-brand-navy"
+													onclick={cancelEditSelectedZone}
+												>
+													Cancel
+												</button>
+											</div>
+										</div>
+									{:else}
+										{@const linkedHyps = hypothesesForZone(zone.id)}
+										{@const zoneTpl = matchZoneTemplate(zone.text)}
+										<div class="border-t border-brand-navy/10 p-4">
+											<div class="mb-3 flex items-start justify-between gap-2">
+												<div class="min-w-0 flex-1">
+													<span class="mb-0.5 block text-xs font-semibold text-gray-500 uppercase"
+														>Observations</span
+													>
+													<p class="m-0 text-sm leading-relaxed whitespace-pre-wrap text-brand-navy">
+														{selectedZone?.observations || zone.observations || '—'}
+													</p>
+												</div>
+												<div class="relative shrink-0">
+													<button
+														type="button"
+														class="flex h-8 w-8 cursor-pointer items-center justify-center rounded border-0 bg-transparent text-brand-navy hover:bg-gray-100"
+														aria-label="More actions"
+														onclick={() => (showSelectedZoneMenu = !showSelectedZoneMenu)}
+													>
+														<svg
+															xmlns="http://www.w3.org/2000/svg"
+															viewBox="0 0 24 24"
+															fill="currentColor"
+															class="h-5 w-5"
+														>
+															<circle cx="12" cy="5" r="1.5" />
+															<circle cx="12" cy="12" r="1.5" />
+															<circle cx="12" cy="19" r="1.5" />
+														</svg>
+													</button>
+													{#if showSelectedZoneMenu}
+														<div
+															class="absolute right-0 z-20 mt-1 min-w-28 overflow-hidden rounded border border-gray-200 bg-white text-brand-navy shadow-lg"
+														>
+															<button
+																type="button"
+																class="block w-full cursor-pointer border-0 bg-white px-3 py-2 text-left text-sm hover:bg-gray-50"
+																onclick={startEditSelectedZone}
+															>
+																Edit
+															</button>
+															<button
+																type="button"
+																class="block w-full cursor-pointer border-0 bg-white px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+																onclick={deleteSelectedZone}
+															>
+																Delete
+															</button>
+														</div>
+													{/if}
+												</div>
+											</div>
+											<div class="mb-3">
+												<span class="mb-0.5 block text-xs font-semibold text-gray-500 uppercase"
+													>Questions</span
+												>
+												<p class="m-0 text-sm leading-relaxed whitespace-pre-wrap text-brand-navy">
+													{selectedZone?.questions || zone.questions || '—'}
+												</p>
+											</div>
+											<div class="mb-3">
+												<span class="mb-0.5 block text-xs font-semibold text-gray-500 uppercase"
+													>Linked hypotheses</span
+												>
+												{#if linkedHyps.length === 0}
+													<p class="m-0 text-sm text-gray-500">None linked yet</p>
+												{:else}
+													<ul class="m-0 list-none space-y-1.5 p-0">
+														{#each linkedHyps as h (h.id)}
+															<li>
+																<button
+																	type="button"
+																	class="w-full cursor-pointer rounded border border-gray-200 bg-gray-50 px-2.5 py-2 text-left hover:bg-gray-100"
+																	onclick={() => openHypothesisFromZone(h)}
+																>
+																	<span class="mb-0.5 block text-[10px] capitalize text-gray-500"
+																		>{HYPOTHESIS_STATUS_LABELS[h.status] ?? h.status}</span
+																	>
+																	<span class="block text-sm text-brand-navy">{hypothesisLabel(h)}</span>
+																</button>
+															</li>
+														{/each}
+													</ul>
+												{/if}
+											</div>
+											{#if zoneTpl && linkedHyps.length === 0}
+												<div class="rounded border border-brand-blue/20 bg-brand-blue/5 px-3 py-2">
+													<p class="m-0 mb-2 text-xs text-brand-navy">
+														Suggested hypothesis: <span class="font-semibold">{zoneTpl.hypothesis}</span>
+													</p>
+													<button
+														type="button"
+														class="cursor-pointer rounded border-0 bg-brand-blue px-2.5 py-1.5 text-xs text-white"
+														onclick={() => {
+															activePrimaryTab = 'hypotheses';
+															selectedLayer = { kind: 'primary', id: 'hypotheses' };
+															startCreateHypothesis();
+														}}
+													>
+														Use in Hypotheses
+													</button>
+												</div>
+											{/if}
 										</div>
 									{/if}
-								</div>
-								<button
-									type="button"
-									class="cursor-pointer rounded border border-current/30 bg-transparent px-2 py-1 text-xs hover:bg-black/10"
-									style:color={zoneTitleColor}
-									onclick={closeSelectedZone}
-								>
-									Close
-								</button>
-							</div>
-						</div>
-						<div class="p-4">
-							<div class="mb-3">
-								<span class="mb-0.5 block text-xs font-semibold text-gray-500 uppercase">Observations</span>
-							<p class="m-0 text-sm leading-relaxed whitespace-pre-wrap text-brand-navy">
-									{selectedZone.observations || '—'}
-								</p>
-							</div>
-							<div>
-								<span class="mb-0.5 block text-xs font-semibold text-gray-500 uppercase">Questions</span>
-								<p class="m-0 text-sm leading-relaxed whitespace-pre-wrap text-brand-navy">
-									{selectedZone.questions || '—'}
-								</p>
-							</div>
-						</div>
-					</div>
+								{/if}
+							</li>
+						{/each}
+					</ul>
 				{/if}
 			{:else if selectedLayer?.kind === 'primary' && activePrimaryTab === 'hypotheses'}
-				<div class="rounded-lg border border-brand-navy/10 bg-white p-4">
-					<h3 class="m-0 mb-1 text-base font-semibold">Hypotheses</h3>
-					<p class="m-0 mb-3 text-xs text-gray-500">
-						Create hypotheses linked to observation zones. Field notes provide evidence for validation.
-					</p>
-					<button
-						type="button"
-						class="flex w-full cursor-pointer items-center justify-center gap-2 rounded-lg border-0 px-3 py-2.5 font-body text-sm text-white hover:opacity-90"
-						style:background-color={HYPOTHESIS_COLOR}
-						onclick={startCreateHypothesis}
-					>
-						<span class="text-lg leading-none">+</span> Add hypothesis
-					</button>
-				</div>
+				{#if !creatingHypothesis && !editingHypothesis && !selectedHypothesis}
+					<div class="space-y-3">
+						<button
+							type="button"
+							class="flex w-full cursor-pointer items-center justify-center gap-2 rounded-lg border-0 px-3 py-2.5 font-body text-sm text-white hover:opacity-90"
+							style:background-color={HYPOTHESIS_COLOR}
+							onclick={startCreateHypothesis}
+						>
+							<span class="text-lg leading-none">+</span> Add hypothesis
+						</button>
+						{#if hypotheses.length === 0}
+							<p class="m-0 rounded-lg border border-dashed border-gray-200 bg-white px-3 py-6 text-center text-sm text-gray-500">
+								No hypotheses yet. Add one or use a suggestion from an observation zone.
+							</p>
+						{:else}
+							<ul class="m-0 list-none space-y-2 p-0">
+								{#each hypotheses as h (h.id)}
+									<li>
+										<button
+											type="button"
+											class="w-full cursor-pointer rounded-lg border border-brand-navy/10 bg-white px-3 py-3 text-left shadow-sm hover:border-brand-navy/20"
+											onclick={() => openHypothesis(h)}
+										>
+											<span
+												class="mb-1.5 inline-block rounded-full px-2 py-0.5 text-[10px] font-medium capitalize"
+												class:bg-gray-100={h.status === 'untested' || h.status === 'discarded'}
+												class:text-gray-700={h.status === 'untested' || h.status === 'discarded'}
+												class:bg-green-100={h.status === 'validated'}
+												class:text-green-800={h.status === 'validated'}
+												class:bg-red-100={h.status === 'invalidated'}
+												class:text-red-800={h.status === 'invalidated'}
+											>
+												{HYPOTHESIS_STATUS_LABELS[h.status] ?? h.status}
+											</span>
+											<span class="mb-1 block text-sm leading-snug text-brand-navy"
+												>{hypothesisLabel(h)}</span
+											>
+											<span class="block text-[11px] text-gray-500">
+												{(h.observation_zone_ids ?? []).length} zone(s) · {h.field_note_count ?? 0} note(s)
+											</span>
+										</button>
+									</li>
+								{/each}
+							</ul>
+						{/if}
+					</div>
+				{/if}
 
 				{#if creatingHypothesis}
+					{@const hypSuggestions =
+						suggestedHypotheses.length > 0
+							? suggestedHypotheses
+							: suggestedHypothesesForZones(savedZones)}
 					<div class="rounded-lg border border-brand-navy/10 bg-white p-4">
 						<h3 class="m-0 mb-3 text-base font-semibold">New hypothesis</h3>
+						{#if hypSuggestions.length > 0}
+							<label for="new-hyp-suggest" class="text-sm text-gray-600"
+								>Suggested from observation zones</label
+							>
+							<select
+								id="new-hyp-suggest"
+								class="my-1.5 mb-3 box-border w-full rounded border border-gray-300 bg-white p-2 text-sm"
+								value=""
+								onchange={(e) => {
+									const id = e.currentTarget.value;
+									if (!id) return;
+									const tpl = hypSuggestions.find((t) => t.id === id);
+									if (tpl) applyHypothesisSuggestion(tpl);
+									e.currentTarget.value = '';
+								}}
+							>
+								<option value="">Choose a suggested hypothesis…</option>
+								{#each hypSuggestions as tpl (tpl.id)}
+									<option value={tpl.id}>{tpl.hypothesis}</option>
+								{/each}
+							</select>
+						{/if}
 						<label for="new-hypothesis" class="text-sm text-gray-600">Hypothesis</label>
 						<textarea
 							id="new-hypothesis"
@@ -3589,6 +3983,11 @@
 												onchange={() => toggleNewHypothesisZone(zone.id)}
 											/>
 											<span class="truncate">{zone.text || 'Untitled zone'}</span>
+											{#if matchZoneTemplate(zone.text)}
+												<span class="shrink-0 rounded bg-brand-blue/10 px-1.5 py-0.5 text-[10px] text-brand-navy">
+													{matchZoneTemplate(zone.text)?.hypothesis}
+												</span>
+											{/if}
 										</label>
 									</li>
 								{/each}
@@ -3618,6 +4017,28 @@
 						<h3 class="m-0 mb-3 text-base font-semibold">
 							{editingHypothesis.field_note_count > 0 ? 'Review hypothesis' : 'Edit hypothesis'}
 						</h3>
+						{#if suggestedEditHypotheses.length > 0}
+							<label for="edit-hyp-suggest" class="text-sm text-gray-600"
+								>Suggested from linked zones</label
+							>
+							<select
+								id="edit-hyp-suggest"
+								class="my-1.5 mb-3 box-border w-full rounded border border-gray-300 bg-white p-2 text-sm"
+								value=""
+								onchange={(e) => {
+									const id = e.currentTarget.value;
+									if (!id) return;
+									const tpl = suggestedEditHypotheses.find((t) => t.id === id);
+									if (tpl) applyEditHypothesisSuggestion(tpl);
+									e.currentTarget.value = '';
+								}}
+							>
+								<option value="">Choose a suggested hypothesis…</option>
+								{#each suggestedEditHypotheses as tpl (tpl.id)}
+									<option value={tpl.id}>{tpl.hypothesis}</option>
+								{/each}
+							</select>
+						{/if}
 						<label for="edit-hypothesis-text" class="text-sm text-gray-600">Hypothesis</label>
 						<textarea
 							id="edit-hypothesis-text"
@@ -3639,6 +4060,11 @@
 												onchange={() => toggleEditHypothesisZone(zone.id)}
 											/>
 											<span class="truncate">{zone.text || 'Untitled zone'}</span>
+											{#if matchZoneTemplate(zone.text)}
+												<span class="shrink-0 rounded bg-brand-blue/10 px-1.5 py-0.5 text-[10px] text-brand-navy">
+													{matchZoneTemplate(zone.text)?.hypothesis}
+												</span>
+											{/if}
 										</label>
 									</li>
 								{/each}
@@ -3692,6 +4118,7 @@
 						</div>
 					</div>
 				{:else if selectedHypothesis}
+					{@const linkedNotes = fieldNotesForHypothesis(selectedHypothesis.id)}
 					<div class="rounded-lg border border-brand-navy/10 bg-white p-4">
 						<div class="mb-3 flex items-start justify-between gap-2">
 							<div class="min-w-0 flex-1">
@@ -3785,9 +4212,28 @@
 								</ul>
 							{/if}
 						</div>
-						<p class="m-0 mb-3 text-xs text-gray-500">
-							{selectedHypothesis.field_note_count ?? 0} field note(s) linked
-						</p>
+						<div class="mb-3">
+							<span class="mb-0.5 block text-xs font-semibold text-gray-500 uppercase"
+								>Linked field notes</span
+							>
+							{#if linkedNotes.length === 0}
+								<p class="m-0 text-sm text-gray-500">No field notes linked yet</p>
+							{:else}
+								<ul class="m-0 list-none space-y-1.5 p-0">
+									{#each linkedNotes as note (note.id)}
+										<li>
+											<button
+												type="button"
+												class="w-full cursor-pointer rounded border border-gray-200 bg-gray-50 px-2.5 py-2 text-left hover:bg-gray-100"
+												onclick={() => openFieldNoteFromHypothesis(note.id)}
+											>
+												<span class="block text-sm text-brand-navy">{noteLabel(note)}</span>
+											</button>
+										</li>
+									{/each}
+								</ul>
+							{/if}
+						</div>
 						<button
 							type="button"
 							class="w-full cursor-pointer rounded-lg border-0 px-3 py-2.5 font-body text-sm text-white hover:opacity-90"
@@ -3796,24 +4242,6 @@
 						>
 							{(selectedHypothesis.field_note_count ?? 0) > 0 ? 'Review' : 'Edit'}
 						</button>
-					</div>
-				{:else if hypotheses.length > 0}
-					<div class="rounded-lg border border-brand-navy/10 bg-white p-4">
-						<h3 class="m-0 mb-2 text-sm font-semibold text-gray-700">All hypotheses</h3>
-						<ul class="m-0 list-none space-y-2 p-0">
-							{#each hypotheses as h (h.id)}
-								<li>
-									<button
-										type="button"
-										class="w-full cursor-pointer rounded border border-gray-200 bg-gray-50 px-3 py-2 text-left hover:bg-gray-100"
-										onclick={() => openHypothesis(h)}
-									>
-										<span class="mb-1 block text-xs capitalize text-gray-500">{h.status}</span>
-										<span class="block text-sm text-brand-navy">{hypothesisLabel(h)}</span>
-									</button>
-								</li>
-							{/each}
-						</ul>
 					</div>
 				{/if}
 			{:else if selectedLayer?.kind === 'primary' && activePrimaryTab === 'field-notes'}

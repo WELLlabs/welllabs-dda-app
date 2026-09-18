@@ -1,0 +1,76 @@
+intervention,outcome,question,category,indicator,assumption,metric,input_type,variable_name,selectors,skip_logic
+Farm pond,,"Location (lat, long)",one time,,,"lat,long",coordinate,fp_ot_location,,
+Farm pond,,Date,one time,,,,date,fp_ot_date,,
+Farm pond,,District name,one time,,,,text,fp_ot_district_name,,
+Farm pond,,Block name,one time,,,,text,fp_ot_block_name,,
+Farm pond,,Village name,one time,,,,text,fp_ot_village_name,,
+Farm pond,,Farmer name,one time,,,,text,fp_ot_farmer_name,,
+Farm pond,,Farm Pond Type,one time,,,,single select,fp_ot_farm_pond_type,Community | MGNREGA | Individual,
+Farm pond,,Is the farm pond lined or unlined?,one time,,,,single select,fp_ot_is_the_farm_pond_lined_or_unlined,Lined | Unlined,
+Farm pond,,Is this new structure or rejuvenated?,one time,,,,single select,fp_ot_structure_status,New structure | Rejuvenated,
+Farm pond,,Date of Construction of the farm pond,one time,,,,date,fp_ot_date_of_construction_of_the_farm_pond,,show if fp_ot_structure_status = New structure
+Farm pond,,What was done,one time,,,,multi select,fp_ot_what_was_done,Deepening | Bunding | Pitching,show if fp_ot_structure_status = Rejuvenated
+Farm pond,,Additional depth created (m)?,one time,,,m,decimal,fp_ot_additional_depth_created,,show if fp_ot_structure_status = Rejuvenated
+Farm pond,,Length (m),one time,,,m,decimal,fp_ot_length,,
+Farm pond,,Breadth (m),one time,,,m,decimal,fp_ot_breadth,,
+Farm pond,,Height (m),one time,,,m,decimal,fp_ot_height,,
+Farm pond,,Source of water in farm pond,one time,,Farm Pond harvests surface runoff as a primary source.,,multi select,fp_ot_source_of_water_in_farm_pond,Dugwell | Borewell | Canal | Rainfall,
+Farm pond,,Is there a flow meter?,one time,,,,single select,fp_ot_has_flow_meter,Yes | No,
+Farm pond,Improved crop water productivity (Rs/m3),What is the rate of discharge through an irrigation pipe (liters per second)?,one time,Irrigation water applied (m3),,liters/sec,decimal,fp_ot_what_is_the_rate_of_discharge_through_an_irrigati,,show if fp_ot_has_flow_meter = No
+Farm pond,,Use of Farm Pond,one time,,,,multi select,fp_ot_use_of_farm_pond,Fishery | Agriculture (irrigation) | Foxnut | Chesnut | Domestic use | Village Water Supply,
+Farm pond,,Staff Gauge Installation Date,one time,,,,date,fp_ot_staff_gauge_installation_date,,
+Farm pond,,What is the volumetric water savings KPI decided for the farm pond?,one time,,,,text,fp_ot_what_is_the_volumetric_water_savings_kpi_decided_,,
+Farm pond,,Farm Pond Filled,one time,,,,single select,fp_ot_farm_pond_filled,Yes | No,
+Farm pond,Rainfall runoff harvested during monsoon (availability); Post-monsoon increased water availability,Staff Gauge Reading at Start (m),one time,Volume of water in structure in monsoon/post-monsoon; Number of fillings,"Farm Pond harvests surface runoff as a primary source, however, there might be seasonality in how the FP is filled for the rest of the year. It is a normal rainfall year and adequate runoff is generated.",m,decimal,fp_ot_staff_gauge_reading_at_start,,show if fp_ot_farm_pond_filled = Yes
+Farm pond,Rainfall runoff harvested during monsoon (availability); Post-monsoon increased water availability,Select the Asset ID,cm,Volume of water in structure in monsoon/post-monsoon; Number of fillings,,,single select,fp_cm_select_the_asset_id,,
+Farm pond,Rainfall runoff harvested during monsoon (availability); Post-monsoon increased water availability,Date of reading,cm,Volume of water in structure in monsoon/post-monsoon; Number of fillings,,,date,fp_cm_date_of_reading,,
+Farm pond,Volume of groundwater pumped in the structure,Source of water in farm pond,cm,Volumetric water pumped (m3),"Farm pond has seasonality in the source of water used to fill it, where groundwater is pumped in dry season.",,multi select,fp_cm_water_source,Dugwell | Borewell | Canal | Rainfall,
+Farm pond,Volume of groundwater pumped in the structure,Number of hours of pumping (hr),cm,Volumetric water pumped (m3),"Farm pond has seasonality in the source of water used to fill it, where groundwater is pumped in dry season.",hours,decimal,fp_cm_number_of_hours_of_pumping,,show if fp_cm_water_source includes Dugwell OR Borewell OR Canal
+Farm pond,Rainfall runoff harvested during monsoon (availability); Post-monsoon increased water availability,Rainfall (mm),cm,Volume of water in structure in monsoon/post-monsoon; Number of fillings,It is a normal rainfall year.,mm,decimal,fp_cm_rainfall,,
+Farm pond,Rainfall runoff harvested during monsoon (availability); Post-monsoon increased water availability,Staff Gauge Reading (m),cm,Volume of water in structure in monsoon/post-monsoon; Number of fillings,"Farm Pond harvests surface runoff as a primary source, however, there might be seasonality in how the FP is filled for the rest of the year. It is a normal rainfall year and adequate runoff is generated.",m,decimal,fp_cm_staff_gauge_reading,,
+Farm pond,Improved crop water productivity (Rs/m3),Did you use farm pond water for irrigation?,cm,Irrigation water applied (m3),,,single select,fp_cm_used_for_irrigation,Yes | No,
+Farm pond,Improved crop water productivity (Rs/m3),What is the rate of discharge through an irrigation pipe (liters per second)?,cm,Irrigation water applied (m3),,liters/sec,decimal,fp_cm_what_is_the_rate_of_discharge_through_an_irrigati,,show if fp_cm_used_for_irrigation = Yes
+Bio-mulching,,"Location (lat, long)",one time,,,"lat,long",coordinate,bm_ot_location,,
+Bio-mulching,,Date,one time,,,,date,bm_ot_date,,
+Bio-mulching,,District name,one time,,,,text,bm_ot_district_name,,
+Bio-mulching,,Block name,one time,,,,text,bm_ot_block_name,,
+Bio-mulching,,Village name,one time,,,,text,bm_ot_village_name,,
+Bio-mulching,,Farmer name,one time,,,,text,bm_ot_farmer_name,,
+Bio-mulching,,Plot role,one time,,,,single select,bm_ot_plot_role,Treatment | Control,
+Bio-mulching,,Paired control plot,one time,,,,single select,bm_ot_paired_control_asset_id,,show if bm_ot_plot_role = Treatment
+Bio-mulching,,Agriculture season,one time,,,,single select,bm_ot_agriculture_season,Kharif | Rabi | Zaid,
+Bio-mulching,,Crop grown,one time,,CM survey has a lifecycle of a season,,text,bm_ot_crop_grown,,
+Bio-mulching,Reduced irrigation water applied (rabi/zaid) (availability),Area under the crop,one time,Irrigation water volumetric savings (m3),Agriculture acreage and crop mix remains the same,acre/bigha,decimal,bm_ot_area_under_the_crop,,
+Bio-mulching,Reduced irrigation water applied (rabi/zaid) (availability),Area unit,one time,Irrigation water volumetric savings (m3),Agriculture acreage and crop mix remains the same,,single select,bm_ot_area_unit,acre | bigha,
+Bio-mulching,,Source of irrigation water,one time,,,,multi select,bm_ot_source_of_irrigation_water,Dug well | Borewell | Canal | Pond,
+Bio-mulching,,Is there a flow meter?,one time,,,,single select,bm_ot_has_flow_meter,Yes | No,
+Bio-mulching,,What is the rate of discharge through an irrigation pipe (liters per second)?,one time,,,liters/sec,decimal,bm_ot_what_is_the_rate_of_discharge_through_an_irrigati,,show if bm_ot_has_flow_meter = No
+Bio-mulching,,Method of irrigation,one time,,,,multi select,bm_ot_method_of_irrigation,Flood irrigation | Micro-irrigation | Raised bed farming,
+Bio-mulching,,Frequency of irrigation,one time,,,,text,bm_ot_frequency_of_irrigation,,
+Bio-mulching,,Method of bio-mulching,one time,,,,single select,bm_ot_method_of_bio_mulching,in-situ application | cover crop | not applicable,
+Bio-mulching,,What is the volumetric water savings KPI decided for bio-mulching?,one time,,,,text,bm_ot_what_is_the_volumetric_water_savings_kpi_decided_,,
+Bio-mulching,,Last irrigation applied,one time,,,,single select,bm_ot_last_irrigation_applied,Yes | No,
+Bio-mulching,Reduced irrigation water applied (rabi/zaid) (availability),Duration of pumping or flow meter reading (m3),one time,Irrigation water volumetric savings (m3),Agriculture acreage and crop mix remains the same,hours or m3,decimal,bm_ot_duration_of_pumping_or_flow_meter_reading,,show if bm_ot_last_irrigation_applied = Yes
+Bio-mulching,Reduced irrigation water applied (rabi/zaid) (availability),Select the Asset ID,cm,Irrigation water volumetric savings (m3),,,single select,bm_cm_select_the_asset_id,,
+Bio-mulching,Reduced irrigation water applied (rabi/zaid) (availability),Date of reading,cm,Irrigation water volumetric savings (m3),,,date,bm_cm_date_of_reading,,
+Bio-mulching,Reduced irrigation water applied (rabi/zaid) (availability),Date of irrigation,cm,Irrigation water volumetric savings (m3),,,date,bm_cm_date_of_irrigation,,
+Bio-mulching,Reduced irrigation water applied (rabi/zaid) (availability),Is there a flow meter?,cm,Irrigation water volumetric savings (m3),,,single select,bm_cm_has_flow_meter,Yes | No,
+Bio-mulching,Reduced irrigation water applied (rabi/zaid) (availability),Volume of irrigation water applied through Flow meter reading (m3),cm,Irrigation water volumetric savings (m3),Agriculture acreage and crop mix remains the same,m3,decimal,bm_cm_volume_of_irrigation_water_applied_through_flow_m,,show if bm_cm_has_flow_meter = Yes
+Bio-mulching,Reduced irrigation water applied (rabi/zaid) (availability),Number of hours of pumping (hr),cm,Irrigation water volumetric savings (m3),Agriculture acreage and crop mix remains the same,hours,decimal,bm_cm_number_of_hours_of_pumping,,show if bm_cm_has_flow_meter = No
+Bio-mulching,Reduced irrigation water applied (rabi/zaid) (availability),Rainfall (mm),cm,Improved soil moisture (m3),,mm,decimal,bm_cm_rainfall,,
+Bio-mulching,Reduced irrigation water applied (rabi/zaid) (availability),Are you practicing raised bed farming?,cm,Improved soil moisture (m3),,,single select,bm_cm_raised_bed_farming,Yes | No,
+Bio-mulching,Reduced irrigation water applied (rabi/zaid) (availability),Soil moisture reading - Raised bed (R) - Corner A,cm,Improved soil moisture (m3),,% or m3,decimal,bm_cm_soil_moisture_raised_r_corner_a,,show if bm_cm_raised_bed_farming = Yes
+Bio-mulching,Reduced irrigation water applied (rabi/zaid) (availability),Soil moisture reading - Raised bed (R) - Corner B,cm,Improved soil moisture (m3),,% or m3,decimal,bm_cm_soil_moisture_raised_r_corner_b,,show if bm_cm_raised_bed_farming = Yes
+Bio-mulching,Reduced irrigation water applied (rabi/zaid) (availability),Soil moisture reading - Raised bed (R) - Corner C,cm,Improved soil moisture (m3),,% or m3,decimal,bm_cm_soil_moisture_raised_r_corner_c,,show if bm_cm_raised_bed_farming = Yes
+Bio-mulching,Reduced irrigation water applied (rabi/zaid) (availability),Soil moisture reading - Raised bed (R) - Corner D,cm,Improved soil moisture (m3),,% or m3,decimal,bm_cm_soil_moisture_raised_r_corner_d,,show if bm_cm_raised_bed_farming = Yes
+Bio-mulching,Reduced irrigation water applied (rabi/zaid) (availability),Soil moisture reading - Raised bed (R) - Centre,cm,Improved soil moisture (m3),,% or m3,decimal,bm_cm_soil_moisture_raised_r_centre,,show if bm_cm_raised_bed_farming = Yes
+Bio-mulching,Reduced irrigation water applied (rabi/zaid) (availability),Soil moisture reading - Raised bed (F) - Corner A,cm,Improved soil moisture (m3),,% or m3,decimal,bm_cm_soil_moisture_raised_f_corner_a,,show if bm_cm_raised_bed_farming = Yes
+Bio-mulching,Reduced irrigation water applied (rabi/zaid) (availability),Soil moisture reading - Raised bed (F) - Corner B,cm,Improved soil moisture (m3),,% or m3,decimal,bm_cm_soil_moisture_raised_f_corner_b,,show if bm_cm_raised_bed_farming = Yes
+Bio-mulching,Reduced irrigation water applied (rabi/zaid) (availability),Soil moisture reading - Raised bed (F) - Corner C,cm,Improved soil moisture (m3),,% or m3,decimal,bm_cm_soil_moisture_raised_f_corner_c,,show if bm_cm_raised_bed_farming = Yes
+Bio-mulching,Reduced irrigation water applied (rabi/zaid) (availability),Soil moisture reading - Raised bed (F) - Corner D,cm,Improved soil moisture (m3),,% or m3,decimal,bm_cm_soil_moisture_raised_f_corner_d,,show if bm_cm_raised_bed_farming = Yes
+Bio-mulching,Reduced irrigation water applied (rabi/zaid) (availability),Soil moisture reading - Raised bed (F) - Centre,cm,Improved soil moisture (m3),,% or m3,decimal,bm_cm_soil_moisture_raised_f_centre,,show if bm_cm_raised_bed_farming = Yes
+Bio-mulching,Reduced irrigation water applied (rabi/zaid) (availability),Soil moisture reading - Flat plot - Corner A,cm,Improved soil moisture (m3),,% or m3,decimal,bm_cm_soil_moisture_flat_corner_a,,show if bm_cm_raised_bed_farming = No
+Bio-mulching,Reduced irrigation water applied (rabi/zaid) (availability),Soil moisture reading - Flat plot - Corner B,cm,Improved soil moisture (m3),,% or m3,decimal,bm_cm_soil_moisture_flat_corner_b,,show if bm_cm_raised_bed_farming = No
+Bio-mulching,Reduced irrigation water applied (rabi/zaid) (availability),Soil moisture reading - Flat plot - Corner C,cm,Improved soil moisture (m3),,% or m3,decimal,bm_cm_soil_moisture_flat_corner_c,,show if bm_cm_raised_bed_farming = No
+Bio-mulching,Reduced irrigation water applied (rabi/zaid) (availability),Soil moisture reading - Flat plot - Corner D,cm,Improved soil moisture (m3),,% or m3,decimal,bm_cm_soil_moisture_flat_corner_d,,show if bm_cm_raised_bed_farming = No
+Bio-mulching,Reduced irrigation water applied (rabi/zaid) (availability),Soil moisture reading - Flat plot - Centre,cm,Improved soil moisture (m3),,% or m3,decimal,bm_cm_soil_moisture_flat_centre,,show if bm_cm_raised_bed_farming = No

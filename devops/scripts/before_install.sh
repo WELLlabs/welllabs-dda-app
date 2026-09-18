@@ -101,3 +101,43 @@ else
 fi
 
 echo "=== Ready for new release ==="
+
+# Free disk before AfterInstall builds a new venv (beta has failed with ENOSPC).
+echo "--- Disk before prune ---"
+df -h / /tmp /opt 2>/dev/null || df -h /
+echo "Pruning old Well Labs releases (keep current + 1 previous)..."
+if [ -d /opt/welllabs/releases ]; then
+  CURRENT_TARGET=""
+  if [ -L /opt/welllabs/current ]; then
+    CURRENT_TARGET=$(readlink -f /opt/welllabs/current || true)
+  fi
+  # shellcheck disable=SC2012
+  mapfile -t RELEASE_DIRS < <(ls -1dt /opt/welllabs/releases/*/ 2>/dev/null || true)
+  kept=0
+  for dir in "${RELEASE_DIRS[@]}"; do
+    abs=$(readlink -f "$dir" || true)
+    # Always keep the live symlink target.
+    if [ -n "$CURRENT_TARGET" ] && [ "$abs" = "$CURRENT_TARGET" ]; then
+      echo "  keep (current): $dir"
+      kept=$((kept + 1))
+      continue
+    fi
+    # Keep one additional recent release for rollback.
+    if [ "$kept" -lt 2 ]; then
+      echo "  keep: $dir"
+      kept=$((kept + 1))
+      continue
+    fi
+    echo "  remove: $dir"
+    rm -rf "$dir"
+  done
+fi
+echo "Clearing package caches and stale deploy scratch..."
+rm -rf /tmp/welllabs-deploy 2>/dev/null || true
+rm -rf /root/.cache/pip /home/*/.cache/pip 2>/dev/null || true
+rm -rf /root/.npm/_cacache /home/*/.npm/_cacache 2>/dev/null || true
+journalctl --vacuum-size=200M >/dev/null 2>&1 || true
+# Do not docker prune -a: keeps qgis/qgis image needed for QField packaging.
+docker builder prune -f >/dev/null 2>&1 || true
+echo "--- Disk after prune ---"
+df -h / /tmp /opt 2>/dev/null || df -h /

@@ -305,6 +305,66 @@ class TestDeleteMelProject:
             app.dependency_overrides.pop(require_assess_owner, None)
 
 
+class TestUpdateMelProject:
+    def test_renames_project(self, auth_client):
+        client, user = auth_client
+        row = _mel_row(user["id"], name="Old name")
+        updated = {**row, "name": "New name"}
+        ctx, _cur = _db_cursor_mock(fetchone={"id": row["id"]})
+        app.dependency_overrides[require_assess_admin] = lambda: user
+        try:
+            with (
+                patch(
+                    "app.modules.assess.routers.mel_projects.get_mel_project",
+                    side_effect=[row, updated],
+                ),
+                patch("app.modules.assess.routers.mel_projects.db_cursor", return_value=ctx),
+            ):
+                response = client.patch(
+                    f"/api/assess/mel/projects/{row['id']}",
+                    json={"name": "New name"},
+                )
+            assert response.status_code == 200
+            assert response.json()["name"] == "New name"
+        finally:
+            app.dependency_overrides.pop(require_assess_admin, None)
+
+
+class TestRenameMelPlan:
+    def test_renames_without_clobbering_plan_json(self, auth_client):
+        client, user = auth_client
+        project_id = str(uuid4())
+        existing = _plan_row(project_id, name="Old intervention")
+        existing["kind"] = "implementation"
+        existing["plan_json"] = {"outcome_ids": ["keep-me"]}
+        updated = {**existing, "name": "Medak farm pond"}
+        ctx, cur = _db_cursor_mock(fetchone={"id": existing["id"]})
+        app.dependency_overrides[require_assess_access] = lambda: user
+        try:
+            with (
+                patch(
+                    "app.modules.assess.routers.mel_projects.get_mel_project",
+                    return_value=_mel_row(user["id"]),
+                ),
+                patch(
+                    "app.modules.assess.routers.mel_projects.get_mel_plan",
+                    side_effect=[existing, updated],
+                ),
+                patch("app.modules.assess.routers.mel_projects.db_cursor", return_value=ctx),
+            ):
+                response = client.patch(
+                    f"/api/assess/mel/projects/{project_id}/plans/{existing['id']}",
+                    json={"name": "Medak farm pond"},
+                )
+            assert response.status_code == 200
+            assert response.json()["name"] == "Medak farm pond"
+            sql = cur.execute.call_args_list[0].args[0]
+            assert "name = %(name)s" in sql
+            assert "plan_json" not in sql
+        finally:
+            app.dependency_overrides.pop(require_assess_access, None)
+
+
 class TestMelProjectAccessUsers:
     def test_add_member_by_email(self, auth_client):
         client, user = auth_client

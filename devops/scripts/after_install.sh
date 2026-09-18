@@ -156,6 +156,22 @@ defaults = {
 for key, value in defaults.items():
     cfg.setdefault(key, value)
 
+# Village boundaries / census demographics use Village_pan_India.fgb. Older Secrets
+# Manager VECTOR_LAYERS allowlists may still list only villages.fgb — append the new
+# key so CodeDeploy never ships a beta/prod that silently falls back to the old layer.
+REQUIRED_VECTOR_KEYS = ("vector/Village_pan_India.fgb",)
+vl_raw = str(cfg.get("VECTOR_LAYERS") or "").strip()
+if vl_raw and vl_raw.lower() not in {"*", "all"}:
+    parts = [p.strip() for p in vl_raw.split(",") if p.strip()]
+    changed = False
+    for key in REQUIRED_VECTOR_KEYS:
+        if key not in parts:
+            parts.append(key)
+            changed = True
+            print(f"  + appended {key} to VECTOR_LAYERS (required village layer)")
+    if changed:
+        cfg["VECTOR_LAYERS"] = ",".join(parts)
+
 lines = [f'{key}="{escape(value)}"' for key, value in cfg.items()]
 shared_env.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -189,6 +205,35 @@ echo "────────────────────────�
 # ──────────────────────────────────────────────────────────────────────────────
 echo ""
 echo "--- [6/7] Creating release $TIMESTAMP ---"
+echo "Disk before release build:"
+df -h / /opt 2>/dev/null || df -h /
+
+# Prune old releases BEFORE venv/npm so we do not hit ENOSPC mid-pip.
+# (End-of-script cleanup alone is too late — that is how beta AfterInstall failed.)
+if [ -d /opt/welllabs/releases ]; then
+  CURRENT_TARGET=""
+  if [ -L /opt/welllabs/current ]; then
+    CURRENT_TARGET=$(readlink -f /opt/welllabs/current || true)
+  fi
+  # shellcheck disable=SC2012
+  mapfile -t _old_releases < <(ls -1dt /opt/welllabs/releases/*/ 2>/dev/null || true)
+  _kept=0
+  for _dir in "${_old_releases[@]}"; do
+    _abs=$(readlink -f "$_dir" || true)
+    if [ -n "$CURRENT_TARGET" ] && [ "$_abs" = "$CURRENT_TARGET" ]; then
+      _kept=$((_kept + 1))
+      continue
+    fi
+    if [ "$_kept" -lt 2 ]; then
+      _kept=$((_kept + 1))
+      continue
+    fi
+    echo "  pruning old release: $_dir"
+    rm -rf "$_dir"
+  done
+fi
+rm -rf /root/.cache/pip 2>/dev/null || true
+
 mkdir -p "$RELEASE_DIR"
 cp -r "$DEPLOY_ARCHIVE/." "$RELEASE_DIR/"
 

@@ -24,6 +24,10 @@ from app.modules.diagnose.services.layer_catalog import (
     display_name_for_key,
 )
 from app.modules.diagnose.services.package_progress import PackageProgress
+from app.modules.diagnose.services.qfield_names import (
+    qfield_cloud_name_aliases,
+    qfield_cloud_project_name,
+)
 from app.modules.diagnose.services.qgis_package import build_qfield_project_with_qgis
 from app.modules.diagnose.services.s3_cleanup import cleanup_project_s3
 
@@ -36,7 +40,7 @@ def _project_bounds(project_id: str) -> tuple[dict, list[float] | None]:
     with db_cursor() as cur:
         cur.execute(
             """
-            SELECT name, watershed_name,
+            SELECT name, watershed_name, qfield_project_id,
                    ST_AsGeoJSON(watershed_geom)::json AS watershed_geojson,
                    ST_XMin(watershed_geom) AS xmin,
                    ST_YMin(watershed_geom) AS ymin,
@@ -822,11 +826,46 @@ def _export_secondary_vectors(
     return exports
 
 
-def _get_or_create_project(client: sdk.Client, name: str) -> dict:
+def _create_qfield_cloud_project(client: sdk.Client, name: str, owner: str | None) -> dict:
+    """Create without sending owner=null, which QField Cloud rejects as 400."""
+    payload: dict = {"name": name, "description": "", "is_public": 0}
+    if owner:
+        payload["owner"] = owner
+    resp = client._request("POST", "projects", data=payload)
+    return resp.json()
+
+
+def _get_or_create_project(
+    client: sdk.Client,
+    name: str,
+    *,
+    owner: str | None = None,
+    existing_id: str | None = None,
+    aliases: list[str] | None = None,
+) -> dict:
+    names = {name, *(aliases or [])}
+    if existing_id:
+        try:
+            project = client.get_project(existing_id)
+            if project:
+                return project
+        except Exception as exc:
+            logger.warning("Stored QField Cloud project %s was not found: %s", existing_id, exc)
     for project in client.list_projects():
-        if project["name"] == name:
+        if project.get("name") in names:
             return project
-    return client.create_project(name)
+    try:
+        return _create_qfield_cloud_project(client, name, owner)
+    except Exception as exc:
+        for project in client.list_projects():
+            if project.get("name") in names:
+                logger.info("Using existing QField Cloud project %s after create failed", project.get("name"))
+                return project
+        raise RuntimeError(
+            f"Could not create QField Cloud project '{name}'. "
+            "Names may contain only letters, numbers, hyphen, underscore, and dots. "
+            f"Original error: {exc}"
+        ) from exc
 
 
 def _extract_layer_ids(qgs_path: Path) -> dict[str, str]:
@@ -964,7 +1003,7 @@ def package_and_upload(
 
     step(5, "Loading project from database…")
     row, extent = _project_bounds(project_id)
-    project_name = f"{settings.qfield_project_name}-{row['name']}".replace(" ", "-")[:80]
+    project_name = qfield_cloud_project_name(row["name"])
     package_dir = Path(settings.packages_dir) / project_id
     package_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1007,6 +1046,10 @@ def package_and_upload(
     # restore them after the rebuild and keep QField Cloud layer references stable.
     preserved_layer_ids: dict[str, str] = {}
     existing_qgs = package_dir / f"{project_name}.qgs"
+    if not existing_qgs.is_file():
+        found = sorted(package_dir.glob("*.qgs"))
+        if found:
+            existing_qgs = found[0]
     if existing_qgs.is_file():
         preserved_layer_ids = _extract_layer_ids(existing_qgs)
         if preserved_layer_ids and progress:
@@ -1058,7 +1101,13 @@ def package_and_upload(
 
     step(70, "Connecting to QField Cloud…")
     client = sdk.Client(url=settings.qfield_cloud_url, token=qfield_token)
-    qfc_project = _get_or_create_project(client, project_name)
+    qfc_project = _get_or_create_project(
+        client,
+        project_name,
+        owner=qfield_username,
+        existing_id=row.get("qfield_project_id") or None,
+        aliases=qfield_cloud_name_aliases(row["name"]),
+    )
     qfc_project_id = qfc_project["id"]
     step(75, f"QField project: {project_name}")
 

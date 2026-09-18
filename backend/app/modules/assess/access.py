@@ -153,13 +153,17 @@ def get_mel_plan(plan_id: str, *, project_id: str | None = None) -> dict:
                     mp.project_id,
                     mp.name,
                     mp.intervention_slug,
+                    mp.kind,
                     mp.plan_json,
                     mp.created_by,
                     mp.created_at,
                     mp.updated_at,
                     (
                         SELECT COUNT(*)::int FROM mel_forms mf WHERE mf.plan_id = mp.id
-                    ) AS form_count
+                    ) AS form_count,
+                    (
+                        SELECT COUNT(*)::int FROM mel_assets ma WHERE ma.plan_id = mp.id
+                    ) AS asset_count
                 FROM mel_plans mp
                 WHERE mp.id = %(id)s AND mp.project_id = %(project_id)s
                 """,
@@ -173,13 +177,17 @@ def get_mel_plan(plan_id: str, *, project_id: str | None = None) -> dict:
                     mp.project_id,
                     mp.name,
                     mp.intervention_slug,
+                    mp.kind,
                     mp.plan_json,
                     mp.created_by,
                     mp.created_at,
                     mp.updated_at,
                     (
                         SELECT COUNT(*)::int FROM mel_forms mf WHERE mf.plan_id = mp.id
-                    ) AS form_count
+                    ) AS form_count,
+                    (
+                        SELECT COUNT(*)::int FROM mel_assets ma WHERE ma.plan_id = mp.id
+                    ) AS asset_count
                 FROM mel_plans mp
                 WHERE mp.id = %(id)s
                 """,
@@ -197,8 +205,24 @@ def mel_plan_to_dict(row: dict) -> dict:
         "project_id": str(row["project_id"]),
         "name": row["name"],
         "intervention_slug": row["intervention_slug"],
+        "kind": row.get("kind") or "plan",
         "plan_json": row.get("plan_json"),
         "form_count": int(row.get("form_count") or 0),
+        "asset_count": int(row.get("asset_count") or 0),
+        "created_by": str(row["created_by"]) if row.get("created_by") else None,
+        "created_at": row["created_at"].isoformat(),
+        "updated_at": row["updated_at"].isoformat(),
+    }
+
+
+def mel_asset_to_dict(row: dict) -> dict:
+    return {
+        "id": str(row["id"]),
+        "project_id": str(row["project_id"]),
+        "plan_id": str(row["plan_id"]),
+        "intervention_slug": row["intervention_slug"],
+        "label": row.get("label") or "",
+        "ot_answers": row.get("ot_answers") or {},
         "created_by": str(row["created_by"]) if row.get("created_by") else None,
         "created_at": row["created_at"].isoformat(),
         "updated_at": row["updated_at"].isoformat(),

@@ -24,26 +24,162 @@ export async function fetchMelProject(projectId) {
 	return request(`/projects/${encodeURIComponent(projectId)}`);
 }
 
+/** Update MEL project name / description. */
+export async function updateMelProject(projectId, { name, description } = {}) {
+	const body = {};
+	if (name !== undefined) body.name = name;
+	if (description !== undefined) body.description = description;
+	return request(`/projects/${encodeURIComponent(projectId)}`, {
+		method: 'PATCH',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify(body)
+	});
+}
+
 /** Delete a MEL project (owner only). */
 export async function deleteMelProject(projectId) {
 	return request(`/projects/${encodeURIComponent(projectId)}`, { method: 'DELETE' });
 }
 
-/** List MEL plans under a project. */
-export async function fetchMelPlans(projectId) {
-	return request(`/projects/${encodeURIComponent(projectId)}/plans`);
-}
-
 /** Create a MEL plan bound to one catalog intervention. */
-export async function createMelPlan(projectId, { name, interventionSlug }) {
+export async function createMelPlan(projectId, { name, interventionSlug, kind = 'plan' }) {
 	return request(`/projects/${encodeURIComponent(projectId)}/plans`, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({
 			name,
-			intervention_slug: interventionSlug
+			intervention_slug: interventionSlug,
+			kind
 		})
 	});
+}
+
+/** List MEL plans under a project (optional kind filter). */
+export async function fetchMelPlans(projectId, { kind } = {}) {
+	const q = kind ? `?kind=${encodeURIComponent(kind)}` : '';
+	return request(`/projects/${encodeURIComponent(projectId)}/plans${q}`);
+}
+
+/** Persist outcome selection / plan_json without publishing ODK. Optional rename. */
+export async function saveMelPlan(
+	projectId,
+	planId,
+	{ outcomeIds, planJson, name } = {}
+) {
+	const body = {};
+	if (outcomeIds !== undefined) body.outcome_ids = outcomeIds;
+	if (planJson !== undefined) body.plan_json = planJson;
+	if (name !== undefined) body.name = name;
+	return request(
+		`/projects/${encodeURIComponent(projectId)}/plans/${encodeURIComponent(planId)}`,
+		{
+			method: 'PATCH',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(body)
+		}
+	);
+}
+
+export async function fetchMelAssets(projectId, planId) {
+	return request(
+		`/projects/${encodeURIComponent(projectId)}/plans/${encodeURIComponent(planId)}/assets`
+	);
+}
+
+export async function createMelAsset(projectId, planId, { otAnswers, label = '' }) {
+	return request(
+		`/projects/${encodeURIComponent(projectId)}/plans/${encodeURIComponent(planId)}/assets`,
+		{
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ ot_answers: otAnswers, label })
+		}
+	);
+}
+
+export async function updateMelAsset(projectId, planId, assetId, { otAnswers, label } = {}) {
+	const body = {};
+	if (otAnswers !== undefined) body.ot_answers = otAnswers;
+	if (label !== undefined) body.label = label;
+	return request(
+		`/projects/${encodeURIComponent(projectId)}/plans/${encodeURIComponent(planId)}/assets/${encodeURIComponent(assetId)}`,
+		{
+			method: 'PATCH',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(body)
+		}
+	);
+}
+
+export async function deleteMelAsset(projectId, planId, assetId) {
+	await request(
+		`/projects/${encodeURIComponent(projectId)}/plans/${encodeURIComponent(planId)}/assets/${encodeURIComponent(assetId)}`,
+		{ method: 'DELETE' }
+	);
+}
+
+export async function fetchOneTimeQuestions(projectId, planId) {
+	return request(
+		`/projects/${encodeURIComponent(projectId)}/plans/${encodeURIComponent(planId)}/one-time-questions`
+	);
+}
+
+export async function fetchCmQuestions(projectId, planId) {
+	return request(
+		`/projects/${encodeURIComponent(projectId)}/plans/${encodeURIComponent(planId)}/cm-questions`
+	);
+}
+
+export async function fetchMappingPackages({ interventionSlug, projectId, planId, outcomeIds = [] }) {
+	return request('/plans/mapping-packages', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({
+			intervention_slug: interventionSlug,
+			outcome_ids: outcomeIds,
+			project_id: projectId || null,
+			plan_id: planId || null
+		})
+	});
+}
+
+export async function fetchImplementationDashboard(projectId, planId) {
+	return request(
+		`/projects/${encodeURIComponent(projectId)}/plans/${encodeURIComponent(planId)}/dashboard`
+	);
+}
+
+export async function fetchAssetDashboard(projectId, planId, assetId) {
+	return request(
+		`/projects/${encodeURIComponent(projectId)}/plans/${encodeURIComponent(planId)}/assets/${encodeURIComponent(assetId)}/dashboard`
+	);
+}
+
+/** Download the MEL plan as a .docx */
+export async function exportMelPlanDocx(projectId, planId) {
+	const res = await fetch(
+		apiPath(
+			`/assess/mel/projects/${encodeURIComponent(projectId)}/plans/${encodeURIComponent(planId)}/export-docx`
+		),
+		{ method: 'GET', credentials: 'include' }
+	);
+	if (!res.ok) {
+		const text = await res.text();
+		let message = text || res.statusText;
+		try {
+			const json = JSON.parse(text);
+			if (json.detail)
+				message = typeof json.detail === 'string' ? json.detail : JSON.stringify(json.detail);
+		} catch {
+			/* keep */
+		}
+		throw new Error(message);
+	}
+	const blob = await res.blob();
+	const disposition = res.headers.get('Content-Disposition') || '';
+	const match = disposition.match(/filename="?([^"]+)"?/i);
+	const filename = match?.[1] || 'mel-plan.docx';
+	return { blob, filename };
 }
 
 /** Fetch one MEL plan. */
@@ -117,7 +253,27 @@ export async function removeMelUserAccess(projectId, userId) {
 	);
 }
 
-/** List interventions from the outcomes/indicators catalog. */
+export async function fetchMelOrgAccess(projectId) {
+	const data = await request(`/projects/${encodeURIComponent(projectId)}/access/orgs`);
+	return data.organizations ?? [];
+}
+
+export async function addMelOrgAccess(projectId, orgId) {
+	return request(`/projects/${encodeURIComponent(projectId)}/access/orgs`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ org_id: orgId })
+	});
+}
+
+export async function removeMelOrgAccess(projectId, orgId) {
+	return request(
+		`/projects/${encodeURIComponent(projectId)}/access/orgs/${encodeURIComponent(orgId)}`,
+		{ method: 'DELETE' }
+	);
+}
+
+/** List interventions that have mapping-catalog outcomes and indicators. */
 export async function fetchMelInterventions() {
 	return request('/interventions');
 }

@@ -40,6 +40,7 @@ _VILLAGE_NAME_KEYS = (
     "villname",
     "VILLNAME",
     "name",
+    "name_1",
     "Name",
     "NAME",
 )
@@ -60,6 +61,48 @@ _VILLAGE_STATE_KEYS = (
     "stname",
     "STNAME",
 )
+
+# Census 2011 state codes (pc11_state_id / sid) → keys used by _STATE_BBOXES.
+_PC11_STATE_NAMES = {
+    "1": "jammu and kashmir",
+    "2": "himachal pradesh",
+    "3": "punjab",
+    "4": "chandigarh",
+    "5": "uttarakhand",
+    "6": "haryana",
+    "7": "delhi",
+    "8": "rajasthan",
+    "9": "uttar pradesh",
+    "10": "bihar",
+    "11": "sikkim",
+    "12": "arunachal pradesh",
+    "13": "nagaland",
+    "14": "manipur",
+    "15": "mizoram",
+    "16": "tripura",
+    "17": "meghalaya",
+    "18": "assam",
+    "19": "west bengal",
+    "20": "jharkhand",
+    "21": "odisha",
+    "22": "chhattisgarh",
+    "23": "madhya pradesh",
+    "24": "gujarat",
+    "25": "daman and diu",
+    "26": "dadra and nagar haveli",
+    "27": "maharashtra",
+    "28": "andhra pradesh",
+    "29": "karnataka",
+    "30": "goa",
+    "31": "lakshadweep",
+    "32": "kerala",
+    "33": "tamil nadu",
+    "34": "puducherry",
+    "35": "andaman and nicobar",
+    "36": "telangana",
+}
+_PC11_DISTRICT_NAMES: dict[str, str] | None = None
+_VILLAGE_LOOKUP_FILENAME = "Village_pan_India_lookup.jsonl"
 
 # Guardrails for custom / union AOIs (degrees / vertex count)
 _MAX_BBOX_SPAN_DEG = 8.0
@@ -137,12 +180,16 @@ def _fgb_vsis3_path() -> str:
 
 
 def _villages_s3_key() -> str:
-    from app.modules.diagnose.services.layer_catalog import resolve_enabled_vector_keys
+    from app.modules.diagnose.services.layer_catalog import get_catalog, resolve_enabled_vector_keys
 
+    layer = get_catalog().by_id("village_boundaries")
+    if layer and layer.s3_key:
+        return layer.s3_key.lstrip("/")
     for key in resolve_enabled_vector_keys():
-        if key and "villages" in key.lower():
+        lowered = (key or "").lower()
+        if "village_pan" in lowered or "villages" in lowered:
             return key.lstrip("/")
-    return "vector/villages.fgb"
+    return "vector/Village_pan_India.fgb"
 
 
 def _villages_vsis3_path() -> str:
@@ -880,8 +927,59 @@ def _escape_ogr_literal(value: str) -> str:
     return value.replace("\\", "\\\\").replace("'", "''")
 
 
+def _census_code(value: object) -> str:
+    """Return a census code like '28' or '535'; empty if value is not numeric."""
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if not text or text.lower() in {"nan", "none"}:
+        return ""
+    if not re.fullmatch(r"-?\d+(\.0+)?", text):
+        return ""
+    return str(int(float(text)))
+
+
+def _pc11_district_names() -> dict[str, str]:
+    global _PC11_DISTRICT_NAMES
+    if _PC11_DISTRICT_NAMES is None:
+        path = Path(__file__).resolve().parent / "data" / "pc11_district_names.json"
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            _PC11_DISTRICT_NAMES = {
+                str(k): str(v).strip().lower() for k, v in raw.items() if v
+            }
+        except Exception as exc:
+            logger.warning("Could not load PC11 district names: %s", exc)
+            _PC11_DISTRICT_NAMES = {}
+    return _PC11_DISTRICT_NAMES
+
+
+def _village_state_label(props: dict) -> str:
+    for key in ("pc11_state_id", "sid", "state"):
+        if key not in props:
+            continue
+        mapped = _PC11_STATE_NAMES.get(_census_code(props.get(key)))
+        if mapped:
+            return mapped
+    raw = _pick_prop(props, _VILLAGE_STATE_KEYS)
+    if not raw:
+        return ""
+    return _PC11_STATE_NAMES.get(_census_code(raw)) or raw.strip()
+
+
+def _village_district_label(props: dict) -> str:
+    names = _pc11_district_names()
+    mapped = names.get(_census_code(props.get("pc11_district_id")))
+    if mapped:
+        return mapped
+    raw = _pick_prop(props, _VILLAGE_DISTRICT_KEYS)
+    if not raw:
+        return ""
+    return names.get(_census_code(raw)) or (raw if not _census_code(raw) else "")
+
+
 def _village_row_to_hit(props: dict, geom=None) -> dict:
-    vid = _pick_prop(props, _VILLAGE_ID_KEYS, "")
+    vid = _village_id_str(_pick_prop(props, _VILLAGE_ID_KEYS, ""))
     name = _pick_prop(props, _VILLAGE_NAME_KEYS, "Unnamed village")
     if not vid:
         if geom is not None and not geom.is_empty:
@@ -892,8 +990,8 @@ def _village_row_to_hit(props: dict, geom=None) -> dict:
     hit = {
         "id": vid,
         "name": name,
-        "district": _pick_prop(props, _VILLAGE_DISTRICT_KEYS) or None,
-        "state": _pick_prop(props, _VILLAGE_STATE_KEYS) or None,
+        "district": _village_district_label(props) or None,
+        "state": _village_state_label(props) or None,
     }
     if geom is not None and not geom.is_empty:
         hit["bounds"] = list(geom.bounds)
@@ -902,15 +1000,11 @@ def _village_row_to_hit(props: dict, geom=None) -> dict:
 
 
 def _village_index_cache_path() -> Path:
-    """Prefer the full centroid lookup; fall back to legacy name-only cache name."""
-    packages = Path(settings.packages_dir)
-    lookup = packages / "villages_lookup.jsonl"
-    legacy = packages / "villages_name_index.jsonl"
-    return lookup if lookup.exists() or not legacy.exists() else legacy
+    return Path(settings.packages_dir) / _VILLAGE_LOOKUP_FILENAME
 
 
 def _villages_lookup_s3_key() -> str:
-    return "vector/villages_lookup.jsonl"
+    return f"vector/{_VILLAGE_LOOKUP_FILENAME}"
 
 
 def _index_centroid_coverage(records: list[dict]) -> float:
@@ -1052,49 +1146,87 @@ def _write_village_index_cache(path: Path, records: list[dict]) -> None:
         logger.warning("Could not write village name index cache: %s", exc)
 
 
-def _build_village_name_index_from_fgb() -> list[dict]:
-    """One-time attribute-only read of villages.fgb (~40s over S3); centroids added per-state later."""
+def _first_present(available: set[str], keys: tuple[str, ...]) -> str | None:
+    for key in keys:
+        if key in available:
+            return key
+    return None
+
+
+def _village_id_str(raw_id: object) -> str:
+    if raw_id is None:
+        return ""
+    text = str(raw_id).strip()
+    if not text or text.lower() == "nan":
+        return ""
+    # Only coerce true numeric codes. Hex FGB ids like "001e0000…" must stay
+    # intact — float() would treat them as scientific notation.
+    if re.fullmatch(r"-?\d+(\.0+)?", text):
+        return str(int(float(text)))
+    return text
+
+
+def _build_village_name_index_from_fgb(source: str | None = None) -> list[dict]:
+    """Build lookup via per-state bbox reads (full-file scans fail on this FGB over S3)."""
     _configure_gdal_aws()
-    path = _villages_vsis3_path()
-    logger.info("Building village name index from %s …", path)
-    df = pyogrio.read_dataframe(
-        path,
-        columns=["Village Na", "Village ID", "District N", "State Name"],
-        read_geometry=False,
-    )
-    records: list[dict] = []
-    name_series = df["Village Na"] if "Village Na" in df.columns else None
-    id_series = df["Village ID"] if "Village ID" in df.columns else None
-    dist_series = df["District N"] if "District N" in df.columns else None
-    state_series = df["State Name"] if "State Name" in df.columns else None
-    for i in range(len(df)):
-        name = str(name_series.iloc[i] if name_series is not None else "").strip()
-        if not name or name.lower() == "nan":
+    path = source or _villages_vsis3_path()
+    logger.info("Building village name index from %s via state bboxes …", path)
+    by_id: dict[str, dict] = {}
+    t0 = time.time()
+    bboxes = list(_STATE_BBOXES.items()) or [("india", _INDIA_BBOX)]
+    for state_key, bbox in bboxes:
+        state_t0 = time.time()
+        try:
+            table, geom_col = _read_bbox_extent(
+                path, bbox[0], bbox[1], bbox[2], bbox[3], pad=0.05
+            )
+        except Exception as exc:
+            logger.warning("Village index skip %s: %s", state_key, exc)
             continue
-        raw_id = id_series.iloc[i] if id_series is not None else None
-        vid = str(int(raw_id)) if raw_id is not None and str(raw_id) not in ("", "nan") else ""
-        if not vid:
-            continue
-        district = None
-        state = None
-        if dist_series is not None:
-            d = str(dist_series.iloc[i]).strip()
-            if d and d.lower() != "nan":
-                district = d
-        if state_series is not None:
-            s = str(state_series.iloc[i]).strip()
-            if s and s.lower() != "nan":
-                state = s
-        records.append(
-            {
+        geoms = table.column(geom_col) if geom_col in table.column_names else None
+        added = 0
+        for i in range(table.num_rows):
+            try:
+                props = _row_props(table, i)
+            except Exception:
+                continue
+            name = _pick_prop(props, _VILLAGE_NAME_KEYS)
+            if not name or name.lower() == "nan":
+                continue
+            vid = _village_id_str(_pick_prop(props, _VILLAGE_ID_KEYS))
+            if not vid or vid in by_id:
+                continue
+            rec = {
                 "id": vid,
                 "name": name,
                 "name_l": name.lower(),
-                "district": district,
-                "state": state,
+                "district": _village_district_label(props) or None,
+                "state": _village_state_label(props) or state_key,
             }
+            if geoms is not None:
+                try:
+                    geom = _geom_from_cell(geoms[i].as_py())
+                except Exception:
+                    geom = None
+                if geom is not None and not geom.is_empty:
+                    c = geom.centroid
+                    rec["lng"] = float(c.x)
+                    rec["lat"] = float(c.y)
+            by_id[vid] = rec
+            added += 1
+        logger.info(
+            "Village index %s: +%s rows, %s unique (%.1fs)",
+            state_key,
+            added,
+            len(by_id),
+            time.time() - state_t0,
         )
-    logger.info("Village name index ready (%s rows)", len(records))
+    records = list(by_id.values())
+    logger.info(
+        "Village name index ready (%s rows) in %.1fs",
+        len(records),
+        time.time() - t0,
+    )
     return records
 
 
@@ -1103,10 +1235,9 @@ def ensure_village_name_index(*, force_rebuild: bool = False) -> list[dict]:
 
     Preference order:
       1. In-memory
-      2. Local packages_dir/villages_lookup.jsonl (or legacy name index)
-      3. Download vector/villages_lookup.jsonl from S3
-      4. Attribute-only build from villages.fgb (no centroids — dropdowns still work;
-         polygon resolve falls back to per-state enrich)
+      2. Local packages_dir/Village_pan_India_lookup.jsonl
+      3. Download vector/Village_pan_India_lookup.jsonl from S3
+      4. Attribute-only build from Village_pan_India.fgb
     """
     global _village_name_index
     if _village_name_index is not None and not force_rebuild:
@@ -1115,30 +1246,24 @@ def ensure_village_name_index(*, force_rebuild: bool = False) -> list[dict]:
         if _village_name_index is not None and not force_rebuild:
             return _village_name_index
 
-        packages = Path(settings.packages_dir)
-        lookup_path = packages / "villages_lookup.jsonl"
-        legacy_path = packages / "villages_name_index.jsonl"
+        lookup_path = _village_index_cache_path()
 
         if not force_rebuild:
-            for path in (lookup_path, legacy_path):
-                cached = _load_village_index_from_cache(path)
-                if cached is None:
-                    continue
+            cached = _load_village_index_from_cache(lookup_path)
+            if cached is not None:
                 coverage = _index_centroid_coverage(cached)
-                # Name-only cache: try S3 lookup before accepting it.
-                if coverage < 0.5 and path == legacy_path:
-                    if _download_villages_lookup_from_s3(lookup_path):
-                        upgraded = _load_village_index_from_cache(lookup_path)
-                        if upgraded is not None and _index_centroid_coverage(upgraded) >= 0.5:
-                            logger.info(
-                                "Loaded village lookup from S3 (%s rows, %.0f%% centroids)",
-                                len(upgraded),
-                                100 * _index_centroid_coverage(upgraded),
-                            )
-                            return _set_village_indexes(upgraded)
+                if coverage < 0.5 and _download_villages_lookup_from_s3(lookup_path):
+                    upgraded = _load_village_index_from_cache(lookup_path)
+                    if upgraded is not None and _index_centroid_coverage(upgraded) >= 0.5:
+                        logger.info(
+                            "Loaded village lookup from S3 (%s rows, %.0f%% centroids)",
+                            len(upgraded),
+                            100 * _index_centroid_coverage(upgraded),
+                        )
+                        return _set_village_indexes(upgraded)
                 logger.info(
                     "Loaded village index from %s (%s rows, %.0f%% centroids)",
-                    path.name,
+                    lookup_path.name,
                     len(cached),
                     100 * coverage,
                 )
@@ -1155,13 +1280,13 @@ def ensure_village_name_index(*, force_rebuild: bool = False) -> list[dict]:
                     return _set_village_indexes(cached)
 
         records = _build_village_name_index_from_fgb()
-        # Persist under legacy name so we do not pretend this has centroids.
-        _write_village_index_cache(legacy_path, records)
-        logger.warning(
-            "Village index has no centroids — run "
-            "`python scripts/build_village_lookup.py --upload` for fast dropdowns "
-            "and map-click-style village resolve."
-        )
+        _write_village_index_cache(lookup_path, records)
+        if _index_centroid_coverage(records) < 0.5:
+            logger.warning(
+                "Village index has no centroids — run "
+                "`python scripts/build_village_lookup.py --upload` for fast dropdowns "
+                "and map-click-style village resolve."
+            )
         return _set_village_indexes(records)
 
 
@@ -1212,13 +1337,9 @@ def ensure_state_village_centroids(state: str) -> None:
         updated = 0
         for i in range(table.num_rows):
             props = _row_props(table, i)
-            vid = _pick_prop(props, _VILLAGE_ID_KEYS)
+            vid = _village_id_str(_pick_prop(props, _VILLAGE_ID_KEYS))
             if not vid:
                 continue
-            try:
-                vid = str(int(float(vid)))
-            except (TypeError, ValueError):
-                vid = str(vid).strip()
             rec = _village_by_id.get(vid)
             if rec is None or geoms is None:
                 continue
@@ -1251,7 +1372,7 @@ def search_villages(
     limit: int = 20,
     bbox: tuple[float, float, float, float] | None = None,
 ) -> list[dict]:
-    """National typeahead against a cached name index (vector/villages.fgb).
+    """National typeahead against a cached name index (village boundaries FGB).
 
     Requires at least 4 characters. ``bbox`` is ignored (kept for API compat).
     Geometry is loaded later via ``village_geometry_by_id`` on select.
@@ -1303,12 +1424,8 @@ def _village_id_matches(props: dict, vid: str) -> bool:
         if key not in props or props[key] in (None, ""):
             continue
         raw = props[key]
-        try:
-            if str(int(float(raw))) == vid:
-                return True
-        except (TypeError, ValueError):
-            if str(raw).strip() == vid:
-                return True
+        if _village_id_str(raw) == vid or str(raw).strip() == vid:
+            return True
     return False
 
 

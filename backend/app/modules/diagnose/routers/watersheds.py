@@ -61,7 +61,7 @@ async def villages_search(
     ),
     user: dict = Depends(get_current_user),
 ):
-    """National village typeahead (cached name index from vector/villages.fgb). Min 4 chars."""
+    """National village typeahead (cached name index from the village boundaries FGB). Min 4 chars."""
     del bbox, user
     try:
         hits = await asyncio.to_thread(search_villages, q, limit=limit)

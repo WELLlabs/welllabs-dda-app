@@ -48,6 +48,25 @@ def test_list_interventions_excludes_empty_catalog_rows():
     assert "check-dams-earthen-dams" in slugs
 
 
+def test_mel_interventions_api_only_mapping_with_outcomes(auth_client):
+    from app.modules.assess.services.mel_mapping_catalog import load_mapping_catalog
+
+    load_mapping_catalog.cache_clear()
+    client, _user = auth_client
+    response = client.get("/api/assess/mel/interventions")
+    assert response.status_code == 200
+    items = response.json()["interventions"]
+    slugs = {item["slug"] for item in items}
+    assert "farm-pond" in slugs
+    assert "pmds" in slugs
+    pmds = next(i for i in items if i["slug"] == "pmds")
+    assert pmds["name"] == "PMDS"
+    assert pmds["outcome_count"] > 0
+    assert "check-dams-earthen-dams" not in slugs
+    assert "micro-irrigation" not in slugs
+    assert all(item.get("from_mapping") and item["outcome_count"] > 0 for item in items)
+
+
 def test_must_measure_outcomes_are_auto_selected():
     load_mel_catalog.cache_clear()
     resolved = resolve_selected_outcomes("check-dams-earthen-dams", [])
@@ -458,6 +477,79 @@ class TestMelCreateForms:
         # Verify naming: Project - Plan - Package
         first_xml = mock_client.post_xml.await_args_list[0].args[1]
         assert "Watershed Project - Farm ponds - " in first_xml
+
+    def test_publishes_farm_pond_mapping_cm(self, auth_client):
+        client, _user = auth_client
+        project_id = str(uuid4())
+        plan_id = str(uuid4())
+        mock_client = MagicMock()
+        mock_client.post_xml = AsyncMock(
+            return_value={"xmlFormId": "farm_pond_cm", "name": "Thupran - Medak farm pond - CM"}
+        )
+        stored = {"id": uuid4(), "xml_form_id": "farm_pond_cm", "name": "CM"}
+        mel_plan = {
+            "id": plan_id,
+            "project_id": project_id,
+            "intervention_slug": "farm-pond",
+            "name": "Medak farm pond",
+            "plan_json": {"cm_form": [{"id": "fp_cm_rainfall"}], "outcome_ids": ["o1"]},
+        }
+        mel_project = {"id": project_id, "name": "Thupran", "kind": "mel"}
+        mock_cur = MagicMock()
+        ctx = MagicMock()
+        ctx.__enter__.return_value = mock_cur
+        ctx.__exit__.return_value = False
+
+        with (
+            patch("app.modules.assess.routers.mel.settings") as mock_settings,
+            patch("app.modules.assess.routers.mel.ODKClient", return_value=mock_client),
+            patch(
+                "app.modules.assess.routers.mel._assert_plan_access",
+                return_value=(mel_project, mel_plan),
+            ),
+            patch("app.modules.assess.routers.mel._insert_mel_form", return_value=stored),
+            patch("app.modules.assess.routers.mel.db_cursor", return_value=ctx),
+        ):
+            mock_settings.odk_project_id = 17
+            response = client.post(
+                "/api/assess/mel/plans/create-forms",
+                json={
+                    "project_id": project_id,
+                    "plan_id": plan_id,
+                    "intervention_slug": "farm-pond",
+                    "outcome_ids": ["o1"],
+                    "packages": [
+                        {
+                            "package_id": "cm-mapping",
+                            "form_title": "Thupran - Medak farm pond - CM",
+                            "fields": [
+                                {
+                                    "id": "fp_cm_select_the_asset_id",
+                                    "field_name": "fp_cm_select_the_asset_id",
+                                    "label": "Select the Asset ID",
+                                    "input_type": "select_one",
+                                    "options": [
+                                        {"value": "a1", "label": "Pond 1"},
+                                        {"value": "a2", "label": "Pond 2"},
+                                    ],
+                                    "locked": True,
+                                    "required": True,
+                                },
+                                {
+                                    "id": "fp_cm_rainfall",
+                                    "field_name": "fp_cm_rainfall",
+                                    "label": "Rainfall (mm)",
+                                    "input_type": "decimal",
+                                },
+                            ],
+                        }
+                    ],
+                },
+            )
+        assert response.status_code == 200, response.text
+        xml = mock_client.post_xml.await_args.args[1]
+        assert "fp_cm_rainfall" in xml
+        assert "fp_cm_select_the_asset_id" in xml
 
 
 class TestMelExportPdf:

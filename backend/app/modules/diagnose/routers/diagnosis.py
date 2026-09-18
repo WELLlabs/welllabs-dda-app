@@ -653,10 +653,11 @@ async def export_diagnosis_pdf_stream(
 ):
     """Stream atlas PDF build progress (SSE), then download via /export-pdf/download."""
     import asyncio
-    import json
     from datetime import UTC, datetime
 
     from fastapi.responses import StreamingResponse
+
+    from app.modules.diagnose.services.sse_stream import iter_sse_with_keepalive
 
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue = asyncio.Queue()
@@ -685,19 +686,8 @@ async def export_diagnosis_pdf_stream(
         except Exception as exc:
             await queue.put({"type": "error", "message": f"PDF export failed: {exc}"})
 
-    async def event_stream():
-        task = asyncio.create_task(run_export())
-        try:
-            while True:
-                item = await queue.get()
-                yield f"data: {json.dumps(item)}\n\n"
-                if item.get("type") in ("done", "error"):
-                    break
-        finally:
-            await task
-
     return StreamingResponse(
-        event_stream(),
+        iter_sse_with_keepalive(queue, run_export),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

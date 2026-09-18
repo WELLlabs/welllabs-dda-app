@@ -5,7 +5,7 @@
 	import { itemPath } from '$lib/shared/slug.js';
 	import { session } from '$lib/shared/session.svelte.js';
 	import { assessCrumbs } from '$lib/modules/assess/breadcrumbs.js';
-	import { createMelProject, deleteMelProject, fetchMelProjects } from '$lib/modules/assess/mel-api';
+	import { createMelProject, deleteMelProject, fetchMelProjects, updateMelProject } from '$lib/modules/assess/mel-api';
 
 	const ASSESS_BLUE = '#1b75e0';
 
@@ -14,9 +14,12 @@
 	let error = $state('');
 	let mounted = $state(false);
 	let showCreate = $state(false);
+	let editingProject = $state(null);
 	let openMenuId = $state(null);
 	let name = $state('');
+	let description = $state('');
 	let creating = $state(false);
+	let saving = $state(false);
 	let deletingId = $state(null);
 	let openingId = $state(null);
 
@@ -56,8 +59,26 @@
 
 	function openCreate() {
 		showCreate = true;
+		editingProject = null;
 		error = '';
 		name = '';
+		description = '';
+	}
+
+	function openEdit(project) {
+		openMenuId = null;
+		showCreate = false;
+		editingProject = project;
+		error = '';
+		name = project.name || '';
+		description = project.description || '';
+	}
+
+	function closeForm() {
+		showCreate = false;
+		editingProject = null;
+		name = '';
+		description = '';
 	}
 
 	/** @param {PointerEvent & { currentTarget: HTMLElement }} e */
@@ -72,9 +93,11 @@
 		creating = true;
 		error = '';
 		try {
-			const project = await createMelProject({ name: name.trim() });
-			showCreate = false;
-			name = '';
+			const project = await createMelProject({
+				name: name.trim(),
+				description: description.trim()
+			});
+			closeForm();
 			openingId = project.id;
 			goto(itemPath('/assess', project, [project, ...projects]));
 		} catch (err) {
@@ -82,6 +105,29 @@
 			creating = false;
 			openingId = null;
 		}
+	}
+
+	async function handleSaveEdit() {
+		if (!editingProject || !name.trim() || saving) return;
+		saving = true;
+		error = '';
+		try {
+			await updateMelProject(editingProject.id, {
+				name: name.trim(),
+				description: description.trim()
+			});
+			closeForm();
+			await load();
+		} catch (err) {
+			error = String(err);
+		} finally {
+			saving = false;
+		}
+	}
+
+	function handleManageMembers(project) {
+		openMenuId = null;
+		goto(`${itemPath('/assess', project, projects)}/members`);
 	}
 
 	async function handleDelete(project) {
@@ -138,7 +184,7 @@
 	/>
 
 	<main class="relative z-10 flex-1 overflow-auto p-6">
-		{#if error && !showCreate}
+		{#if error && !showCreate && !editingProject}
 			<p class="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 font-body text-sm text-red-700">{error}</p>
 		{/if}
 
@@ -248,6 +294,22 @@
 								>
 									<button
 										type="button"
+										class="menu-item"
+										role="menuitem"
+										onclick={() => handleManageMembers(project)}
+									>
+										Members
+									</button>
+									<button
+										type="button"
+										class="menu-item"
+										role="menuitem"
+										onclick={() => openEdit(project)}
+									>
+										Edit
+									</button>
+									<button
+										type="button"
 										class="menu-item menu-item-danger"
 										role="menuitem"
 										disabled={deletingId === project.id}
@@ -293,12 +355,16 @@
 	</main>
 </div>
 
-{#if showCreate}
+{#if showCreate || editingProject}
 	<div class="fixed inset-0 z-50 flex items-center justify-center bg-brand-navy/40 p-4">
 		<div class="w-full max-w-2xl rounded-xl bg-white p-6 shadow-sm">
-			<h2 class="m-0 mb-1 font-headline text-lg font-semibold text-brand-navy">New MEL project</h2>
+			<h2 class="m-0 mb-1 font-headline text-lg font-semibold text-brand-navy">
+				{editingProject ? 'Edit project' : 'New MEL project'}
+			</h2>
 			<p class="m-0 mb-4 font-body text-sm text-brand-steel">
-				You will own this project and can add members and MEL plans later.
+				{editingProject
+					? 'Update the project name and description.'
+					: 'You will own this project and can add members and MEL plans later.'}
 			</p>
 			{#if error}
 				<p class="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 font-body text-sm text-red-700">{error}</p>
@@ -309,26 +375,47 @@
 			<input
 				id="mel-proj-name"
 				type="text"
-				class="mb-5 w-full rounded border border-brand-navy/20 px-3 py-2 font-body outline-none focus:border-[#1b75e0] focus:ring-2 focus:ring-[#1b75e0]/20"
+				class="mb-4 w-full rounded border border-brand-navy/20 px-3 py-2 font-body outline-none focus:border-[#1b75e0] focus:ring-2 focus:ring-[#1b75e0]/20"
 				placeholder="e.g. Kolar watershed MEL"
 				bind:value={name}
 				onkeydown={(e) => {
 					if (e.key === 'Enter') {
 						e.preventDefault();
-						handleCreate();
+						editingProject ? handleSaveEdit() : handleCreate();
 					}
 				}}
 			/>
+			<label class="mb-1 block font-body text-sm font-medium text-brand-navy" for="mel-proj-desc">
+				Description
+			</label>
+			<textarea
+				id="mel-proj-desc"
+				class="mb-5 w-full rounded border border-brand-navy/20 px-3 py-2 font-body outline-none focus:border-[#1b75e0] focus:ring-2 focus:ring-[#1b75e0]/20"
+				rows="3"
+				placeholder="Optional"
+				bind:value={description}
+			></textarea>
 			<div class="flex justify-end gap-2">
-				<button type="button" class="action-btn" onclick={() => (showCreate = false)}>Cancel</button>
-				<button
-					type="button"
-					class="rounded bg-[#1b75e0] px-4 py-2 font-body text-sm font-medium text-white hover:bg-[#1565c0] disabled:opacity-50"
-					disabled={creating || !name.trim()}
-					onclick={handleCreate}
-				>
-					{creating ? 'Creating…' : 'Create'}
-				</button>
+				<button type="button" class="action-btn" onclick={closeForm}>Cancel</button>
+				{#if editingProject}
+					<button
+						type="button"
+						class="rounded bg-[#1b75e0] px-4 py-2 font-body text-sm font-medium text-white hover:bg-[#1565c0] disabled:opacity-50"
+						disabled={saving || !name.trim()}
+						onclick={handleSaveEdit}
+					>
+						{saving ? 'Saving…' : 'Save'}
+					</button>
+				{:else}
+					<button
+						type="button"
+						class="rounded bg-[#1b75e0] px-4 py-2 font-body text-sm font-medium text-white hover:bg-[#1565c0] disabled:opacity-50"
+						disabled={creating || !name.trim()}
+						onclick={handleCreate}
+					>
+						{creating ? 'Creating…' : 'Create'}
+					</button>
+				{/if}
 			</div>
 		</div>
 	</div>
@@ -495,6 +582,10 @@
 		text-align: left;
 		font-size: 0.875rem;
 		cursor: pointer;
+		color: #1a2530;
+	}
+	.menu-item:hover {
+		background: #f4f7fa;
 	}
 	.menu-item-danger {
 		color: #b91c1c;

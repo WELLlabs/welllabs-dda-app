@@ -16,6 +16,10 @@ from qfieldcloud_sdk import sdk
 from app.shared.config import settings
 from app.shared.database import db_cursor
 from app.shared import s3_storage
+from app.modules.diagnose.services.qfield_names import (
+    qfield_cloud_name_aliases,
+    qfield_cloud_project_name,
+)
 from app.modules.diagnose.services.s3_cleanup import cleanup_project_s3
 
 logger = logging.getLogger(__name__)
@@ -335,12 +339,13 @@ def migrate_field_note_media(project_id: str, project_root: Path) -> dict:
 
 
 def _qfield_project_name(row: dict) -> str:
-    return f"{settings.qfield_project_name}-{row['name']}".replace(" ", "-")[:80]
+    return qfield_cloud_project_name(row.get("name"))
 
 
-def _find_qfield_project(client: sdk.Client, name: str) -> dict:
+def _find_qfield_project(client: sdk.Client, name: str, aliases: list[str] | None = None) -> dict:
+    names = {name, *(aliases or [])}
     for project in client.list_projects():
-        if project["name"] == name:
+        if project.get("name") in names:
             return project
     raise ValueError(f"QField Cloud project not found: {name}. Package to QField first.")
 
@@ -401,7 +406,7 @@ def sync_from_cloud(project_id: str, user_id: str, progress=None) -> dict:
     step(10, "Connecting to QField Cloud…")
     client = sdk.Client(url=settings.qfield_cloud_url, token=qfield_token)
     qfc_name = _qfield_project_name(row)
-    qfc_project = _find_qfield_project(client, qfc_name)
+    qfc_project = _find_qfield_project(client, qfc_name, aliases=qfield_cloud_name_aliases(row["name"]))
     qfc_id = qfc_project["id"]
     step(15, f"QField project: {qfc_name}")
 

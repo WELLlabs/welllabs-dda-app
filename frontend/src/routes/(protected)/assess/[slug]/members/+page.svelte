@@ -12,9 +12,12 @@
 		fetchMelUserAccess,
 		addMelUserAccess,
 		removeMelUserAccess,
-		updateMelUserAccessRole
+		updateMelUserAccessRole,
+		fetchMelOrgAccess,
+		addMelOrgAccess,
+		removeMelOrgAccess
 	} from '$lib/modules/assess/mel-api';
-	import { lookupUserByEmail } from '$lib/modules/accounts/api.js';
+	import { fetchOrgs, lookupUserByEmail } from '$lib/modules/accounts/api.js';
 
 	let slug = $derived(page.params.slug);
 
@@ -24,6 +27,8 @@
 	let loadError = $state('');
 
 	let users = $state([]);
+	let orgs = $state([]);
+	let myOrgs = $state([]);
 	let dataLoading = $state(true);
 	let error = $state('');
 
@@ -32,6 +37,10 @@
 	let lookupError = $state('');
 	let lookingUp = $state(false);
 	let addingUser = $state(false);
+
+	let selectedOrgId = $state('');
+	let addingOrg = $state(false);
+	let orgError = $state('');
 
 	const isOwner = $derived(project && session.user && project.owner_id === session.user.id);
 	const isAdmin = $derived(
@@ -42,6 +51,7 @@
 	const crumbs = $derived(
 		project ? assessCrumbs({ projects, project, tail: [{ label: 'Members' }] }) : []
 	);
+	const availableOrgs = $derived(myOrgs.filter((o) => !orgs.some((s) => s.id === o.id)));
 
 	async function loadProject(slugValue) {
 		loading = true;
@@ -68,8 +78,14 @@
 		dataLoading = true;
 		error = '';
 		try {
-			const res = await fetchMelUserAccess(project.id);
+			const [res, orgList, mine] = await Promise.all([
+				fetchMelUserAccess(project.id),
+				fetchMelOrgAccess(project.id).catch(() => []),
+				fetchOrgs().catch(() => [])
+			]);
 			users = res.users ?? [];
+			orgs = orgList;
+			myOrgs = mine;
 			if (res.owner && !project.owner_name) {
 				project = {
 					...project,
@@ -157,6 +173,31 @@
 			await updateMelUserAccessRole(project.id, member.id, next);
 			const res = await fetchMelUserAccess(project.id);
 			users = res.users ?? [];
+		} catch (err) {
+			error = String(err.message ?? err);
+		}
+	}
+
+	async function handleAddOrg() {
+		if (!selectedOrgId || !project) return;
+		addingOrg = true;
+		orgError = '';
+		try {
+			await addMelOrgAccess(project.id, selectedOrgId);
+			orgs = await fetchMelOrgAccess(project.id);
+			selectedOrgId = '';
+		} catch (err) {
+			orgError = String(err.message ?? err);
+		} finally {
+			addingOrg = false;
+		}
+	}
+
+	async function handleRemoveOrg(org) {
+		if (!project || !confirm(`Remove “${org.name}” from this project?`)) return;
+		try {
+			await removeMelOrgAccess(project.id, org.id);
+			orgs = orgs.filter((o) => o.id !== org.id);
 		} catch (err) {
 			error = String(err.message ?? err);
 		}
@@ -336,6 +377,85 @@
 											{addingUser ? 'Adding…' : 'Add'}
 										</button>
 									</div>
+								{/if}
+							</div>
+						{/if}
+					{/if}
+				</section>
+
+				<section class="rounded-2xl border border-brand-navy/10 bg-white shadow-sm">
+					<div class="border-b border-brand-navy/8 px-5 py-4">
+						<h2 class="m-0 font-headline text-sm font-semibold tracking-wide text-brand-navy/60 uppercase">
+							Organizations
+						</h2>
+					</div>
+
+					{#if dataLoading}
+						<div class="px-5 py-6 text-center text-sm text-brand-steel">Loading…</div>
+					{:else}
+						<div class="divide-y divide-brand-navy/6">
+							{#if orgs.length === 0}
+								<div class="px-5 py-6 text-center text-sm text-brand-steel">
+									No organizations have access yet.
+								</div>
+							{/if}
+
+							{#each orgs as org (org.id)}
+								<div class="flex items-center gap-3 px-5 py-3">
+									<div
+										class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-100 text-sm font-semibold text-amber-700"
+									>
+										{(org.name ?? '?').charAt(0).toUpperCase()}
+									</div>
+									<div class="min-w-0 flex-1">
+										<p class="m-0 truncate text-sm font-medium text-brand-navy">{org.name}</p>
+									</div>
+									{#if isAdmin}
+										<button
+											type="button"
+											class="cursor-pointer rounded border-0 bg-transparent px-2 py-1 text-xs text-red-600 hover:bg-red-50"
+											onclick={() => handleRemoveOrg(org)}
+										>
+											Remove
+										</button>
+									{/if}
+								</div>
+							{/each}
+						</div>
+
+						{#if isAdmin}
+							<div class="border-t border-brand-navy/8 px-5 py-4">
+								{#if availableOrgs.length > 0}
+									<p class="m-0 mb-3 text-xs font-medium text-brand-steel uppercase">
+										Add an organization
+									</p>
+									<div class="flex gap-2">
+										<select
+											class="flex-1 rounded-lg border border-brand-navy/15 px-3 py-2 font-body text-sm outline-none focus:border-[#1b75e0]"
+											bind:value={selectedOrgId}
+										>
+											<option value="">Select an organization…</option>
+											{#each availableOrgs as org (org.id)}
+												<option value={org.id}>{org.name}</option>
+											{/each}
+										</select>
+										<button
+											type="button"
+											class="cursor-pointer rounded-lg bg-[#1b75e0] px-4 py-2 font-body text-sm font-medium text-white hover:bg-[#1565c0] disabled:opacity-60"
+											disabled={addingOrg || !selectedOrgId}
+											onclick={handleAddOrg}
+										>
+											{addingOrg ? 'Adding…' : 'Add'}
+										</button>
+									</div>
+									{#if orgError}
+										<p class="m-0 mt-2 text-xs text-red-600">{orgError}</p>
+									{/if}
+								{:else}
+									<p class="m-0 text-xs text-brand-steel">
+										You have no other organizations to add. Create one from
+										<a href={appPath('/settings/organizations')} class="text-brand-blue underline">settings</a>.
+									</p>
 								{/if}
 							</div>
 						{/if}

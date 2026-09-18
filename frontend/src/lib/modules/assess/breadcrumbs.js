@@ -24,9 +24,17 @@ export function assessCrumbs({ projects = [], project, plan, form, tail = [] }) 
 	}
 
 	const slugBase = itemPath('/assess', project, projects);
+	let projectHref;
+	if (plan) {
+		const tab = (plan.kind || 'plan') === 'implementation' ? 'implementation' : 'plans';
+		projectHref = `${slugBase}?tab=${tab}`;
+	} else if (form || tail.length) {
+		projectHref = slugBase;
+	}
+
 	crumbs.push({
 		label: project.name,
-		href: plan || form || tail.length ? slugBase : undefined
+		href: projectHref
 	});
 
 	if (plan) {

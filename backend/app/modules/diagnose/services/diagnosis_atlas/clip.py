@@ -72,18 +72,54 @@ _LEVEL7_LOCAL_CANDIDATES = (
     Path(__file__).resolve().parents[6] / ".tmp_hierarchy_fgb" / "india_basins_level_7.gpkg",
 )
 
-# India state/UT polygons for Location Context (clinton State Boundaries.gpkg).
+# India state/UT polygons for Location Context.
+# Bundled/local layer uses LGD 2024 boundaries (includes Ladakh + full J&K claim extent).
+# Do not fall back to geohacker india_telengana.geojson — it truncates the north (~35.5°N)
+# and omits Ladakh.
 STATE_BOUNDARIES_S3_KEY = "vector/india_state_boundaries.fgb"
-_STATE_NAME_COLS = ("ST_NM", "st_nm", "STATE", "State", "NAME_1", "name", "State_Name", "STATE_NAME")
-_STATE_GEOJSON_URL = (
-    "https://raw.githubusercontent.com/geohacker/india/master/state/india_telengana.geojson"
+_STATE_NAME_COLS = (
+    "ST_NM",
+    "st_nm",
+    "STNAME",
+    "STNAME_SH",
+    "STATE",
+    "State",
+    "NAME_1",
+    "name",
+    "State_Name",
+    "STATE_NAME",
+)
+# LGD state/UT polygons (Survey-of-India-aligned national claim; includes Ladakh).
+_STATE_LGD_PARQUET_URL = (
+    "https://github.com/yashveeeeeeer/india-geodata/releases/download/admin%2Fstates/LGD_States.parquet"
 )
 _STATE_LOCAL_CANDIDATES = (
-    Path(__file__).resolve().parent.parent / "data" / "india_state_boundaries.fgb",
+    # clip.py → diagnosis_atlas → services → diagnose/data
+    Path(__file__).resolve().parents[2] / "data" / "india_state_boundaries.fgb",
     Path("/tmp/india_state_boundaries.fgb"),
     Path(__file__).resolve().parents[6] / ".tmp_hierarchy_fgb" / "india_state_boundaries.fgb",
 )
 _INDIA_STATES_CACHE = None
+
+_STATE_NAME_ALIASES = {
+    "DADRA,NAGAR HAVELI,DAMAN & DIU": "Dadra and Nagar Haveli and Daman and Diu",
+    "DADRA,NAGAR HAVELI,DAMAN AND DIU": "Dadra and Nagar Haveli and Daman and Diu",
+    "DADRA AND NAGAR HAVELI AND DAMAN AND DIU": "Dadra and Nagar Haveli and Daman and Diu",
+    "ANDAMAN & NICOBAR": "Andaman and Nicobar",
+    "ANDAMAN AND NICOBAR": "Andaman and Nicobar",
+    "ANDAMAN AND NICOBAR ISLANDS": "Andaman and Nicobar",
+    "JAMMU & KASHMIR": "Jammu and Kashmir",
+    "JAMMU AND KASHMIR": "Jammu and Kashmir",
+    "NCT OF DELHI": "Delhi",
+    "DELHI": "Delhi",
+    "LADAKH": "Ladakh",
+    "ORISSA": "Odisha",
+    "UTTARANCHAL": "Uttarakhand",
+}
+
+
+# Atlas-only simplify tolerance (~1 km). Full LGD vertices freeze matplotlib PDF export.
+_STATE_SIMPLIFY_TOLERANCE_DEG = 0.01
 
 
 def _ensure_wgs84(gdf):
@@ -92,6 +128,40 @@ def _ensure_wgs84(gdf):
     if gdf.crs is None:
         return gdf.set_crs(4326)
     return gdf.to_crs(4326)
+
+
+def _title_state_name(name: str) -> str:
+    raw = " ".join(str(name or "").strip().upper().split())
+    if not raw:
+        return ""
+    candidates = (
+        raw,
+        raw.replace("&", "AND"),
+        " ".join(raw.replace(",", " ").replace("&", "AND").split()),
+    )
+    for key in candidates:
+        if key in _STATE_NAME_ALIASES:
+            return _STATE_NAME_ALIASES[key]
+    words = candidates[-1].lower().split()
+    out = []
+    for w in words:
+        if w in ("and", "of"):
+            out.append(w)
+        else:
+            out.append(w[:1].upper() + w[1:])
+    return " ".join(out)
+
+
+def _simplify_state_geoms(gdf):
+    """Drop dense coastline vertices so Location Context PDF plotting stays fast."""
+    if gdf is None or getattr(gdf, "empty", True) or "geometry" not in gdf.columns:
+        return gdf
+    try:
+        out = gdf.copy()
+        out["geometry"] = out.geometry.simplify(_STATE_SIMPLIFY_TOLERANCE_DEG, preserve_topology=True)
+        return out
+    except Exception:
+        return gdf
 
 
 def _normalize_state_gdf(gdf):
@@ -104,20 +174,27 @@ def _normalize_state_gdf(gdf):
             if col in gdf.columns:
                 gdf = gdf.rename(columns={col: "ST_NM"})
                 break
+    if "ST_NM" in gdf.columns:
+        gdf = gdf.copy()
+        gdf["ST_NM"] = gdf["ST_NM"].map(_title_state_name)
     keep = [c for c in ("ST_NM", "geometry") if c in gdf.columns]
-    return gdf[keep].copy() if keep else gdf
+    gdf = gdf[keep].copy() if keep else gdf
+    return _simplify_state_geoms(gdf)
 
 
 def _download_india_states_fgb(dest: Path):
-    """Fetch public India state polygons and cache a slim FlatGeobuf."""
+    """Fetch LGD India state/UT polygons (incl. Ladakh) and cache FlatGeobuf."""
     import urllib.request
 
     import geopandas as gpd
 
     dest.parent.mkdir(parents=True, exist_ok=True)
-    raw = dest.with_suffix(".geojson")
-    req = urllib.request.Request(_STATE_GEOJSON_URL, headers={"User-Agent": "geo-field-pipeline/diagnose-atlas"})
-    with urllib.request.urlopen(req, timeout=90) as resp:
+    raw = dest.with_suffix(".parquet")
+    req = urllib.request.Request(
+        _STATE_LGD_PARQUET_URL,
+        headers={"User-Agent": "geo-field-pipeline/diagnose-atlas"},
+    )
+    with urllib.request.urlopen(req, timeout=45) as resp:
         raw.write_bytes(resp.read())
     gdf = _normalize_state_gdf(gpd.read_file(raw))
     gdf.to_file(dest, driver="FlatGeobuf")
@@ -129,26 +206,14 @@ def _download_india_states_fgb(dest: Path):
 
 
 def load_india_states():
-    """All India state/UT boundaries (cached). Prefer S3, then local, then download."""
+    """All India state/UT boundaries (cached). Prefer local, then S3, then download."""
     global _INDIA_STATES_CACHE
     if _INDIA_STATES_CACHE is not None and not getattr(_INDIA_STATES_CACHE, "empty", True):
         return _INDIA_STATES_CACHE.copy()
 
     import geopandas as gpd
 
-    # 1) S3 (optional — may not be uploaded yet)
-    try:
-        from app.modules.diagnose.services.layer_analysis import _vsis3_path
-
-        gdf = gpd.read_file(_vsis3_path(STATE_BOUNDARIES_S3_KEY))
-        gdf = _normalize_state_gdf(gdf)
-        if gdf is not None and not gdf.empty:
-            _INDIA_STATES_CACHE = gdf
-            return gdf.copy()
-    except Exception:
-        pass
-
-    # 2) Local candidates
+    # 1) Local candidates first (bundled LGD layer with Ladakh / full northern extent)
     for path in _STATE_LOCAL_CANDIDATES:
         try:
             if path.exists():
@@ -159,7 +224,34 @@ def load_india_states():
         except Exception:
             continue
 
-    # 3) Download once into /tmp
+    # 2) S3 — short HTTP timeout so a missing/slow key cannot stall PDF export
+    try:
+        import os
+
+        from app.modules.diagnose.services.layer_analysis import _vsis3_path
+
+        prev_timeout = os.environ.get("GDAL_HTTP_TIMEOUT")
+        prev_connect = os.environ.get("GDAL_HTTP_CONNECTTIMEOUT")
+        os.environ["GDAL_HTTP_TIMEOUT"] = "8"
+        os.environ["GDAL_HTTP_CONNECTTIMEOUT"] = "5"
+        try:
+            gdf = _normalize_state_gdf(gpd.read_file(_vsis3_path(STATE_BOUNDARIES_S3_KEY)))
+        finally:
+            if prev_timeout is None:
+                os.environ.pop("GDAL_HTTP_TIMEOUT", None)
+            else:
+                os.environ["GDAL_HTTP_TIMEOUT"] = prev_timeout
+            if prev_connect is None:
+                os.environ.pop("GDAL_HTTP_CONNECTTIMEOUT", None)
+            else:
+                os.environ["GDAL_HTTP_CONNECTTIMEOUT"] = prev_connect
+        if gdf is not None and not gdf.empty:
+            _INDIA_STATES_CACHE = gdf
+            return gdf.copy()
+    except Exception:
+        pass
+
+    # 3) Download LGD once into /tmp
     try:
         dest = Path("/tmp/india_state_boundaries.fgb")
         gdf = _download_india_states_fgb(dest)

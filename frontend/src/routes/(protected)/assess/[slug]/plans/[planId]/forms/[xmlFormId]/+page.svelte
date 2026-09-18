@@ -51,7 +51,7 @@
 				{error || 'Form not found'}
 			</p>
 			<button type="button" class="action-btn mt-4" onclick={() => goto(appPath('/assess'))}>
-				Back to projects
+				Back to Assess
 			</button>
 		</div>
 	{:else}
