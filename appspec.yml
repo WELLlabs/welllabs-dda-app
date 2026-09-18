@@ -18,7 +18,9 @@ hooks:
 
   ApplicationStart:
     - location: devops/scripts/application_start.sh
-      timeout: 120
+      # Backend health wait is up to 36×5s (~180s) plus nginx/frontend restart.
+      # 120s caused HEALTH_CONSTRAINTS mid-wait on beta.
+      timeout: 360
       runas: root
 
   ValidateService:
