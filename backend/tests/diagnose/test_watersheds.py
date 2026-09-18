@@ -131,6 +131,29 @@ def test_union_geometries_requires_features():
         union_geometries([])
 
 
+def test_village_id_str_keeps_hex_fgb_ids():
+    from app.shared.watersheds import _village_id_str
+
+    assert _village_id_str("001e0000000000000051") == "001e0000000000000051"
+    assert _village_id_str("573906.0") == "573906"
+    assert _village_id_str(None) == ""
+
+
+def test_village_place_labels_from_pc11_codes():
+    from app.shared.watersheds import _village_district_label, _village_state_label
+
+    props = {
+        "name": "Vailal",
+        "id": "001e0000000000000051",
+        "pc11_state_id": 28.0,
+        "pc11_district_id": 535.0,
+        "state": 28.0,
+        "district": 4.0,
+    }
+    assert _village_state_label(props) == "andhra pradesh"
+    assert _village_district_label(props) == "medak"
+
+
 def test_list_cascade_helpers_filter_index(monkeypatch):
     from app.shared import watersheds as ws
 

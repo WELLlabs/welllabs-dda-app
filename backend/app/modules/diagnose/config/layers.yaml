@@ -18,6 +18,27 @@ colors:
   black: "#000000"
 
 layers:
+  # Project AOI outline (no S3) — shown under Hydrology; map uses watershed_geom.
+  - id: aoi_boundary
+    category: Hydrology & Landscape Controls
+    overlay: false
+    s3_key: ""
+    name: AOI Boundary
+    source: project_aoi
+    map_render: true
+    analysis_batch: false
+    render:
+      type: outline
+      line_color: "#6b7280"
+      line_width: 2.5
+    meaning: >-
+      Project area of interest (watershed / custom AOI) outline only — no thematic fill.
+      Use this view to check extent, orientation, and how overlays sit against the study boundary.
+    uncertainty: >-
+      Boundary follows the selected watershed or uploaded AOI geometry; local administrative edges may differ.
+    field_check: >-
+      Confirm the AOI matches the intended villages, GP union, or watershed before interpreting other layers.
+
   # ── Raster COGs ──────────────────────────────────────────────────────────
   - id: lulc250k
     category: Hydrology & Landscape Controls
@@ -261,7 +282,7 @@ layers:
   - id: village_boundaries
     category: Reference
     overlay: true
-    s3_key: vector/villages.fgb
+    s3_key: vector/Village_pan_India.fgb
     name: Village Boundaries
     source: vector_fgb
     # Keep full village polygons that touch the watershed (do not cut at the AOI edge).
@@ -273,8 +294,7 @@ layers:
       line_color: "#1f2937"
       line_width: 2.75
       line_dasharray: [2, 1.5]
-      # Truncated column name in villages.fgb ("Village Name")
-      label_column: "Village Na"
+      label_column: "name"
     meaning: >-
       Village polygons for orientation: outlines and names only, no thematic fill.
       Villages that intersect the watershed are shown in full, including area outside the AOI.
@@ -285,11 +305,12 @@ layers:
 
   - id: baseline_population
     category: Social & Demographic Profile
-    s3_key: vector/villages.fgb
+    s3_key: vector/Village_pan_India.fgb
     name: Baseline Population
     source: vector_fgb
     analysis_type: demographics
-    # Clipped to watershed server-side before map load
+    # Same polygons as village outlines; keep full villages that touch the AOI.
+    clip_mode: intersect
     map_render: true
     render:
       type: choropleth
@@ -310,10 +331,11 @@ layers:
 
   - id: marginalized_scst
     category: Social & Demographic Profile
-    s3_key: vector/villages.fgb
+    s3_key: vector/Village_pan_India.fgb
     name: Marginalized Population (% SC/ST)
     source: vector_fgb
     analysis_type: demographics_marginalized
+    clip_mode: intersect
     map_render: true
     render:
       type: choropleth
@@ -334,10 +356,11 @@ layers:
 
   - id: literacy
     category: Social & Demographic Profile
-    s3_key: vector/villages.fgb
+    s3_key: vector/Village_pan_India.fgb
     name: Overall Literacy (%)
     source: vector_fgb
     analysis_type: demographics_literacy
+    clip_mode: intersect
     map_render: true
     render:
       type: choropleth

@@ -59,4 +59,4 @@ def test_vector_style_payload_includes_colors_and_legend():
     assert villages is not None
     outline = _vector_style_payload(villages)
     assert outline["render_type"] == "outline"
-    assert outline["label_column"] == "Village Na"
+    assert outline["label_column"] == "name"

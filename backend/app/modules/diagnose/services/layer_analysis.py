@@ -107,11 +107,39 @@ def wiser_rank_source_columns(style_column: str | None) -> tuple[str, ...]:
     return ("Irr_access", "Kharif_res", "Rabi_res")
 
 
+def alias_census_village_columns(gdf):
+    """Map pan-India census fields onto the Total_* names used by analysis/UI.
+
+    Village_pan_India.fgb uses tot_p / p_sc / p_st / p_lit. The older
+    villages.fgb uses Total_Popu / Total_SC_P / Total_ST_P / Total_Lite.
+    """
+    if gdf is None or getattr(gdf, "empty", True):
+        return gdf
+    pairs = (
+        ("Total_Popu", ("tot_p", "TOT_P", "population")),
+        ("Total_SC_P", ("p_sc", "P_SC")),
+        ("Total_ST_P", ("p_st", "P_ST")),
+        ("Total_Lite", ("p_lit", "P_LIT", "tot_lit")),
+    )
+    existing = {str(c).lower(): c for c in gdf.columns}
+    for target, sources in pairs:
+        if target.lower() in existing:
+            continue
+        for src in sources:
+            hit = existing.get(src.lower())
+            if hit is None:
+                continue
+            gdf[target] = gdf[hit]
+            existing[target.lower()] = target
+            break
+    return gdf
+
+
 def enrich_vector_gdf(gdf, layer_cfg: LayerConfig):
     """Derive style columns (soil texture, literacy) on clipped GeoDataFrame."""
     if gdf.empty:
         return gdf
-    gdf = gdf.copy()
+    gdf = alias_census_village_columns(gdf.copy())
     column = layer_cfg.style_column
     atype = layer_cfg.analysis_type or ""
 
@@ -127,8 +155,8 @@ def enrich_vector_gdf(gdf, layer_cfg: LayerConfig):
     elif atype == "demographics_literacy" or column == "pct_literate":
         target = column or "pct_literate"
         if target not in gdf.columns or gdf[target].isna().all():
-            literate = _find_column(gdf, "Total_Lite", "total_lite", "Total_Liter")
-            pop = _find_column(gdf, "Total_Popu", "total_popu", "Population")
+            literate = _find_column(gdf, "Total_Lite", "p_lit", "total_lite", "Total_Liter")
+            pop = _find_column(gdf, "Total_Popu", "tot_p", "total_popu", "Population")
             if literate and pop:
                 pop_v = gdf[pop].replace(0, np.nan)
                 gdf[target] = (gdf[literate].fillna(0) / pop_v) * 100
@@ -147,9 +175,9 @@ def enrich_vector_gdf(gdf, layer_cfg: LayerConfig):
     elif atype == "demographics_marginalized" or column == "pct_scst":
         target = column or "pct_scst"
         if target not in gdf.columns or gdf[target].isna().all():
-            sc = _find_column(gdf, "Total_SC_P", "total_sc_p")
-            st = _find_column(gdf, "Total_ST_P", "total_st_p")
-            pop = _find_column(gdf, "Total_Popu", "total_popu", "Population")
+            sc = _find_column(gdf, "Total_SC_P", "p_sc", "total_sc_p")
+            st = _find_column(gdf, "Total_ST_P", "p_st", "total_st_p")
+            pop = _find_column(gdf, "Total_Popu", "tot_p", "total_popu", "Population")
             if sc and st and pop:
                 pop_v = gdf[pop].replace(0, np.nan)
                 gdf[target] = ((gdf[sc].fillna(0) + gdf[st].fillna(0)) / pop_v) * 100
@@ -683,13 +711,17 @@ def analyze_demographics(clipped, marginalized: bool = False) -> dict[str, str]:
     stats: dict[str, str] = {}
     if clipped.empty:
         return {"Status": "No features in watershed"}
-    id_col = _find_column(clipped, "Village ID", "vlcode", "village")
-    unique = clipped.drop_duplicates(subset=[id_col]) if id_col else clipped
+    unique = clipped
+    id_col = _find_column(
+        clipped, "Village ID", "pc11_village_id", "vill_code", "vlcode", "uid", "village", "id"
+    )
+    if id_col:
+        unique = clipped.drop_duplicates(subset=[id_col])
     stats["Intersecting Villages"] = str(len(unique))
 
-    pop_col = _find_column(unique, "Total_Popu", "total_popu", "Population")
-    sc_col = _find_column(unique, "Total_SC_P", "total_sc_p")
-    st_col = _find_column(unique, "Total_ST_P", "total_st_p")
+    pop_col = _find_column(unique, "Total_Popu", "tot_p", "total_popu", "Population")
+    sc_col = _find_column(unique, "Total_SC_P", "p_sc", "total_sc_p")
+    st_col = _find_column(unique, "Total_ST_P", "p_st", "total_st_p")
     try:
         total_pop = float(unique[pop_col].sum()) if pop_col else 0.0
         stats["Population in AOI"] = f"{int(total_pop):,}"
@@ -709,13 +741,17 @@ def analyze_demographics_literacy(clipped) -> dict[str, str]:
     stats: dict[str, str] = {}
     if clipped.empty:
         return {"Status": "No features in watershed"}
-    id_col = _find_column(clipped, "Village ID", "vlcode", "village")
-    unique = clipped.drop_duplicates(subset=[id_col]) if id_col else clipped
+    unique = clipped
+    id_col = _find_column(
+        clipped, "Village ID", "pc11_village_id", "vill_code", "vlcode", "uid", "village", "id"
+    )
+    if id_col:
+        unique = clipped.drop_duplicates(subset=[id_col])
     stats["Intersecting Villages"] = str(len(unique))
     literate_col = _find_column(unique, "pct_literate")
     if not literate_col:
-        literate = _find_column(unique, "Total_Lite", "total_lite")
-        pop = _find_column(unique, "Total_Popu", "total_popu", "Population")
+        literate = _find_column(unique, "Total_Lite", "p_lit", "total_lite")
+        pop = _find_column(unique, "Total_Popu", "tot_p", "total_popu", "Population")
         if literate and pop:
             pop_v = unique[pop].replace(0, np.nan)
             unique = unique.assign(pct_literate=(unique[literate].fillna(0) / pop_v) * 100)

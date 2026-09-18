@@ -374,9 +374,9 @@ def _prepare_style_column(gdf, layer_cfg: LayerConfig):
             gdf[column] = gdf[col].astype(str)
     elif atype == "demographics_marginalized" or column == "pct_scst":
         if "pct_scst" not in gdf.columns:
-            sc = _find_column(gdf, "Total_SC_P", "SC")
-            st = _find_column(gdf, "Total_ST_P", "ST")
-            pop = _find_column(gdf, "Total_Popu", "TOT_P", "population")
+            sc = _find_column(gdf, "Total_SC_P", "p_sc", "SC")
+            st = _find_column(gdf, "Total_ST_P", "p_st", "ST")
+            pop = _find_column(gdf, "Total_Popu", "tot_p", "TOT_P", "population")
             if sc and st and pop:
                 pop_v = gdf[pop].replace(0, np.nan)
                 gdf[column] = ((gdf[sc].fillna(0) + gdf[st].fillna(0)) / pop_v) * 100
@@ -384,8 +384,8 @@ def _prepare_style_column(gdf, layer_cfg: LayerConfig):
                 gdf[column] = np.nan
     elif atype == "demographics_literacy" or column == "pct_literate":
         if column not in gdf.columns or gdf[column].isna().all():
-            literate = _find_column(gdf, "Total_Lite", "total_lite", "Total_Liter")
-            pop = _find_column(gdf, "Total_Popu", "TOT_P", "population")
+            literate = _find_column(gdf, "Total_Lite", "p_lit", "total_lite", "Total_Liter")
+            pop = _find_column(gdf, "Total_Popu", "tot_p", "TOT_P", "population")
             if literate and pop:
                 pop_v = gdf[pop].replace(0, np.nan)
                 gdf[column or "pct_literate"] = (gdf[literate].fillna(0) / pop_v) * 100

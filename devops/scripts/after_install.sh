@@ -156,6 +156,22 @@ defaults = {
 for key, value in defaults.items():
     cfg.setdefault(key, value)
 
+# Village boundaries / census demographics use Village_pan_India.fgb. Older Secrets
+# Manager VECTOR_LAYERS allowlists may still list only villages.fgb — append the new
+# key so CodeDeploy never ships a beta/prod that silently falls back to the old layer.
+REQUIRED_VECTOR_KEYS = ("vector/Village_pan_India.fgb",)
+vl_raw = str(cfg.get("VECTOR_LAYERS") or "").strip()
+if vl_raw and vl_raw.lower() not in {"*", "all"}:
+    parts = [p.strip() for p in vl_raw.split(",") if p.strip()]
+    changed = False
+    for key in REQUIRED_VECTOR_KEYS:
+        if key not in parts:
+            parts.append(key)
+            changed = True
+            print(f"  + appended {key} to VECTOR_LAYERS (required village layer)")
+    if changed:
+        cfg["VECTOR_LAYERS"] = ",".join(parts)
+
 lines = [f'{key}="{escape(value)}"' for key, value in cfg.items()]
 shared_env.write_text("\n".join(lines) + "\n", encoding="utf-8")
 

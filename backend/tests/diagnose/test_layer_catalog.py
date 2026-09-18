@@ -56,6 +56,7 @@ def test_catalog_includes_wiser_and_dem_layers():
     assert "baseline_population" in ids
     assert "marginalized_scst" in ids
     assert "village_boundaries" in ids
+    assert "aoi_boundary" in ids
 
     gw = catalog.by_id("gw_stress_wiser")
     assert gw is not None
@@ -75,15 +76,26 @@ def test_catalog_includes_wiser_and_dem_layers():
     pop = catalog.by_id("baseline_population")
     assert pop is not None
     assert pop.render_type == "choropleth"
+    assert pop.s3_key == "vector/Village_pan_India.fgb"
+    assert pop.clip_mode == "intersect"
+    assert catalog.by_id("marginalized_scst").s3_key == "vector/Village_pan_India.fgb"
+    assert catalog.by_id("literacy").s3_key == "vector/Village_pan_India.fgb"
     assert len(pop.choropleth_stops) == 5
     assert pop.legend_entries()[0].label == "< 500"
 
     boundaries = catalog.by_id("village_boundaries")
     assert boundaries is not None
     assert boundaries.render_type == "outline"
-    assert boundaries.label_column == "Village Na"
-    assert boundaries.s3_key == "vector/villages.fgb"
+    assert boundaries.label_column == "name"
+    assert boundaries.s3_key == "vector/Village_pan_India.fgb"
     assert boundaries.category == "Reference"
+
+    aoi = catalog.by_id("aoi_boundary")
+    assert aoi is not None
+    assert aoi.source == "project_aoi"
+    assert aoi.overlay is False
+    assert aoi.category == "Hydrology & Landscape Controls"
+    assert aoi.render_type == "outline"
 
     assert catalog.by_id("lulc250k").category == "Hydrology & Landscape Controls"
     assert catalog.by_id("jrc_occurrence").category == "Surface Water Dynamics"

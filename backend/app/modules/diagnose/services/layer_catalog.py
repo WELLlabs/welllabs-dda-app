@@ -157,7 +157,11 @@ class LayerCatalog:
         return tuple(l for l in self.layers if l.source == "cog")
 
     def vector_layers(self) -> tuple[LayerConfig, ...]:
-        return tuple(l for l in self.layers if l.source in ("vector_fgb", "watershed_hierarchy"))
+        return tuple(
+            l
+            for l in self.layers
+            if l.source in ("vector_fgb", "watershed_hierarchy", "project_aoi")
+        )
 
 
 def _hex_to_rgba(hex_color: str) -> tuple[int, int, int, int]:

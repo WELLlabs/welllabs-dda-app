@@ -5,6 +5,7 @@ from __future__ import annotations
 from app.modules.diagnose.services.layer_analysis import (
     _normalize_gw,
     _normalize_rank,
+    alias_census_village_columns,
     wiser_rank_source_columns,
 )
 
@@ -33,4 +34,23 @@ def test_wiser_rank_source_columns_are_distinct():
         "__wiser_kharif_resilience_class",
         "__wiser_rabi_resilience_class",
     )}) == 3
+
+
+def test_alias_census_village_columns_from_pan_india_names():
+    import pandas as pd
+
+    raw = pd.DataFrame({"tot_p": [2167], "p_sc": [504], "p_st": [0], "p_lit": [1269]})
+    out = alias_census_village_columns(raw)
+    assert int(out["Total_Popu"].iloc[0]) == 2167
+    assert int(out["Total_SC_P"].iloc[0]) == 504
+    assert int(out["Total_ST_P"].iloc[0]) == 0
+    assert int(out["Total_Lite"].iloc[0]) == 1269
+
+
+def test_alias_census_village_columns_keeps_legacy_names():
+    import pandas as pd
+
+    raw = pd.DataFrame({"Total_Popu": [100], "tot_p": [999]})
+    out = alias_census_village_columns(raw)
+    assert int(out["Total_Popu"].iloc[0]) == 100
 

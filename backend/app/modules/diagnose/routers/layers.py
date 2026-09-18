@@ -1222,7 +1222,7 @@ def _build_vector_layer(cfg: LayerConfig) -> VectorLayer:
     ]
     meaning = cfg.meaning or cfg.interpretation
     dash = list(cfg.line_dasharray) if cfg.line_dasharray else None
-    if cfg.source == "watershed_hierarchy":
+    if cfg.source == "watershed_hierarchy" or cfg.source == "project_aoi":
         return VectorLayer(
             id=cfg.id,
             name=cfg.name,
@@ -1316,6 +1316,10 @@ async def list_vector_layers(
     for cfg in get_catalog().vector_layers():
         # Hierarchy stack is picker-only (preview_context); skip in project maps.
         if cfg.source == "watershed_hierarchy":
+            continue
+        # Project AOI outline — always available; geometry comes from the diagnosis row.
+        if cfg.source == "project_aoi":
+            layers.append(_build_vector_layer(cfg))
             continue
         if cfg.s3_key not in enabled:
             continue
@@ -1417,8 +1421,8 @@ def _run_layer_analysis_sync(cfg: LayerConfig, geom: dict):
     """Run analyze_layer with vsis3/presign; used by single + batch endpoints."""
     from app.modules.diagnose.services.layer_analysis import AnalysisResult
 
-    # Outline / reference overlays have no watershed stats.
-    if cfg.render_type == "outline" or not cfg.analysis_type:
+    # Outline / reference overlays / project AOI have no watershed stats.
+    if cfg.render_type == "outline" or cfg.source == "project_aoi" or not cfg.analysis_type:
         return AnalysisResult(stats={}, status="ok")
 
     if cfg.source == "watershed_hierarchy" or cfg.analysis_type == "watershed_hierarchy":

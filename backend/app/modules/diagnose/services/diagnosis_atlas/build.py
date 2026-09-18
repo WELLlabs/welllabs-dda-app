@@ -19,6 +19,7 @@ from matplotlib.backends.backend_pdf import PdfPages  # noqa: E402
 from shapely.geometry import shape  # noqa: E402
 
 from app.modules.diagnose.services.diagnosis_atlas.appendix import append_epra_pack  # noqa: E402
+from app.modules.diagnose.services.diagnosis_atlas.field_tables import paginate_rows, wrap_field  # noqa: E402
 from app.modules.diagnose.services.diagnosis_atlas.clip import (  # noqa: E402
     ATLAS_LAYER_ORDER,
     COMPARISON_PAIRS,
@@ -1421,27 +1422,106 @@ def _zone_hex(zone: dict, index: int = 0) -> str:
     return _ZONE_COLOR_FALLBACKS[index % len(_ZONE_COLOR_FALLBACKS)]
 
 
-def _save_zones_page(pdf, project: dict, zones: list, hypotheses: list, page_num: int):
-    """Color-coded observation zones over an OSM/street basemap + ask/observe table."""
-    fig, ax_bg = page_setup()
-    report_header(
-        ax_bg,
-        "Observation Zones",
-        "Color-coded field zones on an access basemap, with what to ask and observe.",
-        section="Field Entities",
-    )
-    footer(ax_bg, "Observation zones from the diagnose project", page_num)
+def _linked_hypotheses(hypotheses: list, zone_id: str) -> str:
+    labels = []
+    for h in hypotheses:
+        if zone_id and zone_id not in {str(z) for z in (h.get("observation_zone_ids") or [])}:
+            continue
+        text = (h.get("hypothesis") or "").strip()
+        if text:
+            labels.append(text)
+    return "; ".join(labels) or "—"
 
-    geom = project.get("watershed_geometry")
-    # Leave ≥0.52 of page width for the ask/observe table (right margin ~0.04).
-    ax_map = fig.add_axes([0.04, 0.16, 0.38, 0.66])
+
+def _zone_table_rows(zones: list, hypotheses: list, wraps: list[int]) -> list[dict]:
+    table_rows = list(zones or [])
+    if not table_rows:
+        table_rows = [{"text": "No zones marked yet", "observations": "—", "questions": "—", "id": ""}]
+    rows = []
+    for ri, z in enumerate(table_rows):
+        color = _zone_hex(z, ri)
+        vals = [
+            str(ri + 1),
+            z.get("text") or f"Zone {ri + 1}",
+            z.get("observations") or "—",
+            z.get("questions") or "—",
+            _linked_hypotheses(hypotheses, str(z.get("id") or "")),
+        ]
+        rows.append(
+            {
+                "source_i": ri,
+                "color": color,
+                "face": "#ffffff" if ri % 2 == 0 else theme("panel_alt"),
+                "cells": [wrap_field(v, wraps[j]) for j, v in enumerate(vals)],
+            }
+        )
+    return rows
+
+
+def _draw_table_header(ax, headers: list[str], col_w: list[float], x0: float, y: float, header_h: float) -> float:
+    x = x0
+    for j, header in enumerate(headers):
+        ax.add_patch(
+            plt.Rectangle(
+                (x, y - header_h),
+                col_w[j],
+                header_h,
+                facecolor=theme("green_dark"),
+                edgecolor=theme("line"),
+                linewidth=0.5,
+            )
+        )
+        ax.text(
+            x + 0.004,
+            y - 0.01,
+            header,
+            fontsize=6.2,
+            color="white",
+            fontweight="bold",
+            va="top",
+            linespacing=1.05,
+        )
+        x += col_w[j]
+    return y - header_h
+
+
+def _draw_table_chunk(ax, chunk: list[dict], col_w: list[float], x0: float, y: float, *, swatch_cols: set[int] | None = None) -> float:
+    swatch_cols = swatch_cols or {0}
+    for ri, row in enumerate(chunk):
+        x = x0
+        rh = float(row["height"])
+        color = row.get("color") or theme("ink")
+        face = row.get("face") or ("#ffffff" if ri % 2 == 0 else theme("panel_alt"))
+        for j, lines in enumerate(row["cells"]):
+            if j in swatch_cols:
+                face_cell, text_color = color, "#ffffff"
+            else:
+                face_cell, text_color = face, theme("ink")
+            ax.add_patch(
+                plt.Rectangle((x, y - rh), col_w[j], rh, facecolor=face_cell, edgecolor=theme("line"), linewidth=0.55)
+            )
+            ax.text(
+                x + 0.004,
+                y - 0.008,
+                "\n".join(lines),
+                fontsize=6.4,
+                color=text_color,
+                va="top",
+                fontweight="bold" if j in swatch_cols else "normal",
+                linespacing=1.12,
+                clip_on=False,
+            )
+            x += col_w[j]
+        y -= rh
+    return y
+
+
+def _draw_zones_map(ax_map, project: dict, zones: list, zone_colors: list[str]) -> None:
     ax_map.set_facecolor("#e8eef3")
-
-    zone_colors: list[str] = [_zone_hex(z, i) for i, z in enumerate(zones)]
+    geom = project.get("watershed_geometry")
     try:
         import geopandas as gpd
 
-        # Web Mercator for OSM/Esri street tiles
         if geom:
             ws_gdf = gpd.GeoDataFrame(geometry=[shape(geom)], crs=4326).to_crs(epsg=3857)
             minx, miny, maxx, maxy = ws_gdf.total_bounds
@@ -1452,6 +1532,22 @@ def _save_zones_page(pdf, project: dict, zones: list, hypotheses: list, page_num
             ax_map.set_aspect("equal")
             _add_basemap(ax_map, kind="access")
             ws_gdf.boundary.plot(ax=ax_map, color="#00306d", linewidth=2.0, zorder=6)
+            try:
+                from matplotlib_scalebar.scalebar import ScaleBar
+
+                ax_map.add_artist(
+                    ScaleBar(
+                        dx=1,
+                        units="m",
+                        fixed_units="m",
+                        location="lower right",
+                        box_alpha=0.75,
+                        color="#00306d",
+                        box_color="#ffffff",
+                    )
+                )
+            except Exception:
+                pass
 
         rows = []
         for i, z in enumerate(zones):
@@ -1471,7 +1567,6 @@ def _save_zones_page(pdf, project: dict, zones: list, hypotheses: list, page_num
             for color in zgdf["color"].unique():
                 subset = zgdf[zgdf["color"] == color]
                 subset.plot(ax=ax_map, facecolor=color, edgecolor="#00306d", alpha=0.45, linewidth=1.4, zorder=7)
-            # Expand view to include zones if they extend past watershed
             zminx, zminy, zmaxx, zmaxy = zgdf.total_bounds
             cur_x = ax_map.get_xlim()
             cur_y = ax_map.get_ylim()
@@ -1490,168 +1585,162 @@ def _save_zones_page(pdf, project: dict, zones: list, hypotheses: list, page_num
             )
         ax_map.set_axis_off()
         ax_map.set_title("Zones on access basemap", fontsize=8.5, color=theme("ink"), pad=4)
-        try:
-            from matplotlib_scalebar.scalebar import ScaleBar
-
-            ax_map.add_artist(
-                ScaleBar(
-                    dx=1,
-                    units="m",
-                    fixed_units="m",
-                    location="lower right",
-                    box_alpha=0.75,
-                    color="#00306d",
-                    box_color="#ffffff",
-                )
-            )
-        except Exception:
-            pass
     except Exception as exc:
         ax_map.text(0.5, 0.5, f"Zone map error:\n{exc}", ha="center", va="center", transform=ax_map.transAxes, fontsize=8)
         ax_map.set_axis_off()
 
-    # Color-coded ask / observe table
-    hyp_by_zone: dict[str, list[str]] = {}
-    for h in hypotheses:
-        label = (h.get("hypothesis") or "")[:50]
-        for zid in h.get("observation_zone_ids") or []:
-            hyp_by_zone.setdefault(str(zid), []).append(label)
 
-    # Colored # | Zone | Observe | Ask | Linked hyp. — must fit within page (x ≤ 0.96).
-    headers = ["#", "Zone", "What to\nobserve", "What to\nask", "Linked\nhypothesis"]
-    col_w = [0.032, 0.088, 0.132, 0.132, 0.112]  # sum 0.496 → ends ~0.941
-    x0, y = 0.445, 0.80
-    x = x0
-    for j, h in enumerate(headers):
-        ax_bg.add_patch(
-            plt.Rectangle((x, y - 0.046), col_w[j], 0.046, facecolor=theme("green_dark"), edgecolor=theme("line"), linewidth=0.5)
-        )
-        ax_bg.text(x + 0.004, y - 0.01, h, fontsize=5.8, color="white", fontweight="bold", va="top", linespacing=1.05)
-        x += col_w[j]
-    y -= 0.046
+def _save_zones_pages(pdf, project: dict, zones: list, hypotheses: list, page_num: int) -> int:
+    """Full-page zone map, then full-width observe/ask table (may span pages)."""
+    zone_colors = [_zone_hex(z, i) for i, z in enumerate(zones)]
+    full_headers = ["#", "Zone", "What to observe", "What to ask", "Linked hypothesis"]
+    full_w = [0.05, 0.16, 0.26, 0.26, 0.18]
+    full_wraps = [4, 24, 42, 42, 30]
 
-    table_rows = zones or []
-    if not table_rows:
-        table_rows = [{"text": "No zones marked yet", "observations": "—", "questions": "—", "id": ""}]
-
-    for ri, z in enumerate(table_rows[:9]):
-        color = zone_colors[ri] if ri < len(zone_colors) else _ZONE_COLOR_FALLBACKS[ri % len(_ZONE_COLOR_FALLBACKS)]
-        zid = str(z.get("id") or "")
-        linked = "; ".join(hyp_by_zone.get(zid, [])[:2]) or "—"
-        vals = [
-            str(ri + 1),
-            (z.get("text") or f"Zone {ri + 1}")[:40],
-            (z.get("observations") or "—")[:90],
-            (z.get("questions") or "—")[:90],
-            linked[:60],
-        ]
-        x = x0
-        face = "#ffffff" if ri % 2 == 0 else theme("panel_alt")
-        rh = 0.068
-        for j, cell in enumerate(vals):
-            face_cell = color if j == 0 else face
-            text_color = "#ffffff" if j == 0 else theme("ink")
-            ax_bg.add_patch(
-                plt.Rectangle((x, y - rh), col_w[j], rh, facecolor=face_cell, edgecolor=theme("line"), linewidth=0.55)
-            )
-            wrap = [3, 14, 22, 22, 18][j]
-            ax_bg.text(
-                x + 0.003,
-                y - 0.01,
-                "\n".join(textwrap.wrap(str(cell), wrap)[:4]),
-                fontsize=5.5,
-                color=text_color,
-                va="top",
-                fontweight="bold" if j == 0 else "normal",
-                clip_on=True,
-            )
-            x += col_w[j]
-        y -= rh
-        if y < 0.10:
-            break
-
+    fig, ax_bg = page_setup()
+    report_header(
+        ax_bg,
+        "Observation Zones",
+        "Color-coded field zones on an access basemap. Field checklist table follows on the next page(s).",
+        section="Field Entities",
+    )
+    footer(ax_bg, "Observation zones from the diagnose project", page_num)
+    # Near full-bleed map under the report header / above the footer.
+    ax_map = fig.add_axes([0.04, 0.10, 0.92, 0.74])
+    _draw_zones_map(ax_map, project, zones, zone_colors)
     pdf.savefig(fig)
     plt.close(fig)
 
+    table_rows = _zone_table_rows(zones, hypotheses, full_wraps)
+    for idx, chunk in enumerate(paginate_rows(table_rows, available=0.74)):
+        page_num += 1
+        fig, ax = page_setup()
+        title = "Observation Zones — field table" if idx == 0 else "Observation Zones — field table (continued)"
+        report_header(
+            ax,
+            title,
+            "Full zone names, what to observe, what to ask, and linked hypotheses for printouts.",
+            section="Field Entities",
+        )
+        footer(ax, "Observation zone field table", page_num)
+        y = _draw_table_header(ax, full_headers, full_w, 0.045, 0.84, 0.046)
+        _draw_table_chunk(ax, chunk, full_w, 0.045, y)
+        pdf.savefig(fig)
+        plt.close(fig)
+    return page_num
 
-def _save_hypotheses_page(pdf, zones: list, hypotheses: list, page_num: int):
-    fig, ax = page_setup()
-    report_header(
-        ax,
-        "Hypotheses",
-        "Problem statements linked to zones, with status and root-cause notes.",
-        section="Field Entities",
-    )
-    footer(ax, "Hypotheses from the diagnose project", page_num)
+
+def _hypothesis_table_rows(zones: list, hypotheses: list, wraps: list[int]) -> list[dict]:
     zone_by_id = {str(z.get("id")): z for z in zones}
     zone_label = {zid: (z.get("text") or "Zone") for zid, z in zone_by_id.items()}
-    headers = ["#", "Hypothesis", "Status", "Root cause", "Zones", "Notes"]
-    col_w = [0.04, 0.28, 0.11, 0.23, 0.18, 0.06]
-    x0, y = 0.045, 0.84
-    x = x0
-    for j, h in enumerate(headers):
-        ax.add_patch(plt.Rectangle((x, y - 0.045), col_w[j], 0.045, facecolor=theme("green_dark"), edgecolor=theme("line")))
-        ax.text(x + 0.005, y - 0.014, h, fontsize=7, color="white", fontweight="bold", va="top")
-        x += col_w[j]
-    y -= 0.045
-    rows = hypotheses or []
-    if not rows:
-        rows = [{"hypothesis": "No hypotheses recorded yet", "status": "—", "root_cause": "", "observation_zone_ids": [], "field_note_count": 0}]
-    for ri, h in enumerate(rows[:11]):
+    rows_src = list(hypotheses or [])
+    if not rows_src:
+        rows_src = [
+            {
+                "hypothesis": "No hypotheses recorded yet",
+                "status": "—",
+                "root_cause": "",
+                "observation_zone_ids": [],
+                "field_note_count": 0,
+            }
+        ]
+    rows = []
+    for ri, h in enumerate(rows_src):
         zids = h.get("observation_zone_ids") or []
-        znames = ", ".join(zone_label.get(str(zid), "Zone") for zid in zids[:4]) or "—"
-        status = str(h.get("status") or "untested").lower()
-        status_color = _HYP_STATUS_COLORS.get(status, theme("muted"))
+        znames = ", ".join(zone_label.get(str(zid), "Zone") for zid in zids) or "—"
+        status = str(h.get("status") or "untested")
+        color = None
+        if zids:
+            z0 = zone_by_id.get(str(zids[0]))
+            if z0:
+                color = _zone_hex(z0, ri)
         vals = [
             str(ri + 1),
             h.get("hypothesis") or "",
-            status.title(),
+            status.replace("_", " ").title(),
             h.get("root_cause") or "—",
             znames,
             str(h.get("field_note_count") or 0),
         ]
+        rows.append(
+            {
+                "color": color or theme("ink"),
+                "status": status.lower(),
+                "face": "#ffffff" if ri % 2 == 0 else theme("panel_alt"),
+                "cells": [wrap_field(v, wraps[j]) for j, v in enumerate(vals)],
+            }
+        )
+    return rows
+
+
+def _draw_hyp_chunk(ax, chunk: list[dict], col_w: list[float], x0: float, y: float) -> float:
+    for ri, row in enumerate(chunk):
         x = x0
-        face = "#ffffff" if ri % 2 == 0 else theme("panel_alt")
-        rh = 0.058
-        zone_swatch = None
-        if zids:
-            z0 = zone_by_id.get(str(zids[0]))
-            if z0:
-                zone_swatch = _zone_hex(z0, ri)
-        for j, cell in enumerate(vals):
-            if j == 0 and zone_swatch:
-                cell_face, text_color = zone_swatch, "#ffffff"
-            elif j == 2 and status in _HYP_STATUS_COLORS:
-                cell_face, text_color = status_color, "#ffffff"
+        rh = float(row["height"])
+        face = row.get("face") or ("#ffffff" if ri % 2 == 0 else theme("panel_alt"))
+        status = row.get("status") or ""
+        status_color = _HYP_STATUS_COLORS.get(status)
+        for j, lines in enumerate(row["cells"]):
+            if j == 0:
+                face_cell, text_color = row.get("color") or theme("ink"), "#ffffff"
+            elif j == 2 and status_color:
+                face_cell, text_color = status_color, "#ffffff"
             else:
-                cell_face, text_color = face, theme("ink")
-            ax.add_patch(plt.Rectangle((x, y - rh), col_w[j], rh, facecolor=cell_face, edgecolor=theme("line"), linewidth=0.5))
-            wrap = [6, 36, 14, 28, 22, 6][j]
+                face_cell, text_color = face, theme("ink")
+            ax.add_patch(
+                plt.Rectangle((x, y - rh), col_w[j], rh, facecolor=face_cell, edgecolor=theme("line"), linewidth=0.5)
+            )
             ax.text(
                 x + 0.004,
-                y - 0.01,
-                "\n".join(textwrap.wrap(str(cell), wrap)[:3]),
-                fontsize=6.0,
+                y - 0.008,
+                "\n".join(lines),
+                fontsize=6.4,
                 color=text_color,
                 va="top",
                 fontweight="bold" if j == 2 else "normal",
+                linespacing=1.12,
+                clip_on=False,
             )
             x += col_w[j]
         y -= rh
-        if y < 0.10:
-            break
+    return y
 
-    # Status legend
-    lx = 0.045
-    ax.text(lx, 0.08, "Status key:", fontsize=6.5, color=theme("muted"), va="center")
-    lx += 0.08
-    for label, hex_color in (("Validated", "#186d13"), ("Untested", "#1b75e0"), ("Inconclusive", "#b45309"), ("Rejected", "#b91c1c")):
-        ax.add_patch(plt.Rectangle((lx, 0.065), 0.018, 0.028, facecolor=hex_color, edgecolor="none"))
-        ax.text(lx + 0.022, 0.08, label, fontsize=6.2, color=theme("ink"), va="center")
-        lx += 0.12
 
-    pdf.savefig(fig)
-    plt.close(fig)
+def _save_hypotheses_pages(pdf, zones: list, hypotheses: list, page_num: int) -> int:
+    headers = ["#", "Hypothesis", "Status", "Root cause", "Zones", "Notes"]
+    col_w = [0.04, 0.28, 0.11, 0.23, 0.18, 0.06]
+    wraps = [4, 44, 14, 36, 28, 8]
+    pages = paginate_rows(_hypothesis_table_rows(zones, hypotheses, wraps), available=0.70)
+    for idx, chunk in enumerate(pages):
+        if idx:
+            page_num += 1
+        fig, ax = page_setup()
+        title = "Hypotheses" if idx == 0 else "Hypotheses (continued)"
+        report_header(
+            ax,
+            title,
+            "Problem statements linked to zones, with status and root-cause notes.",
+            section="Field Entities",
+        )
+        footer(ax, "Hypotheses from the diagnose project", page_num)
+        y = _draw_table_header(ax, headers, col_w, 0.045, 0.84, 0.045)
+        _draw_hyp_chunk(ax, chunk, col_w, 0.045, y)
+        if idx == len(pages) - 1:
+            lx = 0.045
+            ax.text(lx, 0.08, "Status key:", fontsize=6.5, color=theme("muted"), va="center")
+            lx += 0.08
+            for label, hex_color in (
+                ("Validated", "#186d13"),
+                ("Untested", "#1b75e0"),
+                ("Inconclusive", "#b45309"),
+                ("Rejected", "#b91c1c"),
+            ):
+                ax.add_patch(plt.Rectangle((lx, 0.065), 0.018, 0.028, facecolor=hex_color, edgecolor="none"))
+                ax.text(lx + 0.022, 0.08, label, fontsize=6.2, color=theme("ink"), va="center")
+                lx += 0.12
+        pdf.savefig(fig)
+        plt.close(fig)
+    return page_num
 
 
 def _draw_stats_panel(ax_bg, stats: dict, *, x: float = 0.755, note: str | None = None):
@@ -2025,12 +2114,12 @@ def build_atlas_pdf(
         page += 1
         if progress:
             progress.emit(91, "Observation zones…")
-        _save_zones_page(pdf, project, observation_zones, hypotheses, page)
+        page = _save_zones_pages(pdf, project, observation_zones, hypotheses, page)
 
         page += 1
         if progress:
             progress.emit(92, "Hypotheses…")
-        _save_hypotheses_page(pdf, observation_zones, hypotheses, page)
+        page = _save_hypotheses_pages(pdf, observation_zones, hypotheses, page)
 
         page += 1
         if progress:
