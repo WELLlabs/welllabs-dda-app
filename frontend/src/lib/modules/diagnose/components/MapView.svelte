@@ -3387,7 +3387,7 @@
 				class:text-brand-navy={mapMode !== 'flat'}
 				onclick={() => setMapMode('flat')}
 			>
-				Flat
+				2D
 			</button>
 			<button
 				type="button"
