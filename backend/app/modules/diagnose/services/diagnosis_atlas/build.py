@@ -182,19 +182,30 @@ def _add_basemap(ax, *, kind: str = "access") -> bool:
             getattr(ctx.providers, "OpenStreetMap", None) and getattr(ctx.providers.OpenStreetMap, "HOT", None),
         ]
 
-    last_error = None
-    for source in sources:
-        if not source:
-            continue
+    def _try_source(source) -> bool:
         try:
             ctx.add_basemap(ax, source=source, crs="EPSG:3857", attribution_size=4, zoom="auto")
             return True
         except TypeError:
-            try:
-                ctx.add_basemap(ax, source=source, crs="EPSG:3857", attribution=False)
-                return True
-            except Exception as exc:
-                last_error = exc
+            ctx.add_basemap(ax, source=source, crs="EPSG:3857", attribution=False)
+            return True
+
+    # Cap each tile source so a hung CDN cannot stall the SSE export past Cloudflare.
+    _BASEMAP_TIMEOUT_S = 25.0
+    last_error = None
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+
+    for source in sources:
+        if not source:
+            continue
+        try:
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                fut = pool.submit(_try_source, source)
+                if fut.result(timeout=_BASEMAP_TIMEOUT_S):
+                    return True
+        except FuturesTimeout:
+            last_error = TimeoutError(f"basemap timed out after {_BASEMAP_TIMEOUT_S:.0f}s ({kind})")
+            log.warning("%s", last_error)
         except Exception as exc:
             last_error = exc
     if last_error:

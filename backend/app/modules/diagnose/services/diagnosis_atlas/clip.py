@@ -224,11 +224,27 @@ def load_india_states():
         except Exception:
             continue
 
-    # 2) S3 (optional — may be stale/truncated if an older geohacker upload exists)
+    # 2) S3 — short HTTP timeout so a missing/slow key cannot stall PDF export
     try:
+        import os
+
         from app.modules.diagnose.services.layer_analysis import _vsis3_path
 
-        gdf = _normalize_state_gdf(gpd.read_file(_vsis3_path(STATE_BOUNDARIES_S3_KEY)))
+        prev_timeout = os.environ.get("GDAL_HTTP_TIMEOUT")
+        prev_connect = os.environ.get("GDAL_HTTP_CONNECTTIMEOUT")
+        os.environ["GDAL_HTTP_TIMEOUT"] = "8"
+        os.environ["GDAL_HTTP_CONNECTTIMEOUT"] = "5"
+        try:
+            gdf = _normalize_state_gdf(gpd.read_file(_vsis3_path(STATE_BOUNDARIES_S3_KEY)))
+        finally:
+            if prev_timeout is None:
+                os.environ.pop("GDAL_HTTP_TIMEOUT", None)
+            else:
+                os.environ["GDAL_HTTP_TIMEOUT"] = prev_timeout
+            if prev_connect is None:
+                os.environ.pop("GDAL_HTTP_CONNECTTIMEOUT", None)
+            else:
+                os.environ["GDAL_HTTP_CONNECTTIMEOUT"] = prev_connect
         if gdf is not None and not gdf.empty:
             _INDIA_STATES_CACHE = gdf
             return gdf.copy()

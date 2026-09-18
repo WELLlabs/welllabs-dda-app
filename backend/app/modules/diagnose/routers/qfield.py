@@ -36,9 +36,10 @@ def package_to_qfield(body: ProjectRequest, user: dict = Depends(get_current_use
 async def package_to_qfield_stream(body: ProjectRequest, user: dict = Depends(get_current_user)):
     """Stream packaging progress as Server-Sent Events."""
     import asyncio
-    import json
 
     from fastapi.responses import StreamingResponse
+
+    from app.modules.diagnose.services.sse_stream import iter_sse_with_keepalive
 
     project_id = str(body.project_id)
     assert_diagnosis_access(user["id"], project_id)
@@ -70,19 +71,8 @@ async def package_to_qfield_stream(body: ProjectRequest, user: dict = Depends(ge
         except Exception as exc:
             await queue.put({"type": "error", "message": f"Packaging failed: {exc}"})
 
-    async def event_stream():
-        task = asyncio.create_task(run_package())
-        try:
-            while True:
-                item = await queue.get()
-                yield f"data: {json.dumps(item)}\n\n"
-                if item.get("type") in ("done", "error"):
-                    break
-        finally:
-            await task
-
     return StreamingResponse(
-        event_stream(),
+        iter_sse_with_keepalive(queue, run_package),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -109,9 +99,10 @@ def sync_from_qfield(body: ProjectRequest, user: dict = Depends(get_current_user
 async def sync_from_qfield_stream(body: ProjectRequest, user: dict = Depends(get_current_user)):
     """Stream sync progress as Server-Sent Events."""
     import asyncio
-    import json
 
     from fastapi.responses import StreamingResponse
+
+    from app.modules.diagnose.services.sse_stream import iter_sse_with_keepalive
 
     project_id = str(body.project_id)
     assert_diagnosis_access(user["id"], project_id)
@@ -143,19 +134,8 @@ async def sync_from_qfield_stream(body: ProjectRequest, user: dict = Depends(get
         except Exception as exc:
             await queue.put({"type": "error", "message": f"Sync failed: {exc}"})
 
-    async def event_stream():
-        task = asyncio.create_task(run_sync())
-        try:
-            while True:
-                item = await queue.get()
-                yield f"data: {json.dumps(item)}\n\n"
-                if item.get("type") in ("done", "error"):
-                    break
-        finally:
-            await task
-
     return StreamingResponse(
-        event_stream(),
+        iter_sse_with_keepalive(queue, run_sync),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
