@@ -32,7 +32,8 @@
 
 	/** @type {number|null} */
 	let calStartIdx = $state(null);
-	let calSpanMonths = $state(12);
+	const YEAR_MONTHS = 12;
+	let calSpanMonths = $state(YEAR_MONTHS);
 	let calWindowKey = $state('');
 	/** @type {'collected'|'soil_moisture'} */
 	let heatMetric = $state('collected');
@@ -307,15 +308,12 @@
 		}
 		if (key === calWindowKey && calStartIdx != null) return;
 
+		// Prefer a full calendar year ending at the last data month (or today).
 		const auto = autoCalendarRange(activity);
-		if (!auto) {
-			calStartIdx = null;
-			calWindowKey = key;
-			return;
-		}
-		const next = clampCalendarWindow(auto.startIdx, auto.months, limits);
+		const endIdx = auto?.endIdx ?? limits.maxEnd;
+		const next = clampCalendarWindow(endIdx - YEAR_MONTHS, YEAR_MONTHS, limits);
 		calStartIdx = next.startIdx;
-		calSpanMonths = next.months;
+		calSpanMonths = YEAR_MONTHS;
 		calWindowKey = key;
 	});
 
@@ -550,11 +548,15 @@
 		}
 	}
 
-	function panCalendar(deltaMonths) {
+	function panCalendar(deltaYears) {
 		if (calStartIdx == null || !panLimits) return;
-		const next = clampCalendarWindow(calStartIdx + deltaMonths, calSpanMonths, panLimits);
+		const next = clampCalendarWindow(
+			calStartIdx + deltaYears * YEAR_MONTHS,
+			YEAR_MONTHS,
+			panLimits
+		);
 		calStartIdx = next.startIdx;
-		calSpanMonths = next.months;
+		calSpanMonths = YEAR_MONTHS;
 	}
 
 	function drawChart() {
@@ -570,7 +572,7 @@
 		}
 
 		const width = Math.max(280, chartEl.clientWidth || 480);
-		const height = Math.max(180, Math.min(340, chartEl.clientHeight || 240));
+		const height = Math.max(280, chartEl.clientHeight || 320);
 		const margin = { top: 28, right: 46, bottom: 44, left: 48 };
 
 		const parsed = series
@@ -1145,30 +1147,34 @@
 							<button type="button" class="asset-info-btn" onclick={() => (showAssetInfo = true)}>
 								View full plot information
 							</button>
+						</div>
+					</section>
 
-							<div class="panel-head map-inline-head">
-								<svg class="panel-ico" viewBox="0 0 16 16" aria-hidden="true"
-									><path fill="currentColor" d="M8 1.5C5.5 1.5 3.5 3.6 3.5 6.2c0 3.4 3.6 7.5 4.2 8.1.2.2.5.2.6 0 .6-.6 4.2-4.7 4.2-8.1C12.5 3.6 10.5 1.5 8 1.5zm0 7a2 2 0 1 1 0-4 2 2 0 0 1 0 4z"
-								/></svg>
-								<h2 class="panel-title">Location map</h2>
+					<section class="dash-col dash-vis">
+						<div class="dash-card map-card">
+							<div class="panel-head panel-head-spread">
+								<div class="panel-head">
+									<svg class="panel-ico" viewBox="0 0 16 16" aria-hidden="true"
+										><path fill="currentColor" d="M8 1.5C5.5 1.5 3.5 3.6 3.5 6.2c0 3.4 3.6 7.5 4.2 8.1.2.2.5.2.6 0 .6-.6 4.2-4.7 4.2-8.1C12.5 3.6 10.5 1.5 8 1.5zm0 7a2 2 0 1 1 0-4 2 2 0 0 1 0 4z"
+									/></svg>
+									<h2 class="panel-title">Location map</h2>
+								</div>
+								<div class="map-legend map-legend-inline">
+									<span class="legend-item"><span class="legend-dot legend-dot-plot"></span> Treatment</span>
+									{#if controlAsset}
+										<span class="legend-item"><span class="legend-dot legend-dot-control"></span> Control</span>
+									{/if}
+								</div>
 							</div>
-							<div class="map-frame">
+							<div class="map-frame map-frame-tall">
 								{#if (treatLoc.lat != null && treatLoc.lon != null) || (controlLoc.lat != null && controlLoc.lon != null)}
 									<div bind:this={mapEl} class="map-host"></div>
 								{:else}
 									<div class="map-fallback">No coordinates available.</div>
 								{/if}
 							</div>
-							<div class="map-legend">
-								<span class="legend-item"><span class="legend-dot legend-dot-plot"></span> Treatment</span>
-								{#if controlAsset}
-									<span class="legend-item"><span class="legend-dot legend-dot-control"></span> Control</span>
-								{/if}
-							</div>
 						</div>
-					</section>
 
-					<section class="dash-col dash-vis">
 						<div class="dash-card dash-card-fill stats-card">
 							<div class="panel-head">
 								<svg class="panel-ico" viewBox="0 0 16 16" aria-hidden="true"
@@ -1325,9 +1331,9 @@
 									</label>
 									{#if calWindow}
 										<div class="year-toggle">
-											<button type="button" class="year-btn" disabled={!calWindow.canPanLeft} onclick={() => panCalendar(-1)} aria-label="Earlier months">‹</button>
+											<button type="button" class="year-btn" disabled={!calWindow.canPanLeft} onclick={() => panCalendar(-1)} aria-label="Previous year">‹</button>
 											<span class="year-label font-mono text-[11px]">{calWindow.label}</span>
-											<button type="button" class="year-btn" disabled={!calWindow.canPanRight} onclick={() => panCalendar(1)} aria-label="Later months">›</button>
+											<button type="button" class="year-btn" disabled={!calWindow.canPanRight} onclick={() => panCalendar(1)} aria-label="Next year">›</button>
 										</div>
 									{/if}
 								</div>
@@ -1499,6 +1505,22 @@
 		flex: 1;
 		min-height: 120px;
 		margin-top: 0.15rem;
+	}
+	.map-card {
+		flex: 1.35;
+		min-height: 0;
+		display: flex;
+		flex-direction: column;
+		overflow: hidden;
+	}
+	.map-frame-tall {
+		flex: 1;
+		min-height: 220px;
+		margin-top: 0.1rem;
+	}
+	.map-legend-inline {
+		padding: 0;
+		gap: 0.45rem 0.75rem;
 	}
 	.map-identity {
 		flex: none;
@@ -1795,7 +1817,7 @@
 		display: flex;
 		flex-direction: row;
 		gap: 0.3rem;
-		height: 118px;
+		height: 96px;
 	}
 	.pond-diagrams-row .pond-diagram-box {
 		flex: 1 1 0;
@@ -2123,15 +2145,15 @@
 		height: 100%;
 	}
 	.chart-card {
-		flex: 1.1;
-		min-height: 0;
+		flex: 2.2;
+		min-height: 260px;
 		display: flex;
 		flex-direction: column;
 		overflow: hidden;
 	}
 	.heat-card {
-		flex: 1.25;
-		min-height: 156px;
+		flex: 0.95;
+		min-height: 148px;
 		display: flex;
 		flex-direction: column;
 		overflow: hidden;
@@ -2139,7 +2161,7 @@
 	.chart-host {
 		width: 100%;
 		flex: 1;
-		min-height: 0;
+		min-height: 240px;
 	}
 	.heat-host {
 		position: relative;
@@ -2228,6 +2250,14 @@
 			flex: none;
 			height: 200px;
 		}
+		.map-frame-tall {
+			min-height: 240px;
+			height: 280px;
+			flex: none;
+		}
+		.map-card {
+			flex: none;
+		}
 		.pond-diagrams-row {
 			flex-direction: column;
 			height: auto;
@@ -2248,7 +2278,10 @@
 		}
 		.chart-host,
 		.heat-host {
-			min-height: 180px;
+			min-height: 220px;
+		}
+		.chart-card {
+			min-height: 300px;
 		}
 	}
 
