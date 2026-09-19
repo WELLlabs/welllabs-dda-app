@@ -1,20 +1,14 @@
 <script>
 	import { onMount } from 'svelte';
 	import ModuleHeader from '$lib/shared/components/ModuleHeader.svelte';
-	import MelParamCardEditor from '$lib/modules/assess/components/MelParamCardEditor.svelte';
 	import {
 		exportMelPlanDocx,
 		fetchMelIntervention,
+		fetchMelLogframe,
 		fetchMelPlan,
 		saveMelPlan
 	} from '$lib/modules/assess/mel-api';
-	import {
-		buildParamCards,
-		includedCards,
-		serializeParamCards,
-		typeLabel,
-		ASSET_SELECT_LOCK_IDS
-	} from '$lib/modules/assess/mel-param-cards.js';
+	import MelLogFrameView from '$lib/modules/assess/components/MelLogFrameView.svelte';
 
 	/** @type {{
 	 *   onBack: () => void,
@@ -41,31 +35,23 @@
 		startStep = 0
 	} = $props();
 
-	let step = $state(Math.min(Math.max(Number(startStep) || 0, 0), 3));
+	/** 0 = choose outcomes, 1 = full plan */
+	let step = $state(Number(startStep) > 0 ? 1 : 0);
 	let loading = $state(true);
 	let saving = $state(false);
 	let exporting = $state(false);
+	let loadingPlan = $state(false);
 	let error = $state('');
 	let intervention = $state(null);
 	let selectedOutcomeIds = $state([...initialOutcomeIds]);
-	/** @type {any[]} */
-	let otCards = $state([]);
-	/** @type {any[]} */
-	let cmCards = $state([]);
-
-	const plotMode = $derived(interventionSlug === 'pmds' || interventionSlug === 'bio-mulching');
-	const STEPS = $derived([
-		{ id: 'outcomes', label: 'Outcomes & indicators' },
-		{ id: 'assets', label: plotMode ? 'Farm-plot allocation' : 'Asset allocation' },
-		{ id: 'cm', label: 'Continuous monitoring' },
-		{ id: 'export', label: 'Export' }
-	]);
+	/** @type {Record<string, any>} */
+	let savedPlanJson = $state({ ...(initialPlanJson || {}) });
+	/** @type {any} */
+	let logframe = $state(null);
 
 	const selectedOutcomes = $derived(
 		(intervention?.outcomes || []).filter((o) => selectedOutcomeIds.includes(o.id))
 	);
-	const includedOt = $derived(includedCards(otCards));
-	const includedCm = $derived(includedCards(cmCards));
 
 	onMount(() => {
 		void load();
@@ -81,10 +67,15 @@
 			]);
 			intervention = intv;
 			const pj = plan?.plan_json || initialPlanJson || {};
+			savedPlanJson = { ...pj };
 			if (Array.isArray(pj.outcome_ids) && pj.outcome_ids.length) {
 				selectedOutcomeIds = [...pj.outcome_ids];
 			}
-			hydrateCards(intv, pj);
+			if (step === 1 && selectedOutcomeIds.length) {
+				await loadLogframe();
+			} else {
+				step = 0;
+			}
 		} catch (err) {
 			error = String(err);
 		} finally {
@@ -92,18 +83,10 @@
 		}
 	}
 
-	function hydrateCards(intv, pj) {
-		otCards = buildParamCards(intv?.one_time_questions || [], pj?.asset_allocation);
-		cmCards = buildParamCards(intv?.cm_questions || [], pj?.cm_form, {
-			lockIds: ASSET_SELECT_LOCK_IDS
-		});
-	}
-
 	function planPayload() {
 		return {
-			outcome_ids: selectedOutcomeIds,
-			asset_allocation: serializeParamCards(otCards),
-			cm_form: serializeParamCards(cmCards)
+			...savedPlanJson,
+			outcome_ids: selectedOutcomeIds
 		};
 	}
 
@@ -115,15 +98,39 @@
 		}
 	}
 
-	async function persist(nextStep = null) {
+	async function loadLogframe() {
+		loadingPlan = true;
+		try {
+			const res = await fetchMelLogframe({
+				interventionSlug,
+				outcomeIds: selectedOutcomeIds,
+				projectId,
+				planId
+			});
+			logframe = res?.logframe || null;
+		} catch {
+			logframe = null;
+		} finally {
+			loadingPlan = false;
+		}
+	}
+
+	async function goToPlan() {
+		if (!selectedOutcomeIds.length) {
+			error = 'Select at least one outcome.';
+			return;
+		}
 		saving = true;
 		error = '';
 		try {
+			const payload = planPayload();
 			await saveMelPlan(projectId, planId, {
 				outcomeIds: selectedOutcomeIds,
-				planJson: planPayload()
+				planJson: payload
 			});
-			if (nextStep != null) step = nextStep;
+			savedPlanJson = payload;
+			step = 1;
+			await loadLogframe();
 		} catch (err) {
 			error = String(err);
 		} finally {
@@ -131,50 +138,16 @@
 		}
 	}
 
-	async function goFromOutcomes() {
-		if (!selectedOutcomeIds.length) {
-			error = 'Select at least one outcome.';
-			return;
-		}
-		await persist(1);
-	}
-
-	async function goFromAssets() {
-		if (!includedOt.length) {
-			error = plotMode
-				? 'Include at least one farm-plot allocation parameter.'
-				: 'Include at least one asset allocation parameter.';
-			return;
-		}
-		await persist(2);
-	}
-
-	async function goFromCm() {
-		if (!includedCm.length) {
-			error = 'Include at least one continuous monitoring parameter.';
-			return;
-		}
-		await persist(3);
-	}
-
-	async function jumpTo(i) {
-		if (i === step) return;
-		if (i > step) {
-			// only allow forward via Continue after validation
-			return;
-		}
-		error = '';
-		step = i;
-	}
-
 	async function handleExport() {
 		exporting = true;
 		error = '';
 		try {
+			const payload = planPayload();
 			await saveMelPlan(projectId, planId, {
 				outcomeIds: selectedOutcomeIds,
-				planJson: planPayload()
+				planJson: payload
 			});
+			savedPlanJson = payload;
 			const { blob, filename } = await exportMelPlanDocx(projectId, planId);
 			const url = URL.createObjectURL(blob);
 			const a = document.createElement('a');
@@ -195,293 +168,138 @@
 <div class="flex h-svh max-h-svh flex-col overflow-hidden bg-transparent font-body">
 	<ModuleHeader title="Assess" titleHref="/assess" wide {crumbs} />
 
-	<main class="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col gap-3 px-4 py-3 sm:px-6">
-		<div class="flex shrink-0 items-center justify-between gap-3">
-			<div class="min-w-0">
-				<p class="m-0 text-[10px] uppercase tracking-wide text-brand-steel">MEL Plan</p>
-				<h1 class="m-0 truncate font-headline text-lg font-semibold text-brand-navy">{planName}</h1>
-				<p class="m-0 truncate text-xs text-brand-steel">{intervention?.name || interventionSlug}</p>
-			</div>
-			<button type="button" class="shrink-0 text-sm text-brand-blue underline" onclick={onBack}
-				>Back</button
-			>
-		</div>
-
-		<nav class="crumb-trail shrink-0" aria-label="MEL plan phases">
-			{#each STEPS as s, i}
-				{#if i > 0}
-					<span class="crumb-sep" aria-hidden="true">/</span>
-				{/if}
-				<button
-					type="button"
-					class="crumb"
-					class:active={i === step}
-					class:done={i < step}
-					disabled={i > step}
-					onclick={() => jumpTo(i)}
+	{#if step === 0}
+		<main class="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col gap-3 px-4 py-3 sm:px-6">
+			<div class="flex shrink-0 items-center justify-between gap-3">
+				<div class="min-w-0">
+					<p class="m-0 text-[10px] uppercase tracking-wide text-brand-steel">MEL Plan</p>
+					<h1 class="m-0 truncate font-headline text-lg font-semibold text-brand-navy">{planName}</h1>
+					<p class="m-0 truncate text-xs text-brand-steel">{intervention?.name || interventionSlug}</p>
+				</div>
+				<button type="button" class="shrink-0 text-sm text-brand-blue underline" onclick={onBack}
+					>Back</button
 				>
-					<span class="crumb-num">{i + 1}</span>
-					<span class="crumb-label">{s.label}</span>
-				</button>
-			{/each}
-		</nav>
+			</div>
 
-		{#if error}
-			<p class="m-0 shrink-0 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs text-red-700">
-				{error}
-			</p>
-		{/if}
+			{#if error}
+				<p
+					class="m-0 shrink-0 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs text-red-700"
+				>
+					{error}
+				</p>
+			{/if}
 
-		{#if loading}
-			<p class="text-sm text-brand-steel">Loading catalog…</p>
-		{:else if step === 0}
-			<section class="phase-panel">
-				<header class="phase-head">
-					<div>
-						<h2>Outcomes & indicators</h2>
-						<p>Select outcomes. System indicators for the selection are listed below.</p>
-					</div>
-				</header>
-				<div class="phase-body two-col">
-					<div>
-						<p class="section-label">Outcomes</p>
-						<ul class="outcome-list">
-							{#each intervention?.outcomes || [] as outcome (outcome.id)}
-								<li>
-									<label class="outcome-row">
-										<input
-											type="checkbox"
-											checked={selectedOutcomeIds.includes(outcome.id)}
-											onchange={() => toggleOutcome(outcome.id)}
-										/>
-										<span>
-											<span class="outcome-title">{outcome.title}</span>
-											{#if outcome.assumptions}
-												<span class="outcome-sub">{outcome.assumptions}</span>
-											{/if}
-										</span>
-									</label>
-								</li>
-							{/each}
-						</ul>
-					</div>
-					<div>
-						<p class="section-label">Indicators for selection</p>
-						{#if !selectedOutcomes.length}
-							<p class="muted">Select outcomes to preview indicators.</p>
-						{:else}
-							{#each selectedOutcomes as outcome (outcome.id)}
-								<div class="ind-block">
-									<p class="ind-title">{outcome.title}</p>
-									{#if outcome.indicators?.length}
-										<ul class="ind-list">
-											{#each outcome.indicators as ind}
-												<li>{ind.title}</li>
-											{/each}
-										</ul>
-									{:else}
-										<p class="muted">No indicators listed</p>
-									{/if}
-								</div>
-							{/each}
-						{/if}
-					</div>
-				</div>
-				<footer class="phase-foot">
-					<button
-						type="button"
-						class="btn primary"
-						disabled={saving || !selectedOutcomeIds.length}
-						onclick={goFromOutcomes}
-					>
-						{saving
-							? 'Saving…'
-							: plotMode
-								? 'Continue to farm-plot allocation'
-								: 'Continue to asset allocation'}
-					</button>
-				</footer>
-			</section>
-		{:else if step === 1}
-			<section class="phase-panel">
-				<header class="phase-head">
-					<div>
-						<h2>{plotMode ? 'Farm-plot allocation' : 'Asset allocation'}</h2>
-						<p>
-							Review one-time fields. Click Edit on a card to change labels, types, or options.
-						</p>
-					</div>
-					<span class="badge">{includedOt.length} included</span>
-				</header>
-				<div class="phase-body scroll">
-					<MelParamCardEditor
-						cards={otCards}
-						onChange={(next) => (otCards = next)}
-						title=""
-						subtitle=""
-						emptyLabel={plotMode
-							? 'No farm-plot allocation questions in the catalog.'
-							: 'No asset allocation questions in the catalog.'}
-					/>
-				</div>
-				<footer class="phase-foot">
-					<button type="button" class="btn" onclick={() => (step = 0)}>Back</button>
-					<button type="button" class="btn" disabled={saving} onclick={() => persist()}>
-						{saving ? 'Saving…' : 'Save'}
-					</button>
-					<button
-						type="button"
-						class="btn primary"
-						disabled={saving || !includedOt.length}
-						onclick={goFromAssets}
-					>
-						{saving ? 'Saving…' : 'Continue to continuous monitoring'}
-					</button>
-				</footer>
-			</section>
-		{:else if step === 2}
-			<section class="phase-panel">
-				<header class="phase-head">
-					<div>
-						<h2>Continuous monitoring</h2>
-						<p>
-							Review CM fields. Click Edit on a card to change labels, types, or options.
-						</p>
-					</div>
-					<span class="badge">{includedCm.length} included</span>
-				</header>
-				<div class="phase-body scroll">
-					<MelParamCardEditor
-						cards={cmCards}
-						onChange={(next) => (cmCards = next)}
-						title=""
-						subtitle=""
-						emptyLabel="No continuous monitoring questions in the catalog."
-					/>
-				</div>
-				<footer class="phase-foot">
-					<button type="button" class="btn" onclick={() => (step = 1)}>Back</button>
-					<button type="button" class="btn" disabled={saving} onclick={() => persist()}>
-						{saving ? 'Saving…' : 'Save'}
-					</button>
-					<button
-						type="button"
-						class="btn primary"
-						disabled={saving || !includedCm.length}
-						onclick={goFromCm}
-					>
-						{saving ? 'Saving…' : 'Continue to export'}
-					</button>
-				</footer>
-			</section>
-		{:else}
-			<section class="phase-panel">
-				<header class="phase-head">
-					<div>
-						<h2>Export MEL plan</h2>
-						<p>
-							Download a Word document with {selectedOutcomes.length} outcomes,
-							{includedOt.length}
-							{plotMode ? 'farm-plot' : 'asset'} allocation parameters, and {includedCm.length} CM parameters
-							for {projectName || 'this project'}.
-						</p>
-					</div>
-				</header>
-				<div class="phase-body">
-					<div class="summary-grid">
-						<div class="summary-card">
-							<p class="summary-kicker">Outcomes</p>
-							<ul>
-								{#each selectedOutcomes as o}
-									<li>{o.title}</li>
+			{#if loading}
+				<p class="text-sm text-brand-steel">Loading catalog…</p>
+			{:else}
+				<section class="phase-panel">
+					<header class="phase-head">
+						<div>
+							<h2>Select outcomes</h2>
+							<p>Choose outcomes for this MEL plan. Indicators for the selection are listed on the right.</p>
+						</div>
+					</header>
+					<div class="phase-body two-col">
+						<div>
+							<p class="section-label">Outcomes</p>
+							<ul class="outcome-list">
+								{#each intervention?.outcomes || [] as outcome (outcome.id)}
+									<li>
+										<label class="outcome-row">
+											<input
+												type="checkbox"
+												checked={selectedOutcomeIds.includes(outcome.id)}
+												onchange={() => toggleOutcome(outcome.id)}
+											/>
+											<span>
+												<span class="outcome-title">{outcome.title}</span>
+												{#if outcome.assumptions}
+													<span class="outcome-sub">{outcome.assumptions}</span>
+												{/if}
+											</span>
+										</label>
+									</li>
 								{/each}
 							</ul>
 						</div>
-						<div class="summary-card">
-							<p class="summary-kicker">Asset allocation</p>
-							<ul>
-								{#each includedOt as c}
-									<li>{c.label} <span>· {typeLabel(c.input_type)}</span></li>
+						<div>
+							<p class="section-label">Indicators for selection</p>
+							{#if !selectedOutcomes.length}
+								<p class="muted">Select outcomes to preview indicators.</p>
+							{:else}
+								{#each selectedOutcomes as outcome (outcome.id)}
+									<div class="ind-block">
+										<p class="ind-title">{outcome.title}</p>
+										{#if outcome.indicators?.length}
+											<ul class="ind-list">
+												{#each outcome.indicators as ind}
+													<li>{ind.title}</li>
+												{/each}
+											</ul>
+										{:else}
+											<p class="muted">No indicators listed</p>
+										{/if}
+									</div>
 								{/each}
-							</ul>
-						</div>
-						<div class="summary-card">
-							<p class="summary-kicker">Continuous monitoring</p>
-							<ul>
-								{#each includedCm as c}
-									<li>{c.label} <span>· {typeLabel(c.input_type)}</span></li>
-								{/each}
-							</ul>
+							{/if}
 						</div>
 					</div>
+					<footer class="phase-foot">
+						<button
+							type="button"
+							class="btn primary"
+							disabled={saving || !selectedOutcomeIds.length}
+							onclick={goToPlan}
+						>
+							{saving ? 'Saving…' : 'Continue to MEL plan'}
+						</button>
+					</footer>
+				</section>
+			{/if}
+		</main>
+	{:else}
+		<main class="plan-shell">
+			<header class="plan-top">
+				<div class="plan-top-left">
+					<button type="button" class="text-btn" onclick={() => (step = 0)}>← Edit outcomes</button>
+					<div class="min-w-0">
+						<p class="m-0 text-[10px] uppercase tracking-wide text-brand-steel">MEL Plan</p>
+						<h1 class="m-0 truncate font-headline text-lg font-semibold text-brand-navy">
+							{planName}
+						</h1>
+						<p class="m-0 truncate text-xs text-brand-steel">
+							{intervention?.name || interventionSlug}
+							{#if projectName}
+								· {projectName}
+							{/if}
+						</p>
+					</div>
 				</div>
-				<footer class="phase-foot">
-					<button type="button" class="btn" onclick={() => (step = 2)}>Back</button>
-					<button type="button" class="btn primary" disabled={exporting} onclick={handleExport}>
+				<div class="plan-top-actions">
+					<button type="button" class="btn primary" disabled={exporting || loadingPlan} onclick={handleExport}>
 						{exporting ? 'Exporting…' : 'Export .docx'}
 					</button>
-					<button type="button" class="btn" onclick={onBack}>Done</button>
-				</footer>
-			</section>
-		{/if}
-	</main>
+				</div>
+			</header>
+
+			{#if error}
+				<p class="plan-error">{error}</p>
+			{/if}
+
+			<div class="plan-scroll">
+				{#if loadingPlan}
+					<p class="muted pad">Building MEL plan…</p>
+				{:else if logframe}
+					<MelLogFrameView {logframe} {projectName} {planName} />
+				{:else}
+					<p class="muted pad">Could not load the MEL plan for this selection.</p>
+				{/if}
+			</div>
+		</main>
+	{/if}
 </div>
 
 <style>
-	.crumb-trail {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: 0.35rem 0.45rem;
-	}
-	.crumb {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.4rem;
-		border: none;
-		background: transparent;
-		cursor: pointer;
-		padding: 0.2rem 0.15rem;
-		color: var(--color-brand-steel, #56646f);
-	}
-	.crumb:disabled {
-		cursor: default;
-		opacity: 0.55;
-	}
-	.crumb.active {
-		color: var(--color-brand-navy, #1a2530);
-	}
-	.crumb.done {
-		color: #1565c0;
-	}
-	.crumb-num {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		width: 1.25rem;
-		height: 1.25rem;
-		border-radius: 999px;
-		font-size: 0.68rem;
-		font-weight: 700;
-		background: color-mix(in srgb, var(--color-brand-navy, #1a2530) 8%, white);
-		color: inherit;
-	}
-	.crumb.active .crumb-num {
-		background: #1b75e0;
-		color: white;
-	}
-	.crumb.done .crumb-num {
-		background: color-mix(in srgb, #1b75e0 18%, white);
-		color: #1565c0;
-	}
-	.crumb-label {
-		font-size: 0.78rem;
-		font-weight: 600;
-	}
-	.crumb-sep {
-		color: color-mix(in srgb, var(--color-brand-navy, #1a2530) 25%, transparent);
-		font-size: 0.75rem;
-	}
 	.phase-panel {
 		display: flex;
 		min-height: 0;
@@ -516,22 +334,10 @@
 		line-height: 1.4;
 		color: color-mix(in srgb, #00296b 55%, white);
 	}
-	.badge {
-		flex-shrink: 0;
-		border-radius: 999px;
-		background: color-mix(in srgb, #1b75e0 12%, white);
-		padding: 0.2rem 0.55rem;
-		font-size: 0.7rem;
-		font-weight: 600;
-		color: #1565c0;
-	}
 	.phase-body {
 		min-height: 0;
 		flex: 1;
 		padding: 0.85rem 1rem;
-	}
-	.phase-body.scroll {
-		overflow-y: auto;
 	}
 	.phase-body.two-col {
 		display: grid;
@@ -565,6 +371,16 @@
 	.btn:disabled {
 		opacity: 0.5;
 		cursor: not-allowed;
+	}
+	.text-btn {
+		border: none;
+		background: transparent;
+		padding: 0;
+		font-size: 0.8rem;
+		font-weight: 600;
+		color: #1b75e0;
+		cursor: pointer;
+		text-align: left;
 	}
 	.section-label {
 		margin: 0 0 0.55rem;
@@ -638,41 +454,60 @@
 		font-size: 0.8rem;
 		color: var(--color-brand-steel, #56646f);
 	}
-	.summary-grid {
-		display: grid;
-		grid-template-columns: repeat(3, minmax(0, 1fr));
-		gap: 0.75rem;
+	.muted.pad {
+		padding: 1.5rem 1.25rem;
 	}
-	.summary-card {
-		border-radius: 0.65rem;
-		border: 1px solid color-mix(in srgb, var(--color-brand-navy, #1a2530) 10%, transparent);
-		padding: 0.75rem;
+
+	.plan-shell {
+		display: flex;
+		min-height: 0;
+		flex: 1;
+		flex-direction: column;
+		width: 100%;
+		background: #f4f7fb;
 	}
-	.summary-kicker {
-		margin: 0 0 0.45rem;
-		font-size: 0.65rem;
-		font-weight: 600;
-		letter-spacing: 0.06em;
-		text-transform: uppercase;
-		color: var(--color-brand-steel, #56646f);
+	.plan-top {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: flex-start;
+		justify-content: space-between;
+		gap: 0.75rem 1rem;
+		flex-shrink: 0;
+		padding: 0.85rem 1.25rem;
+		border-bottom: 1px solid color-mix(in srgb, #00296b 12%, white);
+		background: white;
 	}
-	.summary-card ul {
+	.plan-top-left {
+		display: flex;
+		flex-direction: column;
+		gap: 0.45rem;
+		min-width: 0;
+	}
+	.plan-top-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+		align-items: center;
+	}
+	.plan-error {
 		margin: 0;
-		padding: 0;
-		list-style: none;
-		display: grid;
-		gap: 0.3rem;
-	}
-	.summary-card li {
+		flex-shrink: 0;
+		padding: 0.55rem 1.25rem;
 		font-size: 0.78rem;
-		color: var(--color-brand-navy, #1a2530);
+		color: #b91c1c;
+		background: #fef2f2;
+		border-bottom: 1px solid #fecaca;
 	}
-	.summary-card li span {
-		color: var(--color-brand-steel, #56646f);
+	.plan-scroll {
+		min-height: 0;
+		flex: 1;
+		overflow-y: auto;
+		padding: 1rem 1rem 2rem;
+		width: 100%;
 	}
+
 	@media (max-width: 860px) {
-		.phase-body.two-col,
-		.summary-grid {
+		.phase-body.two-col {
 			grid-template-columns: 1fr;
 		}
 	}

@@ -88,11 +88,15 @@ async function proxy(event) {
 
 	let res;
 	try {
-		res = await fetch(target, init);
+		// Hung Docker/API processes otherwise leave the browser on
+		// "Redirecting to Google…" forever (no response, no error).
+		res = await fetch(target, { ...init, signal: AbortSignal.timeout(12_000) });
 	} catch (err) {
-		const message =
-			`Backend unreachable at ${apiBase()}. ` +
-			`Is the dda-fork API running on the port in API_URL? (${String(err?.message || err)})`;
+		const timedOut = err?.name === 'TimeoutError' || err?.name === 'AbortError';
+		const message = timedOut
+			? `Backend timed out at ${apiBase()}. The API on :8080 may be hung — restart with: cd backend && docker compose restart api`
+			: `Backend unreachable at ${apiBase()}. ` +
+				`Is the API running on the port in API_URL? (${String(err?.message || err)})`;
 		return new Response(JSON.stringify({ detail: message }), {
 			status: 503,
 			headers: { 'content-type': 'application/json' }

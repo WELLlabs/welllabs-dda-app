@@ -42,8 +42,65 @@
 	let processKey = $state(null);
 	let showAssetInfo = $state(false);
 
-	/** Default side-slope ratio Z (horizontal : 1 vertical) when not surveyed. */
+	/** Default side-slope ratio Z when not surveyed (stats only; viz is static). */
 	const DEFAULT_Z = 1.5;
+
+	/**
+	 * Fixed schematic for plan + section. Numbers on labels come from live data;
+	 * geometry does not resize with dimensions or water level.
+	 */
+	const POND_VIZ = (() => {
+		const planW = 300;
+		const planH = 170;
+		const pond = { x: 42, y: 30, w: 168, h: 96 };
+		const plan = {
+			viewW: planW,
+			viewH: planH,
+			pond,
+			lenArrow: { x1: pond.x, x2: pond.x + pond.w, y: pond.y + pond.h + 16 },
+			brArrow: { x: pond.x + pond.w + 14, y1: pond.y, y2: pond.y + pond.h }
+		};
+
+		const secW = 300;
+		const secH = 145;
+		const groundY = 28;
+		const pondX = 68;
+		const pondW = 150;
+		const depthPx = 72;
+		const bottomY = groundY + depthPx;
+		/** Static representative fill (~45% of depth) — not tied to readings. */
+		const fillRatio = 0.45;
+		const waterTopY = bottomY - depthPx * fillRatio;
+		/** Staff gauge sits inside the basin, near the right wall. */
+		const gaugeX = pondX + pondW - 14;
+		const section = {
+			viewW: secW,
+			viewH: secH,
+			groundY,
+			bottomY,
+			pondX,
+			pondW,
+			depthPx,
+			waterTopY,
+			excavation: { x: pondX, y: groundY, w: pondW, h: depthPx },
+			water: { x: pondX, y: waterTopY, w: pondW, h: bottomY - waterTopY },
+			bunds: [
+				{ x: pondX - 18, y: groundY - 10, w: 18 },
+				{ x: pondX + pondW, y: groundY - 10, w: 18 }
+			],
+			htArrow: { x: pondX - 26, y1: groundY, y2: bottomY },
+			gauge: {
+				x: gaugeX,
+				y1: groundY,
+				y2: bottomY,
+				ticks: [0, 0.25, 0.5, 0.75, 1].map((t) => groundY + depthPx * t),
+				waterY: waterTopY
+			},
+			lenArrow: { x1: pondX, x2: pondX + pondW, y: Math.min(secH - 14, bottomY + 14) }
+		};
+
+		return { plan, section };
+	})();
 
 	/** @type {maplibregl.Map | null} */
 	let map = null;
@@ -129,6 +186,7 @@
 
 	const calcs = $derived(data?.calculations || {});
 
+	/** Live dimensions / WL for labels & stats only — diagram geometry is POND_VIZ. */
 	const pondDims = $derived.by(() => {
 		const length = Number(ot.fp_ot_length);
 		const breadth = Number(ot.fp_ot_breadth);
@@ -140,161 +198,14 @@
 		const D = Number.isFinite(depth) && depth > 0 ? depth : 3;
 		const latestWl = [...series].reverse().find((p) => p.water_level_m != null)?.water_level_m;
 		const h = latestWl != null ? Math.max(0, Math.min(D, Number(latestWl))) : 0;
-		const fillRatio = D > 0 ? h / D : 0;
 		return {
 			L,
 			B,
 			D,
 			Z,
 			h,
-			fillRatio,
-			topL: L + 2 * Z * D,
-			topB: B + 2 * Z * D,
-			waterL: L + 2 * Z * h,
-			waterB: B + 2 * Z * h,
 			latestWl: latestWl != null ? Number(latestWl) : null
 		};
-	});
-
-	/** Plan + section A-A geometry matching farm-pond frustum diagram. */
-	const pondGeom = $derived.by(() => {
-		const { L, B, D, Z, h, topL, topB, waterL, waterB } = pondDims;
-
-		// Smaller viewBox → higher CSS scale → bigger, legible text
-		const planW = 300;
-		const planH = 170;
-		const planPadX = 22;
-		const planPadTop = 12;
-		const planPadBottom = 36;
-		const planPadRight = 72;
-		const planScale =
-			Math.min(
-				(planW - planPadX - planPadRight) / topL,
-				(planH - planPadTop - planPadBottom) / topB
-			) * 0.88;
-		const outerW = topL * planScale;
-		const outerH = topB * planScale;
-		const innerW = L * planScale;
-		const innerH = B * planScale;
-		const ox = planPadX + (planW - planPadX - planPadRight - outerW) / 2;
-		const oy = planPadTop + (planH - planPadTop - planPadBottom - outerH) / 2;
-		const ix = ox + (outerW - innerW) / 2;
-		const iy = oy + (outerH - innerH) / 2;
-		const waterW = waterL * planScale;
-		const waterHt = waterB * planScale;
-		const wx = ox + (outerW - waterW) / 2;
-		const wy = oy + (outerH - waterHt) / 2;
-
-		const plan = {
-			viewW: planW,
-			viewH: planH,
-			outer: { x: ox, y: oy, w: outerW, h: outerH },
-			inner: { x: ix, y: iy, w: innerW, h: innerH },
-			water: { x: wx, y: wy, w: waterW, h: waterHt },
-			corners: {
-				lines: [
-					[
-						[ox, oy],
-						[ix, iy]
-					],
-					[
-						[ox + outerW, oy],
-						[ix + innerW, iy]
-					],
-					[
-						[ox + outerW, oy + outerH],
-						[ix + innerW, iy + innerH]
-					],
-					[
-						[ox, oy + outerH],
-						[ix, iy + innerH]
-					]
-				]
-			},
-			// Dimension arrow anchors
-			lenArrow: {
-				x1: ix,
-				x2: ix + innerW,
-				y: oy + outerH + 14
-			},
-			brArrow: {
-				x: ox + outerW + 12,
-				y1: iy,
-				y2: iy + innerH
-			}
-		};
-
-		const secW = 300;
-		const secH = 145;
-		const secPadX = 50;
-		const groundY = 26;
-		const depthPx = Math.max(40, Math.min(65, D * 18));
-		const usable = secW - secPadX * 2;
-		const secScale = (usable / topL) * 0.82;
-		const topPx = topL * secScale;
-		const botPx = L * secScale;
-		const left0 = (secW - topPx) / 2;
-		const botLeft = left0 + (topPx - botPx) / 2;
-		const bottomY = groundY + depthPx;
-
-		const waterTopPx = waterL * secScale;
-		const waterDepthPx = depthPx * (h / Math.max(D, 1e-6));
-		const waterTopY = bottomY - waterDepthPx;
-		const waterLeft = (secW - waterTopPx) / 2;
-
-		const bundW = 16;
-		const bundH = 9;
-
-		const section = {
-			viewW: secW,
-			viewH: secH,
-			groundY,
-			bottomY,
-			excavation: [
-				[left0, groundY],
-				[botLeft, bottomY],
-				[botLeft + botPx, bottomY],
-				[left0 + topPx, groundY]
-			],
-			water:
-				h > 0.01
-					? [
-							[waterLeft, waterTopY],
-							[botLeft, bottomY],
-							[botLeft + botPx, bottomY],
-							[waterLeft + waterTopPx, waterTopY]
-						]
-					: null,
-			waterTopY,
-			left0,
-			topPx,
-			botLeft,
-			botPx,
-			bunds: [
-				{ x: left0 - bundW, y: groundY - bundH, w: bundW, h: bundH },
-				{ x: left0 + topPx, y: groundY - bundH, w: bundW, h: bundH }
-			],
-			htArrow: {
-				x: Math.max(18, left0 - 22),
-				y1: groundY,
-				y2: bottomY
-			},
-			wlArrow:
-				h > 0.01
-					? {
-							x: Math.min(secW - 18, left0 + topPx + 18),
-							y1: waterTopY,
-							y2: bottomY
-						}
-					: null,
-			lenArrow: {
-				x1: botLeft,
-				x2: botLeft + botPx,
-				y: Math.min(secH - 20, bottomY + 15)
-			}
-		};
-
-		return { plan, section, L, B, D, Z, h };
 	});
 
 	const surfaceArea = $derived(
@@ -338,7 +249,6 @@
 		const fillings = calcs.number_of_fillings;
 		const vol = calcs.volumetric_storage_m3;
 		const volSimple = calcs.volume_m3;
-		const recharge = calcs.recharge_m;
 		const kpiTarget = Number(ot.fp_ot_what_is_the_volumetric_water_savings_kpi_decided_);
 		const kpiPctVal = calcs.volumetric_savings_kpi_progress_pct;
 		const cumRain = calcs.cumulative_rainfall_mm;
@@ -359,25 +269,6 @@
 					cards.volume_m3?.methodology ||
 					'Multiply pond length by breadth and height from the one-time survey. Result is the maximum storage volume in m³.',
 				raws: [`L ${fmt(L)} m`, `B ${fmt(B)} m`, `H ${fmt(H)} m`]
-			},
-			{
-				key: 'cum_wl',
-				label: 'Cum. WL increase',
-				value: cumWl,
-				unit: 'm',
-				icon: 'wl',
-				formula: 'Σ max(WLᵢ₊₁ − WLᵢ, 0)',
-				description:
-					cards.cum_wl_height_increase_m?.description ||
-					'Sums all positive water-level rises across consecutive staff-gauge readings.',
-				how:
-					cards.cum_wl_height_increase_m?.methodology ||
-					'Order CM staff-gauge readings by date. For each consecutive pair (WL1 then WL2) add (WL2 − WL1) when the change is positive; ignore declines. The sum is the cumulative rise in water-column height (m).',
-				raws: [
-					`${wlStats.n} WL readings`,
-					`${wlStats.rises} rises`,
-					`sum of rises ${fmt(wlStats.riseSum)} m`
-				]
 			},
 			{
 				key: 'fillings',
@@ -415,25 +306,6 @@
 					`L×B ${fmt(L)}×${fmt(B)} = ${fmt(area)} m²`,
 					`Height ${fmt(H)} m`,
 					`Fillings ${fmt(fillings)}`
-				]
-			},
-			{
-				key: 'recharge',
-				label: 'Recharge',
-				value: recharge,
-				unit: 'm',
-				icon: 'recharge',
-				formula: 'Σ (decline − E) where decline > E',
-				description:
-					cards.recharge_m?.description ||
-					'Estimates recharge from successive water-level declines after accounting for evaporation.',
-				how:
-					cards.recharge_m?.methodology ||
-					'From consecutive staff-gauge readings, sum declines that exceed evaporation E, then subtract E from each qualifying decline. Evaporation E is an assumed daily input.',
-				raws: [
-					`${wlStats.declines} declines > E`,
-					`E = ${fmt(wlStats.E, 3)} m/day`,
-					`${wlStats.n} WL readings`
 				]
 			},
 			{
@@ -564,17 +436,19 @@
 				style: {
 					version: 8,
 					sources: {
-						osm: {
+						satellite: {
 							type: 'raster',
-							tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+							tiles: [
+								'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+							],
 							tileSize: 256,
-							attribution: '© OpenStreetMap'
+							attribution: 'Esri World Imagery'
 						}
 					},
-					layers: [{ id: 'osm', type: 'raster', source: 'osm' }]
+					layers: [{ id: 'satellite', type: 'raster', source: 'satellite' }]
 				},
 				center: [lon, lat],
-				zoom: 13,
+				zoom: 15,
 				interactive: true
 			});
 			map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
@@ -643,11 +517,6 @@
 			value: fmtOtValue(value)
 		}));
 	});
-
-	/** @param {number[][]} pts */
-	function polyPoints(pts) {
-		return pts.map(([x, y]) => `${x},${y}`).join(' ');
-	}
 
 	function ensureMarker(lat, lon) {
 		if (!map) return;
@@ -1154,7 +1023,7 @@
 									/></svg>
 								</div>
 								<div class="loc-text">
-									<p class="info-kicker">Location</p>
+									<p class="info-kicker">Asset information</p>
 									<h1 class="info-title">{data.asset?.label || 'Asset'}</h1>
 									{#if location.coordsLabel || location.placeLabel}
 										<p class="info-sub">
@@ -1256,7 +1125,7 @@
 								<svg class="panel-ico" viewBox="0 0 16 16" aria-hidden="true"
 									><path fill="currentColor" d="M2 3h12v2H2V3zm0 4h12v2H2V7zm0 4h8v2H2v-2z"
 								/></svg>
-								<h2 class="panel-title">Summary statistics</h2>
+								<h2 class="panel-title">Volumetric water benefit accounting</h2>
 							</div>
 							<ul class="pond-metrics">
 								{#each pondLabels as item (item.key)}
@@ -1321,73 +1190,62 @@
 								<h2 class="panel-title">Pond dimensions</h2>
 							</div>
 							<div class="dims-legend">
-								<span class="dims-leg"><span class="dims-swatch dims-swatch-top"></span> Top opening</span>
-								<span class="dims-leg"><span class="dims-swatch dims-swatch-bottom"></span> Bottom / surface area</span>
-								<span class="dims-leg"><span class="dims-swatch dims-swatch-water"></span> Current water</span>
+								<span class="dims-leg"><span class="dims-swatch dims-swatch-bottom"></span> Pond basin</span>
+								<span class="dims-leg"><span class="dims-swatch dims-swatch-water"></span> Water (schematic)</span>
+								<span class="dims-leg"><span class="dims-swatch dims-swatch-gauge"></span> Staff gauge</span>
 							</div>
 						</div>
 						<div class="pond-diagrams-row">
-							<!-- Plan view -->
+							<!-- Plan view (static schematic) -->
 							<div class="pond-diagram-box">
-								<svg class="pond-svg" viewBox="0 0 {pondGeom.plan.viewW} {pondGeom.plan.viewH}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Plan view">
+								<svg class="pond-svg" viewBox="0 0 {POND_VIZ.plan.viewW} {POND_VIZ.plan.viewH}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Plan view">
 									<defs><marker id="dimArrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#334155"/></marker></defs>
-									<!-- Light blue: top opening at ground level -->
-									<rect x={pondGeom.plan.outer.x} y={pondGeom.plan.outer.y} width={pondGeom.plan.outer.w} height={pondGeom.plan.outer.h} fill="#bfdbfe" stroke="#1e3a8a" stroke-width="1.8"/>
-									<!-- Current water surface -->
-									{#if pondDims.h > 0.01}
-										<rect x={pondGeom.plan.water.x} y={pondGeom.plan.water.y} width={pondGeom.plan.water.w} height={pondGeom.plan.water.h} fill="#1d4ed8" fill-opacity="0.35" stroke="#1e40af" stroke-width="1.2"/>
-									{/if}
-									<!-- Medium blue: pond bottom (L × B) -->
-									<rect x={pondGeom.plan.inner.x} y={pondGeom.plan.inner.y} width={pondGeom.plan.inner.w} height={pondGeom.plan.inner.h} fill="#93c5fd" stroke="#1e3a8a" stroke-width="1.5"/>
-									{#each pondGeom.plan.corners.lines as line}
-										<line x1={line[0][0]} y1={line[0][1]} x2={line[1][0]} y2={line[1][1]} stroke="#1e3a8a" stroke-width="1.2"/>
-									{/each}
-									<text x={pondGeom.plan.outer.x + 4} y={pondGeom.plan.outer.y + 11} fill="#1e3a8a" font-size="8" font-weight="600">Top</text>
-									<text x={pondGeom.plan.inner.x + pondGeom.plan.inner.w/2} y={pondGeom.plan.inner.y + pondGeom.plan.inner.h/2 - 2} text-anchor="middle" fill="#0f2744" font-size="11" font-weight="700">{fmt(surfaceArea)} m²</text>
-									<text x={pondGeom.plan.inner.x + pondGeom.plan.inner.w/2} y={pondGeom.plan.inner.y + pondGeom.plan.inner.h/2 + 10} text-anchor="middle" fill="#1e3a8a" font-size="8" font-weight="600">bottom</text>
-									{#if pondDims.h > 0.01}
-										<text x={pondGeom.plan.water.x + pondGeom.plan.water.w/2} y={pondGeom.plan.water.y + 10} text-anchor="middle" fill="#1e40af" font-size="8" font-weight="600">WL {fmt(pondDims.h)} m</text>
-									{/if}
-									<line x1={pondGeom.plan.lenArrow.x1} y1={pondGeom.plan.lenArrow.y} x2={pondGeom.plan.lenArrow.x2} y2={pondGeom.plan.lenArrow.y} stroke="#334155" stroke-width="1" marker-start="url(#dimArrow)" marker-end="url(#dimArrow)"/>
-									<text x={(pondGeom.plan.lenArrow.x1+pondGeom.plan.lenArrow.x2)/2} y={pondGeom.plan.lenArrow.y+11} text-anchor="middle" fill="#1a2530" font-size="10" font-weight="600">Length {fmt(pondDims.L)} m</text>
-									<line x1={pondGeom.plan.brArrow.x} y1={pondGeom.plan.brArrow.y1} x2={pondGeom.plan.brArrow.x} y2={pondGeom.plan.brArrow.y2} stroke="#334155" stroke-width="1" marker-start="url(#dimArrow)" marker-end="url(#dimArrow)"/>
-									<text x={pondGeom.plan.brArrow.x+10} y={(pondGeom.plan.brArrow.y1+pondGeom.plan.brArrow.y2)/2+4} text-anchor="start" fill="#1a2530" font-size="10" font-weight="600">Breadth {fmt(pondDims.B)} m</text>
+									<rect x={POND_VIZ.plan.pond.x} y={POND_VIZ.plan.pond.y} width={POND_VIZ.plan.pond.w} height={POND_VIZ.plan.pond.h} fill="#93c5fd" stroke="#1e3a8a" stroke-width="1.8"/>
+									<rect x={POND_VIZ.plan.pond.x + 6} y={POND_VIZ.plan.pond.y + 6} width={POND_VIZ.plan.pond.w - 12} height={POND_VIZ.plan.pond.h - 12} fill="#1d4ed8" fill-opacity="0.35" stroke="#1e40af" stroke-width="1.1"/>
+									<text x={POND_VIZ.plan.pond.x + POND_VIZ.plan.pond.w/2} y={POND_VIZ.plan.pond.y + POND_VIZ.plan.pond.h/2 + 3} text-anchor="middle" fill="#0f2744" font-size="11" font-weight="700">Surface area</text>
+									<text x={POND_VIZ.plan.pond.x + POND_VIZ.plan.pond.w/2} y={POND_VIZ.plan.pond.y + 14} text-anchor="middle" fill="#1e40af" font-size="8" font-weight="600">Water level</text>
+									<line x1={POND_VIZ.plan.lenArrow.x1} y1={POND_VIZ.plan.lenArrow.y} x2={POND_VIZ.plan.lenArrow.x2} y2={POND_VIZ.plan.lenArrow.y} stroke="#334155" stroke-width="1" marker-start="url(#dimArrow)" marker-end="url(#dimArrow)"/>
+									<text x={(POND_VIZ.plan.lenArrow.x1+POND_VIZ.plan.lenArrow.x2)/2} y={POND_VIZ.plan.lenArrow.y+12} text-anchor="middle" fill="#1a2530" font-size="10" font-weight="600">Length</text>
+									<line x1={POND_VIZ.plan.brArrow.x} y1={POND_VIZ.plan.brArrow.y1} x2={POND_VIZ.plan.brArrow.x} y2={POND_VIZ.plan.brArrow.y2} stroke="#334155" stroke-width="1" marker-start="url(#dimArrow)" marker-end="url(#dimArrow)"/>
+									<text x={POND_VIZ.plan.brArrow.x+10} y={(POND_VIZ.plan.brArrow.y1+POND_VIZ.plan.brArrow.y2)/2+4} text-anchor="start" fill="#1a2530" font-size="10" font-weight="600">Breadth</text>
 								</svg>
 							</div>
-							<!-- Section view -->
+							<!-- Section view: rectangular basin + static staff gauge -->
 							<div class="pond-diagram-box">
-								<svg class="pond-svg" viewBox="0 0 {pondGeom.section.viewW} {pondGeom.section.viewH}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Section view">
+								<svg class="pond-svg" viewBox="0 0 {POND_VIZ.section.viewW} {POND_VIZ.section.viewH}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Section view">
 									<defs>
 										<linearGradient id="pondEmpty" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#dbeafe"/><stop offset="100%" stop-color="#93c5fd"/></linearGradient>
 										<marker id="dimArrowSec" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#334155"/></marker>
 									</defs>
-									<line x1="10" y1={pondGeom.section.groundY} x2={pondGeom.section.viewW-10} y2={pondGeom.section.groundY} stroke="#94a3b8" stroke-width="1.2"/>
+									<line x1="10" y1={POND_VIZ.section.groundY} x2={POND_VIZ.section.viewW-10} y2={POND_VIZ.section.groundY} stroke="#94a3b8" stroke-width="1.2"/>
 									{#each Array.from({length:9},(_,i)=>20+i*30) as gx}
-										<line x1={gx} y1={pondGeom.section.groundY} x2={gx-7} y2={pondGeom.section.groundY+9} stroke="#cbd5e1" stroke-width="1"/>
+										<line x1={gx} y1={POND_VIZ.section.groundY} x2={gx-7} y2={POND_VIZ.section.groundY+9} stroke="#cbd5e1" stroke-width="1"/>
 									{/each}
-									{#each pondGeom.section.bunds as bund}
-										<polygon points={`${bund.x},${pondGeom.section.groundY} ${bund.x+bund.w*0.25},${bund.y} ${bund.x+bund.w*0.75},${bund.y} ${bund.x+bund.w},${pondGeom.section.groundY}`} fill="#d6d3d1" stroke="#78716c" stroke-width="1"/>
+									{#each POND_VIZ.section.bunds as bund}
+										<polygon points={`${bund.x},${POND_VIZ.section.groundY} ${bund.x+bund.w*0.25},${bund.y} ${bund.x+bund.w*0.75},${bund.y} ${bund.x+bund.w},${POND_VIZ.section.groundY}`} fill="#d6d3d1" stroke="#78716c" stroke-width="1"/>
 									{/each}
-									<!-- Light blue: empty excavation to full height -->
-									<polygon points={polyPoints(pondGeom.section.excavation)} fill="url(#pondEmpty)" stroke="#1e3a8a" stroke-width="1.6"/>
-									<!-- Dark blue: current water -->
-									{#if pondGeom.section.water}
-										<polygon points={polyPoints(pondGeom.section.water)} fill="#1d4ed8" opacity="0.7" stroke="#1e3a8a" stroke-width="1"/>
-										<line x1={pondGeom.section.water[0][0]} y1={pondGeom.section.waterTopY} x2={pondGeom.section.water[3][0]} y2={pondGeom.section.waterTopY} stroke="#1e40af" stroke-width="1.4" stroke-dasharray="3 2"/>
-									{/if}
-									<!-- Full pond height -->
-									<line x1={pondGeom.section.htArrow.x} y1={pondGeom.section.htArrow.y1} x2={pondGeom.section.htArrow.x} y2={pondGeom.section.htArrow.y2} stroke="#334155" stroke-width="1" marker-start="url(#dimArrowSec)" marker-end="url(#dimArrowSec)"/>
-									<text x={pondGeom.section.htArrow.x-10} y={(pondGeom.section.htArrow.y1+pondGeom.section.htArrow.y2)/2} text-anchor="middle" fill="#1a2530" font-size="9" font-weight="600" transform="rotate(-90 {pondGeom.section.htArrow.x-10} {(pondGeom.section.htArrow.y1+pondGeom.section.htArrow.y2)/2})">Height {fmt(pondDims.D)} m</text>
-									<!-- Current water level height -->
-									{#if pondGeom.section.wlArrow}
-										<line x1={pondGeom.section.wlArrow.x} y1={pondGeom.section.wlArrow.y1} x2={pondGeom.section.wlArrow.x} y2={pondGeom.section.wlArrow.y2} stroke="#1d4ed8" stroke-width="1.2" marker-start="url(#dimArrowSec)" marker-end="url(#dimArrowSec)"/>
-										<text x={pondGeom.section.wlArrow.x+11} y={(pondGeom.section.wlArrow.y1+pondGeom.section.wlArrow.y2)/2} text-anchor="middle" fill="#1d4ed8" font-size="9" font-weight="700" transform="rotate(90 {pondGeom.section.wlArrow.x+11} {(pondGeom.section.wlArrow.y1+pondGeom.section.wlArrow.y2)/2})">WL {fmt(pondDims.h)} m</text>
-									{/if}
-									<line x1={pondGeom.section.lenArrow.x1} y1={pondGeom.section.lenArrow.y} x2={pondGeom.section.lenArrow.x2} y2={pondGeom.section.lenArrow.y} stroke="#334155" stroke-width="1" marker-start="url(#dimArrowSec)" marker-end="url(#dimArrowSec)"/>
-									<text x={(pondGeom.section.lenArrow.x1+pondGeom.section.lenArrow.x2)/2} y={pondGeom.section.lenArrow.y+11} text-anchor="middle" fill="#1a2530" font-size="10" font-weight="600">Length {fmt(pondDims.L)} m</text>
+									<!-- Rectangular excavation -->
+									<rect x={POND_VIZ.section.excavation.x} y={POND_VIZ.section.excavation.y} width={POND_VIZ.section.excavation.w} height={POND_VIZ.section.excavation.h} fill="url(#pondEmpty)" stroke="#1e3a8a" stroke-width="1.6"/>
+									<!-- Static representative water -->
+									<rect x={POND_VIZ.section.water.x} y={POND_VIZ.section.water.y} width={POND_VIZ.section.water.w} height={POND_VIZ.section.water.h} fill="#1d4ed8" opacity="0.72" stroke="#1e3a8a" stroke-width="1"/>
+									<line x1={POND_VIZ.section.water.x} y1={POND_VIZ.section.waterTopY} x2={POND_VIZ.section.water.x + POND_VIZ.section.water.w} y2={POND_VIZ.section.waterTopY} stroke="#1e40af" stroke-width="1.4" stroke-dasharray="3 2"/>
+									<!-- Height dimension -->
+									<line x1={POND_VIZ.section.htArrow.x} y1={POND_VIZ.section.htArrow.y1} x2={POND_VIZ.section.htArrow.x} y2={POND_VIZ.section.htArrow.y2} stroke="#334155" stroke-width="1" marker-start="url(#dimArrowSec)" marker-end="url(#dimArrowSec)"/>
+									<text x={POND_VIZ.section.htArrow.x-10} y={(POND_VIZ.section.htArrow.y1+POND_VIZ.section.htArrow.y2)/2} text-anchor="middle" fill="#1a2530" font-size="9" font-weight="600" transform="rotate(-90 {POND_VIZ.section.htArrow.x-10} {(POND_VIZ.section.htArrow.y1+POND_VIZ.section.htArrow.y2)/2})">Height</text>
+									<!-- Staff gauge inside pond (static water mark) -->
+									<rect x={POND_VIZ.section.gauge.x - 3} y={POND_VIZ.section.gauge.y1} width="6" height={POND_VIZ.section.depthPx} fill="#f8fafc" stroke="#475569" stroke-width="1.2"/>
+									{#each POND_VIZ.section.gauge.ticks as ty, i}
+										<line x1={POND_VIZ.section.gauge.x - (i % 2 === 0 ? 8 : 5)} y1={ty} x2={POND_VIZ.section.gauge.x + 3} y2={ty} stroke="#334155" stroke-width="1"/>
+									{/each}
+									<polygon points={`${POND_VIZ.section.gauge.x - 10},${POND_VIZ.section.gauge.waterY} ${POND_VIZ.section.gauge.x - 3},${POND_VIZ.section.gauge.waterY - 4} ${POND_VIZ.section.gauge.x - 3},${POND_VIZ.section.gauge.waterY + 4}`} fill="#1d4ed8"/>
+									<text x={POND_VIZ.section.gauge.x - 14} y={POND_VIZ.section.gauge.waterY - 6} text-anchor="end" fill="#1d4ed8" font-size="8" font-weight="700">Water level</text>
+									<text x={POND_VIZ.section.gauge.x} y={POND_VIZ.section.gauge.y1 + 10} text-anchor="middle" fill="#475569" font-size="7" font-weight="600">Gauge</text>
+									<line x1={POND_VIZ.section.lenArrow.x1} y1={POND_VIZ.section.lenArrow.y} x2={POND_VIZ.section.lenArrow.x2} y2={POND_VIZ.section.lenArrow.y} stroke="#334155" stroke-width="1" marker-start="url(#dimArrowSec)" marker-end="url(#dimArrowSec)"/>
+									<text x={(POND_VIZ.section.lenArrow.x1+POND_VIZ.section.lenArrow.x2)/2} y={POND_VIZ.section.lenArrow.y+11} text-anchor="middle" fill="#1a2530" font-size="10" font-weight="600">Length</text>
 								</svg>
 							</div>
 						</div>
+						<p class="viz-disclaimer">Visualization for representation purposes only.</p>
 					</div>
 
 					<section class="dash-card chart-card">
@@ -1963,6 +1821,17 @@
 	.dims-swatch-water {
 		background: #1d4ed8;
 		border-color: #1e40af;
+	}
+	.dims-swatch-gauge {
+		background: #f8fafc;
+		border-color: #475569;
+	}
+	.viz-disclaimer {
+		margin: 0.35rem 0 0;
+		font-size: 0.65rem;
+		font-style: italic;
+		color: #6b7885;
+		line-height: 1.3;
 	}
 	.pond-diagrams-row {
 		display: flex;

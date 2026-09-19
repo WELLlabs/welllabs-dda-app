@@ -1,0 +1,724 @@
+{
+  "shared_intro": [
+    "Here’s your MEL Plan presented in the form of a log frame, ready for the field setup for data collection.",
+    "A logical framework (log frame) provides the conceptual basis for the Monitoring, Evaluation, and Learning (MEL) Framework. It builds on the goal, outcome, and output pathway established when creating the Theory of Change in the Solution Design Framework.",
+    "The log frame adds two components at the MEL stage – assumptions and indicators – to unpack each outcome into a measurable form. Assumptions state the conditions that must hold for each step to lead to the next, while indicators specify how each outcome will be measured. Since an outcome by itself is a construct and not directly measurable, it must be unpacked into indicators that are specific, measurable, achievable, relevant, and time-bound (SMART)."
+  ],
+  "shared_outro": [
+    "Frequency",
+    "This frequency of monitoring varies based on the type of outcome being tracked. The MEL Plan suggests outcomes of two types - Biophysical which most of the times require continuous monitoring, ranging from daily to monthly, while the second, socio-economic outcomes are captured through periodic surveys. These are administered once each at the beginning (baseline survey), middle (midline survey), and conclusion (endline survey) of the project. The two are strongest in combination as they address different questions.",
+    "What do you do with the MEL Plan?",
+    "Sampling",
+    "This sampling exercise is to be done manually where a 10% sample from each zone can be taken. Zones can be identified using the following recommendations:",
+    "For watershed management programmes, the watershed serves as the basic spatial unit for sampling.",
+    "Within each watershed, distinct hydrological zones should be identified, whether canal command and non-canal command, or upstream (ridge), midstream and downstream (valley). Within the canal command zone, a further division into head- and tail-end may be made.",
+    "Zones that are distinct in socio-economic terms should also be identified so that stratification remains cognisant of social heterogeneity. This is important for ensuring representation as marginalised communities are often located in the resource-poor parts of a landscape such as ridges.",
+    "Field Setup for Data Collections",
+    "The MEL Plan provides a blueprint to execute the impact assessment in the field. There are broadly four steps involved here:",
+    "Select control assets: Once we know the geotags of selected assets, selection of control assets follows depending on the type of intervention. This information on whether a control is needed or not is presented as a part of the MEL Plan. Control provides a baseline for measuring change in comparison to the treatment asset. This step happens simultaneously with the next step.",
+    "Asset allocation: This step is about capturing contextual information on the assets from the field. This can include queries like area under cultivation, crops grown, sources of irrigation, area under irrigation, etc. These queries barely change with time and are asked before monitoring begins to support analytical understanding for MEL. For example, if the duration of irrigation applied in a plot is half of another plot growing the same crop, it was because the area under irrigation differed. It also supports the step 1 of selecting controls, as we want to find similar controls where the only thing that is different is that they don’t have the intervention. The MEL Deployment helps with asset allocation.",
+    "Deploy Instruments: Once the assets are identified, wherever needed, the requisite instrumentation for capturing continuous monitoring data needs to be deployed.",
+    "Train community resource persons (CRPs): The CRPs should be trained by the implementing NGO on the data collection process, including reading data using the instrumentation, inform them on the frequency of monitoring, while developing a thorough understanding of the intention behind each query and preventing any introduction of biases.",
+    "Once instrumentation is deployed and CRPs are trained, monitoring begins at the frequency defined for each indicator. CRPs record data using the MEL Dashboard’s Open Data Kit (ODK) forms at each asset with their mobile phones, and the data uploads automatically to the tool.",
+    "You can use the MEL deployment workflow for data collection."
+  ],
+  "interventions": {
+    "farm-pond": {
+      "slug": "farm-pond",
+      "name": "Farm Ponds",
+      "log_frame_title": "Log Frame - Farm ponds",
+      "intro": [
+        "Here’s your MEL Plan presented in the form of a log frame, ready for the field setup for data collection.",
+        "A logical framework (log frame) provides the conceptual basis for the Monitoring, Evaluation, and Learning (MEL) Framework. It builds on the goal, outcome, and output pathway established when creating the Theory of Change in the Solution Design Framework.",
+        "The log frame adds two components at the MEL stage – assumptions and indicators – to unpack each outcome into a measurable form. Assumptions state the conditions that must hold for each step to lead to the next, while indicators specify how each outcome will be measured. Since an outcome by itself is a construct and not directly measurable, it must be unpacked into indicators that are specific, measurable, achievable, relevant, and time-bound (SMART)."
+      ],
+      "note": "Please note: By default, the baseline here is assumed to be zero, which means there was no farm pond before the intervention.",
+      "methodology_heading": "Data and Methodology for Indicators",
+      "outro": [
+        "Frequency",
+        "This frequency of monitoring varies based on the type of outcome being tracked. The MEL Plan suggests outcomes of two types - Biophysical which most of the times require continuous monitoring, ranging from daily to monthly, while the second, socio-economic outcomes are captured through periodic surveys. These are administered once each at the beginning (baseline survey), middle (midline survey), and conclusion (endline survey) of the project. The two are strongest in combination as they address different questions.",
+        "What do you do with the MEL Plan?",
+        "Sampling",
+        "This sampling exercise is to be done manually where a 10% sample from each zone can be taken. Zones can be identified using the following recommendations:",
+        "For watershed management programmes, the watershed serves as the basic spatial unit for sampling.",
+        "Within each watershed, distinct hydrological zones should be identified, whether canal command and non-canal command, or upstream (ridge), midstream and downstream (valley). Within the canal command zone, a further division into head- and tail-end may be made.",
+        "Zones that are distinct in socio-economic terms should also be identified so that stratification remains cognisant of social heterogeneity. This is important for ensuring representation as marginalised communities are often located in the resource-poor parts of a landscape such as ridges.",
+        "Field Setup for Data Collections",
+        "The MEL Plan provides a blueprint to execute the impact assessment in the field. There are broadly four steps involved here:",
+        "Select control assets: Once we know the geotags of selected assets, selection of control assets follows depending on the type of intervention. This information on whether a control is needed or not is presented as a part of the MEL Plan. Control provides a baseline for measuring change in comparison to the treatment asset. This step happens simultaneously with the next step.",
+        "Asset allocation: This step is about capturing contextual information on the assets from the field. This can include queries like area under cultivation, crops grown, sources of irrigation, area under irrigation, etc. These queries barely change with time and are asked before monitoring begins to support analytical understanding for MEL. For example, if the duration of irrigation applied in a plot is half of another plot growing the same crop, it was because the area under irrigation differed. It also supports the step 1 of selecting controls, as we want to find similar controls where the only thing that is different is that they don’t have the intervention. The MEL Deployment helps with asset allocation.",
+        "Deploy Instruments: Once the assets are identified, wherever needed, the requisite instrumentation for capturing continuous monitoring data needs to be deployed.",
+        "Train community resource persons (CRPs): The CRPs should be trained by the implementing NGO on the data collection process, including reading data using the instrumentation, inform them on the frequency of monitoring, while developing a thorough understanding of the intention behind each query and preventing any introduction of biases.",
+        "Once instrumentation is deployed and CRPs are trained, monitoring begins at the frequency defined for each indicator. CRPs record data using the MEL Dashboard’s Open Data Kit (ODK) forms at each asset with their mobile phones, and the data uploads automatically to the tool.",
+        "You can use the MEL deployment workflow for data collection."
+      ],
+      "outcomes": [
+        {
+          "kind": "goal",
+          "label": "GOAL",
+          "outcome_type": null,
+          "title": "[enter the long-term goal you have set for your program based the Theory of Change]",
+          "indicators": [],
+          "assumptions": "",
+          "cta": true
+        },
+        {
+          "kind": "outcome",
+          "label": "Outcome 1",
+          "outcome_type": null,
+          "title": "Rainfall runoff harvested during monsoon \n(availability)",
+          "indicators": [
+            "Volume of water in the structure in monsoon (m3)",
+            "Number of fillings"
+          ],
+          "assumptions": "1. Farm Pond harvests surface runoff as a primary source, however, there might be seasonality in how the FP is filled for the rest of the year. \n2. It is a normal rainfall year and \n3. Catchment upstream of the farm pond will generate adequate runoff."
+        },
+        {
+          "kind": "outcome",
+          "label": "Outcome 2",
+          "outcome_type": null,
+          "title": "Post-monsoon increased water availability",
+          "indicators": [
+            "Volume of water retained in the structure during post-monsoon (m3)",
+            "Groundwater level change in the zone of influence",
+            "Changed cropping acreage (rabi, zaid)"
+          ],
+          "assumptions": "1. It is a normal rainfall year and \n2. Catchment upstream of the farm pond will generate adequate runoff."
+        },
+        {
+          "kind": "outcome",
+          "label": "Outcome 3",
+          "outcome_type": null,
+          "title": "Groundwater pumped in the structure",
+          "indicators": [
+            "Volumetric water pumped (m3)"
+          ],
+          "assumptions": "Farm pond has seasonality in the source of water used to fill it, where groundwater is pumped during the dry season."
+        },
+        {
+          "kind": "outcome",
+          "label": "Outcome 4",
+          "outcome_type": null,
+          "title": "Improved crop water productivity (Rs/m3)",
+          "indicators": [
+            "Revenue/Profit (in Rs.) per acre (rabi, zaid, horticulture crops)",
+            "Change in crop mix",
+            "Crop yield (kharif, rabi, zaid, horticulture crops)",
+            "Irrigation water applied (m3)"
+          ],
+          "assumptions": "1. Water consumption decreases or remains the same \n\n2. Pre-conditions for when CWP gain is counted:\na. ↑ market price of crop < ↑ in crop yield\nb. ↑ in crop yield (only)\nc. ↓ in input cost (only)\nd. ↓ in input cost > ↑ market price of crop\ne. Increased market price due to adoption of higher value crop\n\n3. It is a normal year, no input-supply disruptions/geopolitical shocks in the economy (e.g., Covid, fertilizer unavailability), and the market prices are stable"
+        },
+        {
+          "kind": "outcome",
+          "label": "Outcome 5",
+          "outcome_type": null,
+          "title": "Livelihood diversification through on-farm activities (resilience)",
+          "indicators": [
+            "Livelihoods adopted - livestock/poultry/fisheries/aquatic cultivation",
+            "Income derived from the additional livelihoods  -  livestock/poultry/fisheries/aquatic cultivation"
+          ],
+          "assumptions": "No livelihoods other than agriculture were practiced before the intervention"
+        },
+        {
+          "kind": "outcome",
+          "label": "Outcome 6",
+          "outcome_type": null,
+          "title": "Additional crop production due to cultivation on farm pond bunds",
+          "indicators": [
+            "Revenue/Profit (in Rs.) from plantation on farm pond bunds (season of cultivation on bunds)"
+          ],
+          "assumptions": "It is a normal year, no input-supply disruptions/geopolitical shocks in the economy (e.g., Covid, fertilizer unavailability), and the market prices are stable"
+        },
+        {
+          "kind": "outcome",
+          "label": "Outcome 7",
+          "outcome_type": null,
+          "title": "Protective irrigation access (resilience)",
+          "indicators": [
+            "Crop yield",
+            "Irrigation water applied from surface water (farm pond)",
+            "Irrigation water applied from groundwater",
+            "Number of months the irrigation water sources availability during the monsoon."
+          ],
+          "assumptions": "It may or may not be a normal rainfall year, but the rainfall distribution is erratic."
+        },
+        {
+          "kind": "outcome",
+          "label": "Outcome 8",
+          "outcome_type": null,
+          "title": "Reduced migration",
+          "indicators": [
+            "No. of household member(s) migrating from the village for work",
+            "No. of months household member(s) migrated from the village for work"
+          ],
+          "assumptions": "Improved water availability has improved opportunities and economic returns for the beneficiaries"
+        },
+        {
+          "kind": "output",
+          "label": "Output 1",
+          "outcome_type": null,
+          "title": "Number of farm ponds built.",
+          "indicators": [],
+          "assumptions": "",
+          "cta": false
+        },
+        {
+          "kind": "output",
+          "label": "Output 2",
+          "outcome_type": null,
+          "title": "Volumetric potential created (m3)",
+          "indicators": [
+            "Volume of the farm pond structure"
+          ],
+          "assumptions": "",
+          "cta": false
+        },
+        {
+          "kind": "output",
+          "label": "OUTPUT",
+          "outcome_type": null,
+          "title": "[enter the desired outputs for your program here]",
+          "indicators": [],
+          "assumptions": "",
+          "cta": true
+        }
+      ],
+      "methodology": [
+        {
+          "indicator": "Volume of water in the structure in monsoon (m3)",
+          "monitoring_type": "CM",
+          "data": "Water level (m);\nNumber of fillings;\nRainfall (local measurement) (mm)",
+          "method": "Water level recordings using Staff gauge or Pressure Transducers/Automatic Water Level Recorder\n\nRain gauge (manual or automatic)",
+          "frequency": "Daily",
+          "playbooks": "Staff Gauge | WELL LABS \n\nPressure Transducers_Playbook.pdf"
+        },
+        {
+          "indicator": "Number of fillings",
+          "monitoring_type": "CM",
+          "data": "Water level (m)",
+          "method": "",
+          "frequency": "",
+          "playbooks": "Staff Gauge | WELL LABS"
+        },
+        {
+          "indicator": "Volume of water retained in the structure during post-monsoon (m3)",
+          "monitoring_type": "CM",
+          "data": "Water level (m)",
+          "method": "Water level recordings using Staff gauge or Automatic Water Level Recorder",
+          "frequency": "Weekly or how quickly water level changes in the structure",
+          "playbooks": "Staff Gauge | WELL LABS \n\nPressure Transducers_Playbook.pdf"
+        },
+        {
+          "indicator": "Groundwater level change in the zone of influence (m bgl)",
+          "monitoring_type": "CM",
+          "data": "Groundwater level measured through wells",
+          "method": "Manual water level sounder",
+          "frequency": "Monthly/Seasonal",
+          "playbooks": ""
+        },
+        {
+          "indicator": "Volumetric water pumped (m3)",
+          "monitoring_type": "CM",
+          "data": "Rate of pipe flow (liters/sec);\nNumber of pumping hours OR\nFlow meter readings (unit or m3)",
+          "method": "Flow meter\nFarmer diary",
+          "frequency": "Every filling of the farm pond",
+          "playbooks": "Flow Meters_Playbook.pdf"
+        },
+        {
+          "indicator": "Revenue/Profit (in Rs.) per acre (rabi, zaid, horticulture crops)",
+          "monitoring_type": "BME",
+          "data": "Season-wise as applicable (kharif/rabi/zaid/perennial/horticulture/tree plantations)\nYield (quintals/kg);\nSale price (Rs./quintal or kg);\nArea under cultivation (acres/bigha);\nInput costs - seeds, fertiliser & pesticide, weeding, herbicide, labour, diesel, electricity, pump-leasing, other costs",
+          "method": "Farmer survey (retrospective recall-basis)\n\nSecondary Dataset (Price, Yield) can be used for triangulation -\n1. Yield : https://data.desagri.gov.in/website/crops-report-district-level-web\n2. Crop Price: https://agmarknet.gov.in/home",
+          "frequency": "Once per survey round (baseline/midline/endline)",
+          "playbooks": ""
+        },
+        {
+          "indicator": "Changed cropping acreage (rabi, zaid)",
+          "monitoring_type": "BME",
+          "data": "Area under cultivation for rabi, zaid seasons (acres or bigha)",
+          "method": "Farmer survey  (retrospective recall-basis)",
+          "frequency": "Once per survey round (baseline/midline/endline)",
+          "playbooks": ""
+        },
+        {
+          "indicator": "Irrigation water applied (m3)",
+          "monitoring_type": "CM",
+          "data": "Rate of pipe flow (liters/sec); \nNumber of pumping hours\nOR\nFlow meter readings (unit or m3)",
+          "method": "Flow meter\nFarmer diary",
+          "frequency": "Every irrigation applied",
+          "playbooks": "Flow Meters_Playbook.pdf"
+        },
+        {
+          "indicator": "Change in crop mix",
+          "monitoring_type": "BME",
+          "data": "List of crops grown, by season",
+          "method": "Farmer survey (retrospective recall-basis)",
+          "frequency": "Once per survey round (baseline/midline/endline)",
+          "playbooks": ""
+        },
+        {
+          "indicator": "Crop Yield (kg or quintal/acre)",
+          "monitoring_type": "BME",
+          "data": "Season-wise total yield for each crop cultivated as applicable (kharif/rabi/zaid/perennial/horticulture/tree plantations)",
+          "method": "Farmer survey (retrospective recall-basis)\n\nSecondary Data (Yield) can be used for triangulation - https://data.desagri.gov.in/website/crops-report-district-level-web",
+          "frequency": "Once per survey round (baseline/midline/endline)",
+          "playbooks": ""
+        },
+        {
+          "indicator": "Input costs savings (Rs/acre)",
+          "monitoring_type": "BME",
+          "data": "Seed cost; fertilizer cost; weeding labour cost; herbicide cost; savings in diesel cost for water pumping; lease cost for a diesel pump;",
+          "method": "Farmer survey  (retrospective recall-basis)",
+          "frequency": "Once per survey round (baseline/midline/endline)",
+          "playbooks": ""
+        },
+        {
+          "indicator": "Livelihoods adopted - livestock/poultry/fisheries/aquatic cultivation",
+          "monitoring_type": "BME",
+          "data": "No. of cows, buffaloes, goats, hens, roosters reared;\nTypes of fish reared;\nAquatic cultivation categories (whether foxnut/water chestnut cultivated);\nNo. of cows, buffaloes, goats, hens, roosters owned;\n\n(This is not a exhaustive list, and purely a recommendation.)",
+          "method": "Farmer survey  (retrospective recall-basis)",
+          "frequency": "Once per survey round (baseline/midline/endline)",
+          "playbooks": ""
+        },
+        {
+          "indicator": "Income derived from the additional livelihoods  -  livestock/poultry/fisheries/aquatic cultivation",
+          "monitoring_type": "BME",
+          "data": "Species-wise\n\nQuantity of milk sold (litres);\nno. of livestock sold (by type);\nquantity of by-products sold (manure/dung, wool/hide);\nquantity of fodder sold (quintals);\nno. of poultry birds sold;\nno. of eggs sold;\n\nSpecies-wise\n\nQuantity of fish harvested (kg),\nDiesel cost (for pumping GW) (Rs.);\nleasing cost for diesel pump(for pumping GW) (Rs.);\nelectricity cost (Rs.);\nsale price (Rs./kg);\nseed costs (Rs.)\nfeed costs (Rs.);\nother costs (Rs.)\n\nQuantity of foxnut/water chestnut harvested (kg);\nDiesel cost (for pumping GW) (Rs.);\nleasing cost for diesel pump(for pumping GW) (Rs.);\nelectricity cost (Rs.);\nsale price (Rs./kg);\nseed costs (Rs.)\nfeed costs (Rs.);\nlabour costs (Rs.);\nother costs (Rs.)\n\n(This is not a exhaustive list, and purely a recommendation.)",
+          "method": "Farmer survey (retrospective recall-basis)",
+          "frequency": "Once per survey round (baseline/midline/endline)",
+          "playbooks": ""
+        },
+        {
+          "indicator": "Revenue/Profit (in Rs.) from plantation on farm pond bunds (season of cultivation on bunds)",
+          "monitoring_type": "BME",
+          "data": "Season-wise as applicable (kharif/rabi/zaid/perennial/horticulture/tree plantations)\nYield (quintals/kg);\nSale price (Rs./quintal or kg);\nArea under cultivation (acres/bigha);\nInput costs - seeds, fertiliser & pesticide, weeding, herbicide, labour, diesel, electricity, pump-leasing, other costs",
+          "method": "Farmer survey (retrospective recall-basis)\n\nSecondary Dataset (Price, Yield) can be used for triangulation -\n1. Yield : https://data.desagri.gov.in/website/crops-report-district-level-web\n2. Crop Price: https://agmarknet.gov.in/home",
+          "frequency": "Once per survey round (baseline/midline/endline)",
+          "playbooks": ""
+        },
+        {
+          "indicator": "Irrigation water applied from surface water (farm pond)",
+          "monitoring_type": "CM",
+          "data": "Rate of pipe flow (liters/sec);\nNumber of pumping hours\nOR\nFlow meter readings (unit or m3)",
+          "method": "Farmer diary",
+          "frequency": "Each irrigation application",
+          "playbooks": ""
+        },
+        {
+          "indicator": "Irrigation water applied from groundwater",
+          "monitoring_type": "CM",
+          "data": "Rate of pipe flow (liters/sec);\nNumber of pumping hours\nOR\nFlow meter readings (unit or m3)",
+          "method": "Farmer diary/ODK form",
+          "frequency": "Each irrigation application",
+          "playbooks": ""
+        },
+        {
+          "indicator": "Number of months the irrigation water sources availability during the monsoon",
+          "monitoring_type": "BME",
+          "data": "",
+          "method": "Farmer diary/ODK form",
+          "frequency": "",
+          "playbooks": ""
+        },
+        {
+          "indicator": "No. of household member(s) migrating from the village for work",
+          "monitoring_type": "BME",
+          "data": "No. of household members migrating outside the village for work;",
+          "method": "Farmer survey (retrospective recall-basis)",
+          "frequency": "Once per survey round (baseline/midline/endline)",
+          "playbooks": ""
+        },
+        {
+          "indicator": "No. of months household member(s) migrated from the village for work",
+          "monitoring_type": "BME",
+          "data": "No. of months migrated per year;",
+          "method": "Farmer survey (retrospective recall-basis)",
+          "frequency": "Once per survey round (baseline/midline/endline)",
+          "playbooks": ""
+        }
+      ]
+    },
+    "pmds": {
+      "slug": "pmds",
+      "name": "Pre-monsoon Dry Sowing",
+      "log_frame_title": "Log Frame - Pre-monsoon Dry Sowing",
+      "intro": [
+        "Here’s your MEL Plan presented in the form of a log frame, ready for the field setup for data collection.",
+        "A logical framework (log frame) provides the conceptual basis for the Monitoring, Evaluation, and Learning (MEL) Framework. It builds on the goal, outcome, and output pathway established when creating the Theory of Change in the Solution Design Framework.",
+        "The log frame adds two components at the MEL stage – assumptions and indicators – to unpack each outcome into a measurable form. Assumptions state the conditions that must hold for each step to lead to the next, while indicators specify how each outcome will be measured. Since an outcome by itself is a construct and not directly measurable, it must be unpacked into indicators that are specific, measurable, achievable, relevant, and time-bound (SMART)."
+      ],
+      "note": "Please note: For PMDS intervention, you need a corresponding control selection for comparison with the treatment.",
+      "methodology_heading": "Data and Methodology for Indicators",
+      "outro": [
+        "Frequency",
+        "This frequency of monitoring varies based on the type of outcome being tracked. The MEL Plan suggests outcomes of two types - Biophysical which most of the times require continuous monitoring, ranging from daily to monthly, while the second, socio-economic outcomes are captured through periodic surveys. These are administered once each at the beginning (baseline survey), middle (midline survey), and conclusion (endline survey) of the project. The two are strongest in combination as they address different questions.",
+        "What do you do with the MEL Plan?",
+        "Sampling",
+        "This sampling exercise is to be done manually where a 10% sample from each zone can be taken. Zones can be identified using the following recommendations:",
+        "For watershed management programmes, the watershed serves as the basic spatial unit for sampling.",
+        "Within each watershed, distinct hydrological zones should be identified, whether canal command and non-canal command, or upstream (ridge), midstream and downstream (valley). Within the canal command zone, a further division into head- and tail-end may be made.",
+        "Zones that are distinct in socio-economic terms should also be identified so that stratification remains cognisant of social heterogeneity. This is important for ensuring representation as marginalised communities are often located in the resource-poor parts of a landscape such as ridges.",
+        "Field Setup for Data Collections",
+        "The MEL Plan provides a blueprint to execute the impact assessment in the field. There are broadly four steps involved here:",
+        "Select control assets: Once we know the geotags of selected assets, selection of control assets follows depending on the type of intervention. This information on whether a control is needed or not is presented as a part of the MEL Plan. Control provides a baseline for measuring change in comparison to the treatment asset. This step happens simultaneously with the next step.",
+        "Asset allocation: This step is about capturing contextual information on the assets from the field. This can include queries like area under cultivation, crops grown, sources of irrigation, area under irrigation, etc. These queries barely change with time and are asked before monitoring begins to support analytical understanding for MEL. For example, if the duration of irrigation applied in a plot is half of another plot growing the same crop, it was because the area under irrigation differed. It also supports the step 1 of selecting controls, as we want to find similar controls where the only thing that is different is that they don’t have the intervention. The MEL Deployment helps with asset allocation.",
+        "Deploy Instruments: Once the assets are identified, wherever needed, the requisite instrumentation for capturing continuous monitoring data needs to be deployed.",
+        "Train community resource persons (CRPs): The CRPs should be trained by the implementing NGO on the data collection process, including reading data using the instrumentation, inform them on the frequency of monitoring, while developing a thorough understanding of the intention behind each query and preventing any introduction of biases.",
+        "Once instrumentation is deployed and CRPs are trained, monitoring begins at the frequency defined for each indicator. CRPs record data using the MEL Dashboard’s Open Data Kit (ODK) forms at each asset with their mobile phones, and the data uploads automatically to the tool.",
+        "You can use the MEL deployment workflow for data collection."
+      ],
+      "outcomes": [
+        {
+          "kind": "goal",
+          "label": "GOAL",
+          "outcome_type": null,
+          "title": "[enter the long-term goal you have set for your program based the Theory of Change]",
+          "indicators": [],
+          "assumptions": "",
+          "cta": true
+        },
+        {
+          "kind": "outcome",
+          "label": "Outcome 1",
+          "outcome_type": "Biophysical outcomes",
+          "title": "Increased green water availability",
+          "indicators": [
+            "Soil moisture difference (m3)"
+          ],
+          "assumptions": "Kharif crop is rainfed."
+        },
+        {
+          "kind": "outcome",
+          "label": "Outcome 2",
+          "outcome_type": "Biophysical outcomes",
+          "title": "Reduced irrigation application (kharif/rabi/zaid)",
+          "indicators": [
+            "Irrigation water volume applied (m3)",
+            "Soil moisture difference (m3)"
+          ],
+          "assumptions": "The crop cultivated in the season is irrigated. \nAgriculture acreage remains the same as pre-intervention.\nCrop mix is the same as pre-intervention."
+        },
+        {
+          "kind": "outcome",
+          "label": "Outcome 3",
+          "outcome_type": "Biophysical outcomes",
+          "title": "Improved soil health",
+          "indicators": [
+            "Soil organic carbon",
+            "Soil compaction",
+            "Infiltration rate",
+            "Presence of earthworms"
+          ],
+          "assumptions": "PMDS adds to the organic matter in soil improving the soil structure and soil carbon. \nThe time period required to reflect the change can be longer."
+        },
+        {
+          "kind": "outcome",
+          "label": "Outcome 4",
+          "outcome_type": "Socio-economic outcomes",
+          "title": "Improved crop water productivity",
+          "indicators": [
+            "Revenue/Profit per acre",
+            "Irrigation water volume applied (m3)",
+            "Change in crop mix",
+            "Crop Yield",
+            "Input costs savings (electricity/diesel,weeding, herbicides, labor for weed removal)(Rs.)"
+          ],
+          "assumptions": "1. Water consumption decreases or remains the same \n\n2. Pre-conditions for when CWP gain is counted:\na. ↑ market price of crop < ↑ in crop yield\nb. ↑ in crop yield (only)\nc. ↓ in input cost (only)\nd. ↓ in input cost > ↑ market price of crop\ne. Increased market price due to adoption of higher value crop\n\n3. It is a normal year, no input-supply disruptions/geopolitical shocks in the economy (e.g., Covid, fertilizer unavailability), and the market prices are stable"
+        },
+        {
+          "kind": "output",
+          "label": "Output",
+          "outcome_type": null,
+          "title": "Area with PMDS",
+          "indicators": [
+            "Number of acres"
+          ],
+          "assumptions": "",
+          "cta": false
+        },
+        {
+          "kind": "output",
+          "label": "OUTPUT",
+          "outcome_type": null,
+          "title": "[enter the desired outputs for your program here]",
+          "indicators": [],
+          "assumptions": "",
+          "cta": true
+        }
+      ],
+      "methodology": [
+        {
+          "indicator": "Soil moisture difference (m3)",
+          "monitoring_type": "CM",
+          "data": "Soil moisture readings sampled at multiple locations in a single agriculture plot",
+          "method": "Hand-held soil moisture sensor",
+          "frequency": "Every 3-4 days",
+          "playbooks": "Soil Moisture Sensor_Playbook.pdf"
+        },
+        {
+          "indicator": "Irrigation water volume applied (m3)",
+          "monitoring_type": "CM",
+          "data": "Rate of pipe flow (liters/sec); \nNumber of pumping hours\nOR\nFlow meter readings (unit or m3)",
+          "method": "Flow meter\nFarmer diary",
+          "frequency": "Every irrigation applied",
+          "playbooks": "Flow Meters_Playbook.pdf"
+        },
+        {
+          "indicator": "Soil organic carbon (%)",
+          "monitoring_type": "Seasonal/Annual",
+          "data": "",
+          "method": "Laboratory test",
+          "frequency": "Each season, before sowing",
+          "playbooks": ""
+        },
+        {
+          "indicator": "Soil compaction/Bulk density",
+          "monitoring_type": "Seasonal",
+          "data": "",
+          "method": "Laboratory test",
+          "frequency": "Each season, before sowing",
+          "playbooks": ""
+        },
+        {
+          "indicator": "Infiltration rate (lps)",
+          "monitoring_type": "Seasonal",
+          "data": "",
+          "method": "Double ring infiltrometer or Mini-disc infiltrometer",
+          "frequency": "Each season, before sowing",
+          "playbooks": "https://drive.google.com/drive/folders/1-39V-l2lJuFZRT3U1JsNXb1fctY_xIBQ"
+        },
+        {
+          "indicator": "Presence of earthworms",
+          "monitoring_type": "BME survey",
+          "data": "",
+          "method": "Farmer survey  (retrospective recall-basis)",
+          "frequency": "",
+          "playbooks": ""
+        },
+        {
+          "indicator": "Revenue/Profit per acre (Rs/acre)",
+          "monitoring_type": "BME survey",
+          "data": "Season-wise as applicable (kharif/rabi/zaid/perennial/horticulture/tree plantations)\nYield (quintals/kg);\nSale price (Rs./quintal or kg);\nArea under cultivation (acres/bigha);\nInput costs - seeds, fertiliser & pesticide, weeding, herbicide, labour, diesel, electricity, pump-leasing, other costs",
+          "method": "Farmer survey (retrospective recall-basis)\n\nSecondary Dataset (Price, Yield) can be used for triangulation -\n1. Yield : https://data.desagri.gov.in/website/crops-report-district-level-web\n2. Crop Price: https://agmarknet.gov.in/home",
+          "frequency": "Once per survey round (baseline/midline/endline)",
+          "playbooks": ""
+        },
+        {
+          "indicator": "Change in crop mix",
+          "monitoring_type": "BME survey",
+          "data": "List of crops grown, by season",
+          "method": "Farmer survey (retrospective recall-basis)",
+          "frequency": "Once per survey round (baseline/midline/endline)",
+          "playbooks": "Change in crop mix"
+        },
+        {
+          "indicator": "Crop Yield (kg or quintal/acre)",
+          "monitoring_type": "BME survey",
+          "data": "Season-wise total yield for each crop cultivated as applicable (kharif/rabi/zaid/perennial/horticulture/tree plantations)",
+          "method": "Farmer survey (retrospective recall-basis)\n\nSecondary Data (Yield) can be used for triangulation - https://data.desagri.gov.in/website/crops-report-district-level-web",
+          "frequency": "Once per survey round (baseline/midline/endline)",
+          "playbooks": "Crop Yield (kg or quintal/acre)"
+        },
+        {
+          "indicator": "Input costs savings (Rs/acre)",
+          "monitoring_type": "BME survey",
+          "data": "Seed cost; fertilizer cost; weeding labour cost; herbicide cost; savings in diesel cost for water pumping; lease cost for a diesel pump;",
+          "method": "Farmer survey  (retrospective recall-basis)",
+          "frequency": "Once per survey round (baseline/midline/endline)",
+          "playbooks": "Input costs savings (Rs/acre)"
+        }
+      ]
+    },
+    "bio-mulching": {
+      "slug": "bio-mulching",
+      "name": "Bio-mulching",
+      "log_frame_title": "Log Frame - Bio-mulching",
+      "intro": [
+        "Here’s your MEL Plan presented in the form of a log frame, ready for the field setup for data collection.",
+        "A logical framework (log frame) provides the conceptual basis for the Monitoring, Evaluation, and Learning (MEL) Framework. It builds on the goal, outcome, and output pathway established when creating the Theory of Change in the Solution Design Framework.",
+        "The log frame adds two components at the MEL stage – assumptions and indicators – to unpack each outcome into a measurable form. Assumptions state the conditions that must hold for each step to lead to the next, while indicators specify how each outcome will be measured. Since an outcome by itself is a construct and not directly measurable, it must be unpacked into indicators that are specific, measurable, achievable, relevant, and time-bound (SMART)."
+      ],
+      "note": "Please note: For PMDS intervention, you need a corresponding control asset for comparison with the treatment asset.",
+      "methodology_heading": "Data and Methodology for Indicators",
+      "outro": [
+        "Frequency",
+        "This frequency of monitoring varies based on the type of outcome being tracked. The MEL Plan suggests outcomes of two types - Biophysical which most of the times require continuous monitoring, ranging from daily to monthly, while the second, socio-economic outcomes are captured through periodic surveys. These are administered once each at the beginning (baseline survey), middle (midline survey), and conclusion (endline survey) of the project. The two are strongest in combination as they address different questions.",
+        "What do you do with the MEL Plan?",
+        "Sampling",
+        "This sampling exercise is to be done manually where a 10% sample from each zone can be taken. Zones can be identified using the following recommendations:",
+        "For watershed management programmes, the watershed serves as the basic spatial unit for sampling.",
+        "Within each watershed, distinct hydrological zones should be identified, whether canal command and non-canal command, or upstream (ridge), midstream and downstream (valley). Within the canal command zone, a further division into head- and tail-end may be made.",
+        "Zones that are distinct in socio-economic terms should also be identified so that stratification remains cognisant of social heterogeneity. This is important for ensuring representation as marginalised communities are often located in the resource-poor parts of a landscape such as ridges.",
+        "Field Setup for Data Collections",
+        "The MEL Plan provides a blueprint to execute the impact assessment in the field. There are broadly four steps involved here:",
+        "Select control assets: Once we know the geotags of selected assets, selection of control assets follows depending on the type of intervention. This information on whether a control is needed or not is presented as a part of the MEL Plan. Control provides a baseline for measuring change in comparison to the treatment asset. This step happens simultaneously with the next step.",
+        "Asset allocation: This step is about capturing contextual information on the assets from the field. This can include queries like area under cultivation, crops grown, sources of irrigation, area under irrigation, etc. These queries barely change with time and are asked before monitoring begins to support analytical understanding for MEL. For example, if the duration of irrigation applied in a plot is half of another plot growing the same crop, it was because the area under irrigation differed. It also supports the step 1 of selecting controls, as we want to find similar controls where the only thing that is different is that they don’t have the intervention. The MEL Deployment helps with asset allocation.",
+        "Deploy Instruments: Once the assets are identified, wherever needed, the requisite instrumentation for capturing continuous monitoring data needs to be deployed.",
+        "Train community resource persons (CRPs): The CRPs should be trained by the implementing NGO on the data collection process, including reading data using the instrumentation, inform them on the frequency of monitoring, while developing a thorough understanding of the intention behind each query and preventing any introduction of biases.",
+        "Once instrumentation is deployed and CRPs are trained, monitoring begins at the frequency defined for each indicator. CRPs record data using the MEL Dashboard’s Open Data Kit (ODK) forms at each asset with their mobile phones, and the data uploads automatically to the tool.",
+        "You can use the MEL deployment workflow for data collection."
+      ],
+      "outcomes": [
+        {
+          "kind": "goal",
+          "label": "GOAL",
+          "outcome_type": null,
+          "title": "[enter the long-term goal you have set for your program based the Theory of Change]",
+          "indicators": [],
+          "assumptions": "",
+          "cta": true
+        },
+        {
+          "kind": "outcome",
+          "label": "Outcome 1",
+          "outcome_type": "Biophysical outcomes",
+          "title": "Increased green water availability",
+          "indicators": [
+            "Soil moisture difference (m3)"
+          ],
+          "assumptions": "Kharif crop is rainfed."
+        },
+        {
+          "kind": "outcome",
+          "label": "Outcome 2",
+          "outcome_type": "Biophysical outcomes",
+          "title": "Reduced irrigation application (kharif/rabi/zaid)",
+          "indicators": [
+            "Irrigation water volume applied (m3)",
+            "Soil moisture difference (m3)"
+          ],
+          "assumptions": "The crop cultivated in the season is irrigated. \nAgriculture acreage remains the same as pre-intervention.\nCrop mix is the same as pre-intervention."
+        },
+        {
+          "kind": "outcome",
+          "label": "Outcome 3",
+          "outcome_type": "Biophysical outcomes",
+          "title": "Improved soil health",
+          "indicators": [
+            "Soil organic carbon",
+            "Soil compaction",
+            "Infiltration rate",
+            "Presence of earthworms"
+          ],
+          "assumptions": "PMDS adds to the organic matter in soil improving the soil structure and soil carbon. \nThe time period required to reflect the change can be longer."
+        },
+        {
+          "kind": "outcome",
+          "label": "Outcome 4",
+          "outcome_type": "Socio-economic outcomes",
+          "title": "Improved crop water productivity",
+          "indicators": [
+            "Revenue/Profit per acre",
+            "Irrigation water volume applied (m3)",
+            "Change in crop mix",
+            "Crop Yield",
+            "Input costs savings (electricity/diesel,weeding, herbicides, labor for weed removal)(Rs.)"
+          ],
+          "assumptions": "1. Water consumption decreases or remains the same \n\n2. Pre-conditions for when CWP gain is counted:\na. ↑ market price of crop < ↑ in crop yield\nb. ↑ in crop yield (only)\nc. ↓ in input cost (only)\nd. ↓ in input cost > ↑ market price of crop\ne. Increased market price due to adoption of higher value crop\n\n3. It is a normal year, no input-supply disruptions/geopolitical shocks in the economy (e.g., Covid, fertilizer unavailability), and the market prices are stable"
+        },
+        {
+          "kind": "output",
+          "label": "Output",
+          "outcome_type": null,
+          "title": "Area with bio-mulching",
+          "indicators": [
+            "Number of acres"
+          ],
+          "assumptions": "",
+          "cta": false
+        },
+        {
+          "kind": "output",
+          "label": "OUTPUT",
+          "outcome_type": null,
+          "title": "[enter the desired outputs for your program here]",
+          "indicators": [],
+          "assumptions": "",
+          "cta": true
+        }
+      ],
+      "methodology": [
+        {
+          "indicator": "Soil moisture difference (m3)",
+          "monitoring_type": "CM",
+          "data": "Soil moisture readings sampled at multiple locations in a single agriculture plot",
+          "method": "Hand-held soil moisture sensor",
+          "frequency": "Every 3-4 days",
+          "playbooks": "Soil Moisture Sensor_Playbook.pdf"
+        },
+        {
+          "indicator": "Irrigation water volume applied (m3)",
+          "monitoring_type": "CM",
+          "data": "Rate of pipe flow (liters/sec); \nNumber of pumping hours\nOR\nFlow meter readings (unit or m3)",
+          "method": "Flow meter\nFarmer diary",
+          "frequency": "Every irrigation applied",
+          "playbooks": "Flow Meters_Playbook.pdf"
+        },
+        {
+          "indicator": "Soil organic carbon (%)",
+          "monitoring_type": "Seasonal/Annual",
+          "data": "",
+          "method": "Laboratory test",
+          "frequency": "Each season, before sowing",
+          "playbooks": ""
+        },
+        {
+          "indicator": "Soil compaction/Bulk density",
+          "monitoring_type": "Seasonal",
+          "data": "",
+          "method": "Laboratory test",
+          "frequency": "Each season, before sowing",
+          "playbooks": ""
+        },
+        {
+          "indicator": "Infiltration rate (lps)",
+          "monitoring_type": "Seasonal",
+          "data": "",
+          "method": "Double ring infiltrometer or Mini-disc infiltrometer",
+          "frequency": "Each season, before sowing",
+          "playbooks": "https://drive.google.com/drive/folders/1-39V-l2lJuFZRT3U1JsNXb1fctY_xIBQ"
+        },
+        {
+          "indicator": "Presence of earthworms",
+          "monitoring_type": "BME survey",
+          "data": "",
+          "method": "Farmer survey  (retrospective recall-basis)",
+          "frequency": "",
+          "playbooks": ""
+        },
+        {
+          "indicator": "Revenue/Profit per acre (Rs/acre)",
+          "monitoring_type": "BME survey",
+          "data": "Season-wise as applicable (kharif/rabi/zaid/perennial/horticulture/tree plantations)\nYield (quintals/kg);\nSale price (Rs./quintal or kg);\nArea under cultivation (acres/bigha);\nInput costs - seeds, fertiliser & pesticide, weeding, herbicide, labour, diesel, electricity, pump-leasing, other costs",
+          "method": "Farmer survey (retrospective recall-basis)\n\nSecondary Dataset (Price, Yield) can be used for triangulation -\n1. Yield : https://data.desagri.gov.in/website/crops-report-district-level-web\n2. Crop Price: https://agmarknet.gov.in/home",
+          "frequency": "Once per survey round (baseline/midline/endline)",
+          "playbooks": ""
+        },
+        {
+          "indicator": "Change in crop mix",
+          "monitoring_type": "BME survey",
+          "data": "List of crops grown, by season",
+          "method": "Farmer survey (retrospective recall-basis)",
+          "frequency": "Once per survey round (baseline/midline/endline)",
+          "playbooks": "Change in crop mix"
+        },
+        {
+          "indicator": "Crop Yield (kg or quintal/acre)",
+          "monitoring_type": "BME survey",
+          "data": "Season-wise total yield for each crop cultivated as applicable (kharif/rabi/zaid/perennial/horticulture/tree plantations)",
+          "method": "Farmer survey (retrospective recall-basis)\n\nSecondary Data (Yield) can be used for triangulation - https://data.desagri.gov.in/website/crops-report-district-level-web",
+          "frequency": "Once per survey round (baseline/midline/endline)",
+          "playbooks": "Crop Yield (kg or quintal/acre)"
+        },
+        {
+          "indicator": "Input costs savings (Rs/acre)",
+          "monitoring_type": "BME survey",
+          "data": "Seed cost; fertilizer cost; weeding labour cost; herbicide cost; savings in diesel cost for water pumping; lease cost for a diesel pump;",
+          "method": "Farmer survey  (retrospective recall-basis)",
+          "frequency": "Once per survey round (baseline/midline/endline)",
+          "playbooks": "Input costs savings (Rs/acre)"
+        }
+      ]
+    }
+  }
+}

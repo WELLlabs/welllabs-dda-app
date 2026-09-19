@@ -8,6 +8,8 @@
 	import {
 		createMelPlan,
 		deleteMelPlan,
+		exportMelProjectDocx,
+		exportMelProjectPdf,
 		fetchImplementationDashboard,
 		fetchMelInterventions,
 		fetchMelPlans,
@@ -31,6 +33,9 @@
 	let creating = $state(false);
 	let saving = $state(false);
 	let deletingId = $state(null);
+	let exportingProject = $state(false);
+	/** @type {null | 'pdf' | 'docx'} */
+	let exportingFormat = $state(null);
 	/** @type {string | null} */
 	let openMenuId = $state(null);
 	/** @type {null | { type: 'project' } | { type: 'plan', plan: any }} */
@@ -70,7 +75,7 @@
 			plans = all.filter((p) => (p.kind || 'plan') === 'plan');
 			implementations = all.filter((p) => p.kind === 'implementation');
 			interventions = (intRes.interventions ?? []).filter(
-				(i) => i.from_mapping && (i.outcome_count || 0) > 0
+				(i) => (i.from_mapping || i.from_logframe) && (i.outcome_count || 0) > 0
 			);
 			const farm = interventions.find((i) => i.slug === 'farm-pond');
 			if (farm) interventionSlug = farm.slug;
@@ -124,6 +129,19 @@
 		return `${slugBase}/plans/${plan.id}`;
 	}
 
+	/** MEL plans open in the designer; implementations open on their home. */
+	function openItem(plan) {
+		openMenuId = null;
+		const base = planPath(plan);
+		if ((plan.kind || 'plan') === 'implementation') {
+			goto(base);
+			return;
+		}
+		const hasOutcomes =
+			Array.isArray(plan?.plan_json?.outcome_ids) && plan.plan_json.outcome_ids.length;
+		goto(hasOutcomes ? `${base}/new?step=plan` : `${base}/new`);
+	}
+
 	function setTab(next) {
 		createKind = null;
 		editing = null;
@@ -152,7 +170,11 @@
 			});
 			createKind = null;
 			itemName = '';
-			goto(kind === 'implementation' ? `${planPath(plan)}/new?forms=1` : `${planPath(plan)}/new`);
+			goto(
+				kind === 'implementation'
+					? `${planPath(plan)}/new?forms=1`
+					: `${planPath(plan)}/new`
+			);
 		} catch (err) {
 			error = String(err);
 		} finally {
@@ -251,9 +273,31 @@
 		el.style.setProperty('--my', `${e.clientY - rect.top}px`);
 	}
 
-	function openItem(plan) {
-		openMenuId = null;
-		goto(planPath(plan));
+	async function handleExportProject(format = 'pdf') {
+		if (!plans.length) {
+			error = 'Create at least one MEL plan before exporting.';
+			return;
+		}
+		exportingProject = true;
+		exportingFormat = format;
+		error = '';
+		try {
+			const { blob, filename } =
+				format === 'docx'
+					? await exportMelProjectDocx(project.id)
+					: await exportMelProjectPdf(project.id);
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = url;
+			a.download = filename;
+			a.click();
+			URL.revokeObjectURL(url);
+		} catch (err) {
+			error = String(err);
+		} finally {
+			exportingProject = false;
+			exportingFormat = null;
+		}
 	}
 </script>
 
@@ -262,6 +306,20 @@
 		<button type="button" onclick={() => goto(`${slugBase}/members`)}>Members</button>
 		<button type="button" onclick={openEditProject}>Edit project</button>
 		{#if tab === 'plans'}
+			<button
+				type="button"
+				disabled={exportingProject || !plans.length}
+				onclick={() => handleExportProject('pdf')}
+			>
+				{exportingFormat === 'pdf' ? 'Exporting…' : 'Export project PDF'}
+			</button>
+			<button
+				type="button"
+				disabled={exportingProject || !plans.length}
+				onclick={() => handleExportProject('docx')}
+			>
+				{exportingFormat === 'docx' ? 'Exporting…' : 'Export project Word'}
+			</button>
 			<button type="button" class="filled" onclick={() => openCreate('plan')}>New plan</button>
 		{:else}
 			<button type="button" class="filled" onclick={() => openCreate('implementation')}
@@ -286,7 +344,7 @@
 				class:active={tab === 'implementation'}
 				onclick={() => setTab('implementation')}
 			>
-				Implementation
+				Deployment
 			</button>
 		</aside>
 
@@ -527,7 +585,7 @@
 				{/if}
 			{:else}
 				<header class="pane-intro">
-					<p class="pane-kicker" style="color: {IMPL_ACCENT}">Implementation</p>
+					<p class="pane-kicker" style="color: {IMPL_ACCENT}">Deployment</p>
 					<h1 class="pane-title">{project.name}</h1>
 					<p class="pane-sub">Interventions being monitored in this project.</p>
 				</header>

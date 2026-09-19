@@ -146,20 +146,33 @@ describe('accounts api', () => {
 	});
 
 	it('startGoogleAuth redirects to authorization_url', async () => {
-		const hrefSetter = vi.fn();
+		const replace = vi.fn();
 		vi.stubGlobal('window', {
 			location: {
-				get href() {
-					return '';
-				},
-				set href(v) {
-					hrefSetter(v);
-				}
+				href: '',
+				replace
 			}
 		});
-		mockJson({ authorization_url: 'https://accounts.google.com/o/oauth2/v2/auth?x=1' });
-		startGoogleAuth();
-		expect(hrefSetter).toHaveBeenCalledWith('/wst/backend/accounts/auth/google/start');
+		globalThis.fetch = vi.fn().mockResolvedValue({
+			ok: true,
+			async text() {
+				return `<!DOCTYPE html><script>window.location.replace("https://accounts.google.com/o/oauth2/v2/auth?x=1");</script>`;
+			}
+		});
+		await startGoogleAuth();
+		expect(fetch).toHaveBeenCalledWith('/wst/backend/accounts/auth/google/start', {
+			credentials: 'include',
+			signal: expect.any(AbortSignal),
+			headers: { Accept: 'text/html' }
+		});
+		expect(replace).toHaveBeenCalledWith('https://accounts.google.com/o/oauth2/v2/auth?x=1');
+	});
+
+	it('startGoogleAuth surfaces backend timeout', async () => {
+		const err = new Error('aborted');
+		err.name = 'TimeoutError';
+		globalThis.fetch = vi.fn().mockRejectedValue(err);
+		await expect(startGoogleAuth()).rejects.toThrow(/timed out/i);
 	});
 
 	it('lookupUserByEmail encodes the email query', async () => {

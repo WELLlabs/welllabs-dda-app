@@ -49,26 +49,19 @@
 	const COLLECTED_YES = '#166534';
 	const COLLECTED_NO = '#eef1f4';
 
-	const RIDGE_POINTS = [
-		{ id: 'A', key: 'bm_cm_soil_moisture_raised_r_corner_a', x: 0.18, y: 0.22 },
-		{ id: 'B', key: 'bm_cm_soil_moisture_raised_r_corner_b', x: 0.82, y: 0.22 },
-		{ id: 'C', key: 'bm_cm_soil_moisture_raised_r_corner_c', x: 0.82, y: 0.78 },
-		{ id: 'D', key: 'bm_cm_soil_moisture_raised_r_corner_d', x: 0.18, y: 0.78 },
-		{ id: 'Centre', key: 'bm_cm_soil_moisture_raised_r_centre', x: 0.5, y: 0.5 }
-	];
-	const FURROW_POINTS = [
-		{ id: 'A', key: 'bm_cm_soil_moisture_raised_f_corner_a', x: 0.18, y: 0.22 },
-		{ id: 'B', key: 'bm_cm_soil_moisture_raised_f_corner_b', x: 0.82, y: 0.22 },
-		{ id: 'C', key: 'bm_cm_soil_moisture_raised_f_corner_c', x: 0.82, y: 0.78 },
-		{ id: 'D', key: 'bm_cm_soil_moisture_raised_f_corner_d', x: 0.18, y: 0.78 },
-		{ id: 'Centre', key: 'bm_cm_soil_moisture_raised_f_centre', x: 0.5, y: 0.5 }
-	];
 	const FLAT_POINTS = [
 		{ id: 'A', key: 'bm_cm_soil_moisture_flat_corner_a', x: 0.18, y: 0.22 },
 		{ id: 'B', key: 'bm_cm_soil_moisture_flat_corner_b', x: 0.82, y: 0.22 },
 		{ id: 'C', key: 'bm_cm_soil_moisture_flat_corner_c', x: 0.82, y: 0.78 },
 		{ id: 'D', key: 'bm_cm_soil_moisture_flat_corner_d', x: 0.18, y: 0.78 },
 		{ id: 'Centre', key: 'bm_cm_soil_moisture_flat_centre', x: 0.5, y: 0.5 }
+	];
+	const RIDGE_VALUE_KEYS = [
+		'bm_cm_soil_moisture_raised_r_corner_a',
+		'bm_cm_soil_moisture_raised_r_corner_b',
+		'bm_cm_soil_moisture_raised_r_corner_c',
+		'bm_cm_soil_moisture_raised_r_corner_d',
+		'bm_cm_soil_moisture_raised_r_centre'
 	];
 
 	const slugBase = $derived(itemPath('/assess', project, projects));
@@ -116,6 +109,14 @@
 		const place = [answers?.bm_ot_village_name, answers?.bm_ot_block_name, answers?.bm_ot_district_name]
 			.map((v) => String(v || '').trim())
 			.filter(Boolean);
+		const irrigationRaw = answers?.bm_ot_source_of_irrigation_water;
+		const irrigation = Array.isArray(irrigationRaw)
+			? irrigationRaw.map((v) => String(v || '').trim()).filter(Boolean).join(' · ')
+			: String(irrigationRaw || '')
+					.split(/[|,]/)
+					.map((v) => v.trim())
+					.filter(Boolean)
+					.join(' · ') || null;
 		return {
 			lat,
 			lon,
@@ -125,6 +126,7 @@
 			farmer: String(answers?.bm_ot_farmer_name || '').trim() || null,
 			crop: String(answers?.bm_ot_crop_grown || '').trim() || null,
 			season: String(answers?.bm_ot_agriculture_season || '').trim() || null,
+			irrigation: irrigation || null,
 			role: String(answers?.bm_ot_plot_role || '').trim() || null,
 			area: answers?.bm_ot_area_under_the_crop,
 			areaUnit: String(answers?.bm_ot_area_unit || '').trim() || null
@@ -269,31 +271,27 @@
 	});
 
 	const plotGeom = $derived.by(() => {
-		const raised = layout === 'raised';
+		/* Fixed flat-plot schematic — geometry never changes; labels use live values. */
 		const planW = 300;
 		const planH = 170;
 		const pad = 18;
-		const split = raised ? (planW - pad * 2 - 10) / 2 : planW - pad * 2;
-		const boxH = planH - 42;
-		const ridgeBox = { x: pad, y: 16, w: raised ? split : planW - pad * 2, h: boxH };
-		const furrowBox = raised
-			? { x: pad + split + 10, y: 16, w: split, h: boxH }
-			: null;
-		const mapPts = (box, defs) =>
-			defs.map((p) => ({
-				...p,
-				cx: box.x + p.x * box.w,
-				cy: box.y + p.y * box.h,
-				value: numOrNull(latestPoints[p.key])
-			}));
+		const ridgeBox = { x: pad, y: 16, w: planW - pad * 2, h: planH - 42 };
+		const useRaisedKeys = layout === 'raised';
+		const ridgePts = FLAT_POINTS.map((p, i) => {
+			const key = useRaisedKeys ? RIDGE_VALUE_KEYS[i] : p.key;
+			return {
+				id: p.id,
+				key,
+				cx: ridgeBox.x + p.x * ridgeBox.w,
+				cy: ridgeBox.y + p.y * ridgeBox.h,
+				value: numOrNull(latestPoints[key] ?? latestPoints[p.key])
+			};
+		});
 		return {
 			planW,
 			planH,
-			raised,
 			ridgeBox,
-			furrowBox,
-			ridgePts: mapPts(ridgeBox, raised ? RIDGE_POINTS : FLAT_POINTS),
-			furrowPts: furrowBox ? mapPts(furrowBox, FURROW_POINTS) : []
+			ridgePts
 		};
 	});
 
@@ -381,6 +379,12 @@
 		const centerLon = points.reduce((s, p) => s + p.lon, 0) / points.length;
 		const centerLat = points.reduce((s, p) => s + p.lat, 0) / points.length;
 
+		// Recreate if the DOM container moved (e.g. map relocated between columns).
+		if (map && map.getContainer() !== mapEl) {
+			map.remove();
+			map = null;
+		}
+
 		if (!map) {
 			map = new maplibregl.Map({
 				container: mapEl,
@@ -403,7 +407,10 @@
 				interactive: true
 			});
 			map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
-			map.on('load', () => ensurePairMarkers(points));
+			map.on('load', () => {
+				ensurePairMarkers(points);
+				map?.resize();
+			});
 		} else {
 			map.setCenter([centerLon, centerLat]);
 			ensurePairMarkers(points);
@@ -422,8 +429,11 @@
 		});
 		ro.observe(mapEl);
 		queueMicrotask(() => map?.resize());
+		requestAnimationFrame(() => map?.resize());
 
-		return () => ro.disconnect();
+		return () => {
+			ro.disconnect();
+		};
 	});
 
 	async function load() {
@@ -447,12 +457,6 @@
 		if (v == null || v === '') return null;
 		const n = Number(v);
 		return Number.isFinite(n) ? n : null;
-	}
-
-	function smColor(v) {
-		if (v == null || Number.isNaN(Number(v))) return '#d6d3d1';
-		const t = Math.max(0, Math.min(1, Number(v) / 30));
-		return d3.interpolateRgb('#fde68a', '#166534')(t);
 	}
 
 	function humanizeOtKey(key) {
@@ -1027,7 +1031,7 @@
 			<div class="dash-body">
 				<div class="dash-grid">
 					<section class="dash-col dash-info">
-						<div class="dash-card dash-card-fill info-card">
+						<div class="dash-card info-card">
 							<div class="map-identity">
 								<div class="loc-badge loc-badge-plot" aria-hidden="true">
 									<svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor"
@@ -1055,63 +1059,49 @@
 								<div class="pair-panel pair-panel-t">
 									<p class="pair-kicker">Treatment</p>
 									<p class="pair-name">{treatAsset?.label || '—'}</p>
-									<dl class="info-list">
-										{#if treatLoc.farmer}
-											<div class="info-row">
-												<dt class="info-dt">Farmer</dt>
-												<dd class="info-dd">{treatLoc.farmer}</dd>
-											</div>
-										{/if}
+									<dl class="pair-meta">
 										{#if treatLoc.crop || treatLoc.season}
-											<div class="info-row">
-												<dt class="info-dt">Crop</dt>
-												<dd class="info-dd">{[treatLoc.crop, treatLoc.season].filter(Boolean).join(' · ')}</dd>
+											<div class="pair-meta-row">
+												<dt>Crop grown</dt>
+												<dd>{[treatLoc.crop, treatLoc.season].filter(Boolean).join(' · ')}</dd>
 											</div>
 										{/if}
-										{#if treatLoc.area != null}
-											<div class="info-row">
-												<dt class="info-dt">Area</dt>
-												<dd class="info-dd">{fmt(treatLoc.area)} {treatLoc.areaUnit || ''}</dd>
-											</div>
-										{/if}
-										{#if treatLoc.coordsLabel}
-											<div class="info-row">
-												<dt class="info-dt">Coords</dt>
-												<dd class="info-dd info-coords">{treatLoc.coordsLabel}</dd>
+										{#if treatLoc.irrigation}
+											<div class="pair-meta-row">
+												<dt>Source of irrigation</dt>
+												<dd>{treatLoc.irrigation}</dd>
 											</div>
 										{/if}
 									</dl>
+									<button type="button" class="asset-info-btn" onclick={() => (showAssetInfo = 't')}>
+										View treatment info
+									</button>
 								</div>
 								{#if controlAsset}
 									<div class="pair-panel pair-panel-c">
 										<p class="pair-kicker">Control</p>
 										<p class="pair-name">{controlAsset.label || '—'}</p>
-										<dl class="info-list">
-											{#if controlLoc.farmer}
-												<div class="info-row">
-													<dt class="info-dt">Farmer</dt>
-													<dd class="info-dd">{controlLoc.farmer}</dd>
-												</div>
-											{/if}
+										<dl class="pair-meta">
 											{#if controlLoc.crop || controlLoc.season}
-												<div class="info-row">
-													<dt class="info-dt">Crop</dt>
-													<dd class="info-dd">{[controlLoc.crop, controlLoc.season].filter(Boolean).join(' · ')}</dd>
+												<div class="pair-meta-row">
+													<dt>Crop grown</dt>
+													<dd>{[controlLoc.crop, controlLoc.season].filter(Boolean).join(' · ')}</dd>
 												</div>
 											{/if}
-											{#if controlLoc.area != null}
-												<div class="info-row">
-													<dt class="info-dt">Area</dt>
-													<dd class="info-dd">{fmt(controlLoc.area)} {controlLoc.areaUnit || ''}</dd>
-												</div>
-											{/if}
-											{#if controlLoc.coordsLabel}
-												<div class="info-row">
-													<dt class="info-dt">Coords</dt>
-													<dd class="info-dd info-coords">{controlLoc.coordsLabel}</dd>
+											{#if controlLoc.irrigation}
+												<div class="pair-meta-row">
+													<dt>Source of irrigation</dt>
+													<dd>{controlLoc.irrigation}</dd>
 												</div>
 											{/if}
 										</dl>
+										<button
+											type="button"
+											class="asset-info-btn asset-info-btn-control"
+											onclick={() => (showAssetInfo = 'c')}
+										>
+											View control info
+										</button>
 									</div>
 								{:else}
 									<div class="pair-panel pair-panel-missing">
@@ -1123,8 +1113,49 @@
 									</div>
 								{/if}
 							</div>
+						</div>
 
-							<dl class="info-list">
+						<div class="dash-card dims-row-card dims-col-card">
+							<div class="panel-head panel-head-spread">
+								<div class="panel-head">
+									<svg class="panel-ico" viewBox="0 0 16 16" aria-hidden="true"
+										><rect x="2" y="2" width="12" height="12" rx="1.5" stroke="currentColor" stroke-width="1.4" fill="none"
+									/></svg>
+									<h2 class="panel-title">Soil moisture layout</h2>
+								</div>
+								<div class="dims-legend">
+									<span class="dims-leg"><span class="dims-swatch dims-swatch-flat"></span> Plot (schematic)</span>
+									<span class="dims-leg">Point labels A–D · Centre</span>
+								</div>
+							</div>
+							<div class="pond-diagrams-row">
+								<div class="pond-diagram-box">
+									<svg class="pond-svg" viewBox="0 0 {plotGeom.planW} {plotGeom.planH}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Plot plan">
+										<rect x={plotGeom.ridgeBox.x} y={plotGeom.ridgeBox.y} width={plotGeom.ridgeBox.w} height={plotGeom.ridgeBox.h} rx="6" fill="#ecfccb" stroke="#14532d" stroke-width="1.6"/>
+										<text x={plotGeom.ridgeBox.x + 8} y={plotGeom.ridgeBox.y + 14} fill="#14532d" font-size="9" font-weight="700">Plot</text>
+										{#each plotGeom.ridgePts as pt}
+											<circle cx={pt.cx} cy={pt.cy} r="8" fill="#86efac" stroke="#14532d" stroke-width="1.2"/>
+											<text x={pt.cx} y={pt.cy + 3} text-anchor="middle" fill="#14532d" font-size="7" font-weight="700">{pt.id}</text>
+										{/each}
+									</svg>
+								</div>
+								<div class="pond-diagram-box">
+									<svg class="pond-svg" viewBox="0 0 300 145" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Plot section">
+										<line x1="12" y1="88" x2="288" y2="88" stroke="#94a3b8" stroke-width="1.2"/>
+										<rect x="30" y="70" width="240" height="18" fill="#d9f99d" stroke="#4d7c0f" stroke-width="1.3"/>
+										{#if hasTcPair}
+											<text x="150" y="44" text-anchor="middle" fill="#3f7d3f" font-size="10" font-weight="700">Treatment {fmt(latestT)} %</text>
+											<text x="150" y="60" text-anchor="middle" fill="#2563eb" font-size="10" font-weight="700">Control {fmt(latestC)} %</text>
+											<text x="150" y="116" text-anchor="middle" fill="#56646f" font-size="9">Soil moisture · paired plots</text>
+										{:else}
+											<text x="150" y="52" text-anchor="middle" fill="#3f6212" font-size="10" font-weight="700">Soil moisture {fmt(latestSm?.sm_plot_pct)} %</text>
+											<text x="150" y="116" text-anchor="middle" fill="#56646f" font-size="9">Five-point average</text>
+										{/if}
+									</svg>
+								</div>
+							</div>
+							<p class="viz-disclaimer">Visualization for representation purposes only.</p>
+							<dl class="info-list dims-meta">
 								<div class="info-row">
 									<dt class="info-dt">
 										<svg class="info-ico" viewBox="0 0 16 16" aria-hidden="true"
@@ -1144,29 +1175,18 @@
 									<dd class="info-dd">{layout === 'raised' ? 'Raised bed' : 'Flat plot'}</dd>
 								</div>
 							</dl>
+						</div>
+					</section>
 
-							<div class="asset-info-actions">
-								<button type="button" class="asset-info-btn" onclick={() => (showAssetInfo = 't')}>
-									View treatment info
-								</button>
-								{#if controlAsset}
-									<button
-										type="button"
-										class="asset-info-btn asset-info-btn-control"
-										onclick={() => (showAssetInfo = 'c')}
-									>
-										View control info
-									</button>
-								{/if}
-							</div>
-
-							<div class="panel-head map-inline-head">
+					<section class="dash-col dash-vis">
+						<div class="dash-card map-col-card">
+							<div class="panel-head">
 								<svg class="panel-ico" viewBox="0 0 16 16" aria-hidden="true"
 									><path fill="currentColor" d="M8 1.5C5.5 1.5 3.5 3.6 3.5 6.2c0 3.4 3.6 7.5 4.2 8.1.2.2.5.2.6 0 .6-.6 4.2-4.7 4.2-8.1C12.5 3.6 10.5 1.5 8 1.5zm0 7a2 2 0 1 1 0-4 2 2 0 0 1 0 4z"
 								/></svg>
 								<h2 class="panel-title">Location map</h2>
 							</div>
-							<div class="map-frame map-frame-compact">
+							<div class="map-frame map-frame-col">
 								{#if (treatLoc.lat != null && treatLoc.lon != null) || (controlLoc.lat != null && controlLoc.lon != null)}
 									<div bind:this={mapEl} class="map-host"></div>
 								{:else}
@@ -1180,9 +1200,7 @@
 								{/if}
 							</div>
 						</div>
-					</section>
 
-					<section class="dash-col dash-vis">
 						<div class="dash-card dash-card-fill stats-card">
 							<div class="panel-head">
 								<svg class="panel-ico" viewBox="0 0 16 16" aria-hidden="true"
@@ -1243,69 +1261,6 @@
 					</section>
 
 					<div class="dash-col dash-charts">
-						<div class="dash-card dims-row-card">
-							<div class="panel-head panel-head-spread">
-								<div class="panel-head">
-									<svg class="panel-ico" viewBox="0 0 16 16" aria-hidden="true"
-										><rect x="2" y="2" width="12" height="12" rx="1.5" stroke="currentColor" stroke-width="1.4" fill="none"
-									/></svg>
-									<h2 class="panel-title">Soil moisture layout</h2>
-								</div>
-								<div class="dims-legend">
-									{#if plotGeom.raised}
-										<span class="dims-leg"><span class="dims-swatch dims-swatch-ridge"></span> Ridge (T)</span>
-										<span class="dims-leg"><span class="dims-swatch dims-swatch-furrow"></span> Furrow (C)</span>
-									{:else}
-										<span class="dims-leg"><span class="dims-swatch dims-swatch-flat"></span> Flat plot</span>
-									{/if}
-									<span class="dims-leg">Points coloured by latest SM %</span>
-								</div>
-							</div>
-							<div class="pond-diagrams-row">
-								<div class="pond-diagram-box">
-									<svg class="pond-svg" viewBox="0 0 {plotGeom.planW} {plotGeom.planH}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Plot plan">
-										<rect x={plotGeom.ridgeBox.x} y={plotGeom.ridgeBox.y} width={plotGeom.ridgeBox.w} height={plotGeom.ridgeBox.h} rx="6" fill={plotGeom.raised ? '#dcfce7' : '#ecfccb'} stroke="#14532d" stroke-width="1.6"/>
-										<text x={plotGeom.ridgeBox.x + 8} y={plotGeom.ridgeBox.y + 14} fill="#14532d" font-size="9" font-weight="700">{plotGeom.raised ? 'Ridge' : 'Plot'}</text>
-										{#each plotGeom.ridgePts as pt}
-											<circle cx={pt.cx} cy={pt.cy} r="8" fill={smColor(pt.value)} stroke="#14532d" stroke-width="1.2"/>
-											<text x={pt.cx} y={pt.cy + 3} text-anchor="middle" fill="#14532d" font-size="7" font-weight="700">{pt.value != null ? fmt(pt.value, 0) : pt.id}</text>
-										{/each}
-										{#if plotGeom.furrowBox}
-											<rect x={plotGeom.furrowBox.x} y={plotGeom.furrowBox.y} width={plotGeom.furrowBox.w} height={plotGeom.furrowBox.h} rx="6" fill="#fef3c7" stroke="#92400e" stroke-width="1.6"/>
-											<text x={plotGeom.furrowBox.x + 8} y={plotGeom.furrowBox.y + 14} fill="#92400e" font-size="9" font-weight="700">Furrow</text>
-											{#each plotGeom.furrowPts as pt}
-												<circle cx={pt.cx} cy={pt.cy} r="8" fill={smColor(pt.value)} stroke="#92400e" stroke-width="1.2"/>
-												<text x={pt.cx} y={pt.cy + 3} text-anchor="middle" fill="#78350f" font-size="7" font-weight="700">{pt.value != null ? fmt(pt.value, 0) : pt.id}</text>
-											{/each}
-										{/if}
-									</svg>
-								</div>
-								<div class="pond-diagram-box">
-									<svg class="pond-svg" viewBox="0 0 300 145" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Plot section">
-										<line x1="12" y1="88" x2="288" y2="88" stroke="#94a3b8" stroke-width="1.2"/>
-										{#if plotGeom.raised}
-											<polygon points="28,88 52,48 88,48 112,88" fill="#bbf7d0" stroke="#166534" stroke-width="1.4"/>
-											<polygon points="112,88 136,108 188,108 212,88" fill="#fde68a" stroke="#b45309" stroke-width="1.4"/>
-											<polygon points="212,88 236,48 272,48 288,88" fill="#bbf7d0" stroke="#166534" stroke-width="1.4"/>
-											<text x="70" y="40" text-anchor="middle" fill="#166534" font-size="9" font-weight="700">Ridge {fmt(calcs.sm_diff_pct != null ? plotGeom.ridgePts.reduce((s,p)=>s+(p.value??0),0)/Math.max(1,plotGeom.ridgePts.filter(p=>p.value!=null).length) : null)} %</text>
-											<text x="162" y="128" text-anchor="middle" fill="#92400e" font-size="9" font-weight="700">Furrow</text>
-											<text x="150" y="22" text-anchor="middle" fill="#14532d" font-size="10" font-weight="700">SM diff {fmt(calcs.sm_diff_pct)} %</text>
-										{:else}
-											<rect x="30" y="70" width="240" height="18" fill="#d9f99d" stroke="#4d7c0f" stroke-width="1.3"/>
-											{#if hasTcPair}
-												<text x="150" y="44" text-anchor="middle" fill="#3f7d3f" font-size="10" font-weight="700">T {fmt(latestT)} %</text>
-												<text x="150" y="60" text-anchor="middle" fill="#2563eb" font-size="10" font-weight="700">C {fmt(latestC)} %</text>
-												<text x="150" y="116" text-anchor="middle" fill="#56646f" font-size="9">Plot-level SM · paired T vs C</text>
-											{:else}
-												<text x="150" y="52" text-anchor="middle" fill="#3f6212" font-size="10" font-weight="700">Flat plot mean SM {fmt(latestSm?.sm_plot_pct)} %</text>
-												<text x="150" y="116" text-anchor="middle" fill="#56646f" font-size="9">Five-point average</text>
-											{/if}
-										{/if}
-									</svg>
-								</div>
-							</div>
-						</div>
-
 						<section class="dash-card chart-card">
 							<div class="panel-head panel-head-spread">
 								<div class="panel-head">
@@ -1438,24 +1393,19 @@
 		overflow: hidden;
 		position: relative;
 	}
-	/* ── Col 1: info panel (identity + meta list + map) ── */
+	/* ── Col 1: plot identity + T/C panels ── */
 	.info-card {
-		flex: 1;
+		flex: 0 0 auto;
 		gap: 0;
 		min-height: 0;
-		overflow: hidden;
+		overflow: visible;
 		display: flex;
 		flex-direction: column;
-	}
-	.map-inline-head {
-		margin-top: 0.25rem;
-		padding-top: 0.4rem;
-		border-top: 1px solid rgba(27, 117, 224, 0.1);
 	}
 	.asset-info-btn {
 		flex: none;
 		align-self: stretch;
-		margin: 0;
+		margin: 0.35rem 0 0;
 		border: 1px solid rgba(22, 101, 52, 0.35);
 		background: #fff;
 		color: #166534;
@@ -1466,13 +1416,6 @@
 		cursor: pointer;
 		text-align: center;
 		line-height: 1.2;
-	}
-	.asset-info-actions {
-		flex: none;
-		display: flex;
-		flex-direction: column;
-		gap: 0.3rem;
-		margin: 0.35rem 0 0.15rem;
 	}
 	.asset-info-btn:hover {
 		background: #f0fdf4;
@@ -1526,14 +1469,19 @@
 	}
 	.info-card .map-frame {
 		flex: 0 0 auto;
-		height: 300px;
-		min-height: 300px;
-		margin-top: 0.15rem;
 	}
-	.map-frame-compact {
-		flex: 0 0 auto;
-		height: 300px;
-		min-height: 300px;
+	.map-col-card {
+		flex: 1 1 0;
+		min-height: 0;
+		display: flex;
+		flex-direction: column;
+		overflow: hidden;
+		padding: 0.45rem 0.55rem 0.4rem;
+	}
+	.map-frame-col {
+		flex: 1 1 auto;
+		min-height: 168px;
+		height: auto;
 	}
 	.map-identity {
 		flex: none;
@@ -1630,9 +1578,9 @@
 		flex: 1;
 		min-height: 0;
 		display: grid;
-		/* info+map | stats (1 per row) | diagrams+charts */
-		grid-template-columns: minmax(12rem, 0.85fr) minmax(13rem, 0.95fr) minmax(0, 1.85fr);
-		gap: 0.35rem;
+		/* info | map+stats | charts (wider leftward) */
+		grid-template-columns: minmax(13rem, 0.85fr) minmax(15rem, 1.15fr) minmax(0, 1.8fr);
+		gap: 0.4rem;
 		align-items: stretch;
 		width: 100%;
 		overflow: hidden;
@@ -1643,10 +1591,10 @@
 		display: flex;
 		flex-direction: column;
 		overflow: hidden;
-		gap: 0.35rem;
+		gap: 0.4rem;
 	}
 	.dash-vis {
-		/* middle column: diagrams card on top, stats card below */
+		gap: 0.4rem;
 	}
 	.dash-card {
 		border-radius: 0.6rem;
@@ -1789,11 +1737,54 @@
 		border: 1.5px solid #fff;
 		box-shadow: 0 0 0 1px rgba(27, 117, 224, 0.35);
 	}
-	/* Diagrams card at top of col 3 */
+	/* Diagrams card in col 1 under pair info — fills leftover height */
 	.dims-row-card {
 		flex: none;
 		display: flex;
 		flex-direction: column;
+	}
+	.dims-col-card {
+		flex: 1 1 0;
+		min-height: 0;
+		padding: 0.4rem 0.5rem 0.45rem;
+		overflow: hidden;
+		gap: 0.35rem;
+	}
+	.dims-col-card .pond-diagrams-row {
+		flex: 1 1 0;
+		min-height: 0;
+		flex-direction: column;
+		height: auto;
+		gap: 0.35rem;
+	}
+	.dims-col-card .pond-diagrams-row .pond-diagram-box {
+		flex: 1 1 0;
+		min-height: 100px;
+		height: auto;
+	}
+	.dims-col-card .panel-head-spread {
+		flex-wrap: wrap;
+		gap: 0.25rem 0.5rem;
+	}
+	.dims-meta {
+		flex: none;
+		margin: 0;
+		padding: 0.15rem 0 0;
+		border-top: 1px solid rgba(27, 117, 224, 0.1);
+	}
+	.viz-disclaimer {
+		margin: 0.2rem 0 0;
+		font-size: 0.65rem;
+		font-style: italic;
+		color: #6b7885;
+		line-height: 1.3;
+		flex: none;
+	}
+	.dims-meta .info-row {
+		padding: 0.35rem 0;
+	}
+	.dash-info {
+		gap: 0.35rem;
 	}
 	.dims-legend {
 		display: flex;
@@ -1863,22 +1854,23 @@
 		display: block;
 	}
 
-	/* Stats card = col 2: one metric per row */
+	/* Stats under map in col 2 — keep readable, scroll if needed */
 	.stats-card {
-		flex: 1;
-		min-height: 0;
+		flex: 1.65 1 0;
+		min-height: 12rem;
 		display: flex;
 		flex-direction: column;
 		overflow: hidden;
-		padding: 0.4rem 0.5rem;
+		padding: 0.5rem 0.6rem;
 	}
 	.pond-metrics {
 		list-style: none;
 		margin: 0;
 		padding: 0;
-		display: flex;
-		flex-direction: column;
-		gap: 0.35rem;
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		grid-template-rows: 1fr 1fr;
+		gap: 0.4rem;
 		flex: 1;
 		min-height: 0;
 		overflow-y: auto;
@@ -1893,13 +1885,14 @@
 		border: 1px solid rgba(27, 117, 224, 0.12);
 		background: #f8fbff;
 		min-height: 0;
-		flex: 1 1 0;
+		min-width: 0;
+		overflow: hidden;
 	}
 	.metric-head {
 		display: flex;
-		align-items: baseline;
-		justify-content: space-between;
-		gap: 0.5rem;
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 0.2rem;
 	}
 	.metric-top {
 		display: flex;
@@ -2097,17 +2090,19 @@
 		-webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='black' d='M5.5 2a3.5 3.5 0 0 1 3.4 2.7A2.8 2.8 0 0 1 12.5 8H4.2A2.2 2.2 0 0 1 2 5.8 2.2 2.2 0 0 1 4.5 3.7 3.5 3.5 0 0 1 5.5 2zM4 10.2 5 13h1.2L5.2 10.2H4zm3 0L8 13h1.2L8.2 10.2H7zm3 0L11 13h1.2l-1-2.8H10z'/%3E%3C/svg%3E");
 	}
 	.pond-metric-label {
-		font-size: 0.7rem;
-		line-height: 1.15;
-		font-weight: 600;
-		color: #56646f;
-		white-space: nowrap;
+		font-size: 0.72rem;
+		line-height: 1.25;
+		font-weight: 650;
+		color: #3b4a58;
+		white-space: normal;
 		overflow: hidden;
-		text-overflow: ellipsis;
+		display: -webkit-box;
+		-webkit-line-clamp: 2;
+		-webkit-box-orient: vertical;
 	}
 	.pond-metric-value {
 		font-size: 1.05rem;
-		line-height: 1.1;
+		line-height: 1.15;
 		font-weight: 700;
 		color: #1a2530;
 		font-variant-numeric: tabular-nums;
@@ -2251,10 +2246,12 @@
 			overflow: visible;
 			min-height: auto;
 		}
-		.info-card .map-frame,
-		.map-frame-compact {
-			min-height: 300px;
-			height: 300px;
+		.map-frame-col {
+			min-height: 192px;
+			height: 192px;
+			flex: none;
+		}
+		.map-col-card {
 			flex: none;
 		}
 		.pond-diagrams-row {
@@ -2274,6 +2271,10 @@
 		}
 		.pond-metrics {
 			overflow: visible;
+			grid-template-rows: auto auto;
+		}
+		.pond-metric {
+			min-height: auto;
 		}
 		.chart-host,
 		.heat-host {
@@ -2328,21 +2329,44 @@
 		color: #1d4ed8;
 	}
 	.pair-name {
-		margin: 0.1rem 0 0.25rem;
+		margin: 0.1rem 0 0.2rem;
 		font-size: 0.82rem;
 		font-weight: 700;
 		color: #0f2744;
 		line-height: 1.25;
 	}
-	.pair-panel .info-list {
+	.pair-meta {
+		margin: 0 0 0.35rem;
 		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.15rem;
 	}
-	.pair-panel .info-row {
-		padding: 0.28rem 0;
+	.pair-meta-row {
+		display: grid;
+		grid-template-columns: minmax(5.5rem, 0.95fr) 1.2fr;
+		gap: 0.35rem 0.5rem;
+		align-items: baseline;
 	}
-	.pair-panel .info-dd {
-		padding-left: 0;
-		font-size: 0.78rem;
+	.pair-meta-row dt {
+		margin: 0;
+		font-size: 0.62rem;
+		font-weight: 700;
+		letter-spacing: 0.02em;
+		text-transform: uppercase;
+		color: #5b6b7a;
+		line-height: 1.3;
+	}
+	.pair-meta-row dd {
+		margin: 0;
+		font-size: 0.74rem;
+		font-weight: 550;
+		color: #1a2530;
+		line-height: 1.3;
+		word-break: break-word;
+	}
+	.pair-panel .asset-info-btn {
+		margin-top: 0;
 	}
 	.dims-swatch-ridge {
 		background: #bbf7d0;

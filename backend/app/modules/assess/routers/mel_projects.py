@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import re
+import time
 
 from pydantic import BaseModel, Field
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import Response
 
 from app.modules.assess.access import (
@@ -20,7 +23,10 @@ from app.modules.assess.access import (
     require_assess_admin,
     require_assess_owner,
 )
-from app.modules.assess.services.collect_qr import build_mel_collect_qr
+from app.modules.assess.services.collect_qr import (
+    assign_mel_forms_to_collect_user,
+    build_mel_collect_qr,
+)
 from app.modules.assess.services.mel_analyses import (
     asset_label_from_answers,
     compute_asset_metrics,
@@ -28,13 +34,10 @@ from app.modules.assess.services.mel_analyses import (
     is_plot_intervention,
 )
 from app.modules.assess.services.mel_catalog import get_intervention
+from app.modules.assess.services.mel_logframe import resolve_selectable_outcomes
 from app.modules.assess.services.mel_mapping_catalog import (
     get_mapping_intervention,
     resolve_mapping_outcomes,
-)
-from app.modules.assess.services.mel_plan_docx import (
-    _apply_question_overrides,
-    build_mel_plan_docx,
 )
 from app.modules.assess.services.odk_submissions import normalize_submissions
 from app.shared.auth import get_current_user
@@ -540,6 +543,7 @@ async def get_mel_form_collect_qr(
     project_id: str,
     plan_id: str,
     xml_form_id: str,
+    background_tasks: BackgroundTasks,
     user: dict = Depends(require_assess_access),
 ):
     """Return an ODK Collect QR payload for a published MEL form."""
@@ -573,11 +577,13 @@ async def get_mel_form_collect_qr(
     client = ODKClient()
     odk_project_id = int(settings.odk_project_id)
     try:
+        # Fast path: build QR from cached app-user token; assign form in background.
         collect_qr = await build_mel_collect_qr(
             client,
             odk_project_id=odk_project_id,
             project_name=project.get("name") or "WELL Labs MEL",
-            xml_form_ids=[xml_form_id],
+            xml_form_ids=[],
+            assign_forms=False,
         )
     except ODKConnectionError:
         raise HTTPException(502, "Could not reach ODK Central. Try again later.")
@@ -585,6 +591,13 @@ async def get_mel_form_collect_qr(
         raise HTTPException(502, "ODK Central authentication failed.")
     except ODKAPIError as exc:
         raise HTTPException(exc.status_code, f"ODK API error: {exc}")
+
+    background_tasks.add_task(
+        assign_mel_forms_to_collect_user,
+        odk_project_id=odk_project_id,
+        app_user_id=int(collect_qr["appUserId"]),
+        xml_form_ids=[xml_form_id],
+    )
 
     return {
         "projectId": project_id,
@@ -999,6 +1012,7 @@ def _cm_stats_from_rows(
 
 
 def _local_cm_rows(plan_id: str, project_id: str) -> list[dict]:
+    """Legacy helper — dashboards no longer use local CM (ODK only)."""
     rows: list[dict] = []
     with db_cursor() as cur:
         cur.execute(
@@ -1051,41 +1065,59 @@ async def _odk_cm_rows(plan_id: str, project_id: str) -> tuple[list[dict], str |
 
     preferred = [f for f in forms if (f.get("package_id") or "") == "cm-mapping"]
     to_fetch = preferred or forms
-
-    client = ODKClient()
     odk_project_id = int(settings.odk_project_id)
-    rows: list[dict] = []
-    last_submission_at: str | None = None
-    for form in to_fetch:
+
+    async def _one(form: dict) -> tuple[list[dict], str | None]:
+        form_client = ODKClient()
         try:
             odata_rows = await _fetch_all_odata_submissions(
-                client, odk_project_id, form["xml_form_id"]
+                form_client, odk_project_id, form["xml_form_id"]
             )
         except Exception:
-            continue
+            return [], None
+        latest: str | None = None
         for raw in odata_rows:
             system = raw.get("__system") if isinstance(raw, dict) else None
             ts = system.get("submissionDate") if isinstance(system, dict) else None
-            if ts and (last_submission_at is None or str(ts) > last_submission_at):
-                last_submission_at = str(ts)
+            if ts and (latest is None or str(ts) > latest):
+                latest = str(ts)
         normalized = normalize_submissions(odata_rows)
-        for sub in normalized.get("rows") or []:
-            if isinstance(sub, dict):
-                rows.append(sub)
+        out = [sub for sub in (normalized.get("rows") or []) if isinstance(sub, dict)]
+        return out, latest
+
+    results = await asyncio.gather(*[_one(f) for f in to_fetch])
+    rows: list[dict] = []
+    last_submission_at: str | None = None
+    for batch, latest in results:
+        rows.extend(batch)
+        if latest and (last_submission_at is None or latest > last_submission_at):
+            last_submission_at = latest
     return rows, last_submission_at
 
 
+# Short in-memory cache so repeat dashboard opens don't re-hit ODK every time.
+_CM_BUNDLE_CACHE: dict[str, tuple[float, list[dict], dict]] = {}
+_CM_BUNDLE_TTL_S = 90.0
+
+
 async def _collect_plan_cm_bundle(plan_id: str, project_id: str) -> tuple[list[dict], dict]:
-    """Prefer ODK CM submissions; fall back to local readings if ODK is empty."""
+    """Load CM submissions from ODK (short TTL cache). No local CM fallback."""
+    cache_key = f"{project_id}:{plan_id}"
+    now = time.monotonic()
+    hit = _CM_BUNDLE_CACHE.get(cache_key)
+    if hit and (now - hit[0]) < _CM_BUNDLE_TTL_S:
+        return hit[1], hit[2]
+
     odk_rows, last_submission_at = await _odk_cm_rows(plan_id, project_id)
     if odk_rows:
-        return odk_rows, _cm_stats_from_rows(
+        stats = _cm_stats_from_rows(
             odk_rows, source="odk", last_submission_at=last_submission_at
         )
-    local = _local_cm_rows(plan_id, project_id)
-    if local:
-        return local, _cm_stats_from_rows(local, source="local")
-    return [], _empty_cm_stats()
+        _CM_BUNDLE_CACHE[cache_key] = (now, odk_rows, stats)
+        return odk_rows, stats
+    empty = _empty_cm_stats()
+    _CM_BUNDLE_CACHE[cache_key] = (now, [], empty)
+    return [], empty
 
 
 async def _collect_plan_cm_submissions(plan_id: str, project_id: str) -> list[dict]:
@@ -1247,32 +1279,144 @@ async def asset_dashboard(
 def export_mel_plan_docx(
     project_id: str, plan_id: str, user: dict = Depends(require_assess_access)
 ):
+    try:
+        from app.modules.assess.services.mel_plan_docx import build_mel_plan_docx
+    except ModuleNotFoundError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "MEL Word export requires python-docx in the API image. "
+                "Rebuild with: docker compose build api && docker compose up -d api"
+            ),
+        ) from exc
+
     project = get_mel_project(project_id)
     plan = get_mel_plan(plan_id, project_id=project_id)
     plan_json = plan.get("plan_json") or {}
     outcome_ids = plan_json.get("outcome_ids") or []
-    outcomes = resolve_mapping_outcomes(plan["intervention_slug"], outcome_ids)
+    outcomes = resolve_selectable_outcomes(plan["intervention_slug"], outcome_ids)
+    # Fall back to mapping CSV outcomes if this intervention has no log-frame doc.
+    if not outcomes:
+        outcomes = resolve_mapping_outcomes(plan["intervention_slug"], outcome_ids)
     intervention = get_mapping_intervention(plan["intervention_slug"])
+    from app.modules.assess.services.mel_logframe import get_logframe_intervention
+
+    lf = get_logframe_intervention(plan["intervention_slug"]) or {}
     intervention_name = (
-        intervention["name"] if intervention else plan["intervention_slug"]
-    )
-    ot_qs = _apply_question_overrides(
-        (intervention or {}).get("one_time_questions") or [],
-        plan_json.get("asset_allocation"),
-    )
-    cm_qs = _apply_question_overrides(
-        (intervention or {}).get("cm_questions") or [],
-        plan_json.get("cm_form"),
+        (intervention or {}).get("name")
+        or lf.get("name")
+        or plan["intervention_slug"]
     )
     content = build_mel_plan_docx(
         project_name=project["name"],
         plan_name=plan["name"],
         intervention_name=intervention_name,
+        intervention_slug=plan["intervention_slug"],
         outcomes=outcomes,
-        one_time_questions=ot_qs,
-        cm_questions=cm_qs,
     )
     filename = f"{plan['name'].replace(' ', '_')}_MEL_plan.docx"
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/{project_id}/export-pdf")
+def export_mel_project_pdf(project_id: str, user: dict = Depends(require_assess_access)):
+    """Export all MEL plans in a project as one PDF (shared prose once)."""
+    try:
+        from app.modules.assess.services.mel_project_pdf import build_mel_project_pdf
+    except ModuleNotFoundError as exc:
+        raise HTTPException(503, f"PDF export unavailable: {exc}") from exc
+
+    project = get_mel_project(project_id)
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                mp.id,
+                mp.project_id,
+                mp.name,
+                mp.intervention_slug,
+                mp.kind,
+                mp.plan_json,
+                mp.created_by,
+                mp.created_at,
+                mp.updated_at
+            FROM mel_plans mp
+            WHERE mp.project_id = %(project_id)s
+              AND COALESCE(mp.kind, 'plan') = 'plan'
+            ORDER BY mp.updated_at ASC
+            """,
+            {"project_id": project_id},
+        )
+        rows = cur.fetchall()
+    plans = [mel_plan_to_dict(row) for row in rows]
+    if not plans:
+        raise HTTPException(400, "No MEL plans to export in this project")
+    try:
+        content = build_mel_project_pdf(project_name=project["name"], plans=plans)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(500, f"Project PDF export failed: {exc}") from exc
+    safe = re.sub(r"[^\w\-]+", "_", project["name"]).strip("_") or "MEL_project"
+    filename = f"{safe}_MEL_plans.pdf"
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/{project_id}/export-docx")
+def export_mel_project_docx(project_id: str, user: dict = Depends(require_assess_access)):
+    """Export all MEL plans in a project as one Word doc (shared prose once)."""
+    try:
+        from app.modules.assess.services.mel_plan_docx import build_mel_project_docx
+    except ModuleNotFoundError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "MEL Word export requires python-docx in the API image. "
+                "Rebuild with: docker compose build api && docker compose up -d api"
+            ),
+        ) from exc
+
+    project = get_mel_project(project_id)
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                mp.id,
+                mp.project_id,
+                mp.name,
+                mp.intervention_slug,
+                mp.kind,
+                mp.plan_json,
+                mp.created_by,
+                mp.created_at,
+                mp.updated_at
+            FROM mel_plans mp
+            WHERE mp.project_id = %(project_id)s
+              AND COALESCE(mp.kind, 'plan') = 'plan'
+            ORDER BY mp.updated_at ASC
+            """,
+            {"project_id": project_id},
+        )
+        rows = cur.fetchall()
+    plans = [mel_plan_to_dict(row) for row in rows]
+    if not plans:
+        raise HTTPException(400, "No MEL plans to export in this project")
+    try:
+        content = build_mel_project_docx(project_name=project["name"], plans=plans)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(500, f"Project Word export failed: {exc}") from exc
+    safe = re.sub(r"[^\w\-]+", "_", project["name"]).strip("_") or "MEL_project"
+    filename = f"{safe}_MEL_plans.docx"
     return Response(
         content=content,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",

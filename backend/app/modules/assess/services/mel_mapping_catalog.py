@@ -13,6 +13,24 @@ from typing import Any
 
 _CSV_PATH = Path(__file__).resolve().parent.parent / "data" / "intervention_mapping.csv"
 
+# Normalize plan / UI slugs onto mapping CSV intervention names.
+_MAPPING_SLUG_ALIASES = {
+    "farm-pond": "farm-pond",
+    "farm_pond": "farm-pond",
+    "farmpond": "farm-pond",
+    "farm-ponds": "farm-pond",
+    "farm-ponds-unlined": "farm-pond",
+    "farm-ponds-lined": "farm-pond",
+    "pmds": "pmds",
+    "pre-monsoon-dry-sowing": "pmds",
+    "pre_monsoon_dry_sowing": "pmds",
+    "raised-bed-farming": "pmds",
+    "raised_bed_farming": "pmds",
+    "bio-mulching": "pmds",  # share PMDS survey fields until a separate mapping exists
+    "biomulching": "pmds",
+}
+
+
 def _slugify(text: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")
     return slug or "item"
@@ -157,20 +175,49 @@ def _has_outcomes_and_indicators(intervention: dict[str, Any]) -> bool:
 
 
 def list_mapping_interventions() -> list[dict[str, Any]]:
-    return [
-        {
+    """Interventions available for new MEL plans / deployments.
+
+    Prefer mapping CSV entries that have outcomes; enrich counts from log-frame
+    docs when present so the UI shows the full selectable set.
+    """
+    from app.modules.assess.services.mel_logframe import (
+        _load_catalog,
+        selectable_outcomes,
+    )
+
+    by_slug: dict[str, dict[str, Any]] = {}
+    for i in load_mapping_catalog()["interventions"]:
+        if not _has_outcomes_and_indicators(i) and not selectable_outcomes(i["slug"]):
+            continue
+        lf_outs = selectable_outcomes(i["slug"])
+        by_slug[i["slug"]] = {
             "slug": i["slug"],
             "name": i["name"],
-            "outcome_count": len(i["outcomes"]),
+            "outcome_count": len(lf_outs) if lf_outs else len(i["outcomes"]),
             "from_mapping": True,
         }
-        for i in load_mapping_catalog()["interventions"]
-        if _has_outcomes_and_indicators(i)
-    ]
+
+    # Include log-frame-only interventions (e.g. bio-mulching before mapping rows exist)
+    for key, base in (_load_catalog().get("interventions") or {}).items():
+        if key in by_slug:
+            continue
+        outs = selectable_outcomes(key)
+        if not outs:
+            continue
+        by_slug[key] = {
+            "slug": key,
+            "name": base.get("name") or key,
+            "outcome_count": len(outs),
+            "from_mapping": False,
+            "from_logframe": True,
+        }
+
+    return sorted(by_slug.values(), key=lambda x: x["name"].lower())
 
 
 def get_mapping_intervention(slug: str) -> dict[str, Any] | None:
-    slug_n = _slugify(slug)
+    raw = (slug or "").strip().lower()
+    slug_n = _MAPPING_SLUG_ALIASES.get(raw) or _slugify(slug)
     for i in load_mapping_catalog()["interventions"]:
         if i["slug"] == slug_n:
             return i

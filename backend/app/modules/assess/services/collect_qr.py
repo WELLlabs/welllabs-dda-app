@@ -22,6 +22,8 @@ logger = logging.getLogger(__name__)
 
 MEL_APP_USER_NAME = "WELL Labs MEL Collect"
 APP_USER_ROLE_NAMES = {"App User", "app user"}
+# Central's built-in App User role is commonly id=2; avoid a /v1/roles round-trip.
+_DEFAULT_APP_USER_ROLE_ID = 2
 
 
 def encode_collect_settings(settings_dict: dict[str, Any]) -> str:
@@ -103,9 +105,9 @@ async def _resolve_app_user_role_id(client: ODKClient) -> int | None:
         roles = await client.get("/v1/roles")
     except ODKAPIError as exc:
         logger.warning("Could not list ODK roles: %s", exc)
-        return None
+        return _DEFAULT_APP_USER_ROLE_ID
     if not isinstance(roles, list):
-        return None
+        return _DEFAULT_APP_USER_ROLE_ID
     for role in roles:
         if not isinstance(role, dict):
             continue
@@ -115,8 +117,7 @@ async def _resolve_app_user_role_id(client: ODKClient) -> int | None:
                 return int(role["id"])
             except (KeyError, TypeError, ValueError):
                 continue
-    # Central's built-in App User role is commonly id=2
-    return 2
+    return _DEFAULT_APP_USER_ROLE_ID
 
 
 async def ensure_mel_app_user(client: ODKClient, odk_project_id: int) -> dict:
@@ -127,6 +128,7 @@ async def ensure_mel_app_user(client: ODKClient, odk_project_id: int) -> dict:
             "appUserId": int(stored["app_user_id"]),
             "token": stored["token"],
             "displayName": stored.get("display_name") or MEL_APP_USER_NAME,
+            "fromCache": True,
         }
 
     created = await client.post(
@@ -145,7 +147,12 @@ async def ensure_mel_app_user(client: ODKClient, odk_project_id: int) -> dict:
         display_name=display_name,
         token=token,
     )
-    return {"appUserId": app_user_id, "token": token, "displayName": display_name}
+    return {
+        "appUserId": app_user_id,
+        "token": token,
+        "displayName": display_name,
+        "fromCache": False,
+    }
 
 
 async def assign_form_to_app_user(
@@ -156,23 +163,41 @@ async def assign_form_to_app_user(
     app_user_id: int,
     role_id: int | None = None,
 ) -> None:
-    role = role_id if role_id is not None else await _resolve_app_user_role_id(client)
-    if role is None:
-        logger.warning("No App User role id; skipping form assignment for %s", xml_form_id)
-        return
+    role = role_id if role_id is not None else _DEFAULT_APP_USER_ROLE_ID
     path = f"/v1/projects/{odk_project_id}/forms/{xml_form_id}/assignments/{role}/{app_user_id}"
     try:
         await client.post(path)
     except ODKAPIError as exc:
-        # Already assigned / conflict is fine
         if getattr(exc, "status_code", None) in (409, 403):
             logger.info("Form assignment skipped (%s): %s", exc.status_code, xml_form_id)
             return
-        # Some Central versions return 409 as generic error text
         msg = str(exc).lower()
         if "already" in msg or "conflict" in msg:
             return
         logger.warning("Form assignment failed for %s: %s", xml_form_id, exc)
+
+
+async def assign_mel_forms_to_collect_user(
+    *,
+    odk_project_id: int,
+    app_user_id: int,
+    xml_form_ids: list[str],
+) -> None:
+    """Best-effort form assignment (safe to run after the QR response is sent)."""
+    if not xml_form_ids:
+        return
+    client = ODKClient()
+    for xml_form_id in xml_form_ids:
+        try:
+            await assign_form_to_app_user(
+                client,
+                odk_project_id=odk_project_id,
+                xml_form_id=xml_form_id,
+                app_user_id=app_user_id,
+                role_id=_DEFAULT_APP_USER_ROLE_ID,
+            )
+        except Exception as exc:
+            logger.warning("Background form assignment failed for %s: %s", xml_form_id, exc)
 
 
 async def build_mel_collect_qr(
@@ -181,21 +206,27 @@ async def build_mel_collect_qr(
     odk_project_id: int,
     project_name: str,
     xml_form_ids: list[str] | None = None,
+    assign_forms: bool = False,
 ) -> dict[str, Any]:
-    """Ensure app user, optionally assign forms, return Collect QR payload + metadata."""
+    """Return Collect QR payload quickly.
+
+    Form assignment hits ODK and is optional — prefer scheduling it via
+    ``assign_mel_forms_to_collect_user`` as a background task so the QR
+    endpoint stays fast when the app user is already cached.
+    """
     if not settings.odk_base_url:
         raise ODKAPIError(503, "ODK_BASE_URL is not configured")
 
     app_user = await ensure_mel_app_user(client, odk_project_id)
-    role_id = await _resolve_app_user_role_id(client)
-    for xml_form_id in xml_form_ids or []:
-        await assign_form_to_app_user(
-            client,
-            odk_project_id=odk_project_id,
-            xml_form_id=xml_form_id,
-            app_user_id=app_user["appUserId"],
-            role_id=role_id,
-        )
+    if assign_forms:
+        for xml_form_id in xml_form_ids or []:
+            await assign_form_to_app_user(
+                client,
+                odk_project_id=odk_project_id,
+                xml_form_id=xml_form_id,
+                app_user_id=app_user["appUserId"],
+                role_id=_DEFAULT_APP_USER_ROLE_ID,
+            )
 
     settings_dict = build_collect_settings(
         token=app_user["token"],

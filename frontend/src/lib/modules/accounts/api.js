@@ -79,9 +79,52 @@ export async function resetPassword(token, password) {
 	});
 }
 
-/** Start Google OAuth (sign-up or sign-in). Full-page navigation sets CSRF cookie reliably. */
-export function startGoogleAuth() {
-	window.location.href = `${API}/auth/google/start`;
+/**
+ * Start Google OAuth (sign-up or sign-in).
+ * Fetches the browser start page first (sets CSRF via the Vite proxy) with a
+ * timeout so a hung API cannot leave the UI stuck on "Redirecting to Google…".
+ * Then navigates to Google with the authorization URL from that response.
+ */
+export async function startGoogleAuth() {
+	const startUrl = `${API}/auth/google/start`;
+	let res;
+	try {
+		res = await fetch(startUrl, {
+			credentials: 'include',
+			signal: AbortSignal.timeout(12_000),
+			headers: { Accept: 'text/html' }
+		});
+	} catch (err) {
+		const timedOut = err?.name === 'TimeoutError' || err?.name === 'AbortError';
+		throw new Error(
+			timedOut
+				? 'Backend timed out starting Google sign-in. Restart the API (cd backend && docker compose restart api) and try again.'
+				: `Could not reach the API to start Google sign-in (${String(err?.message || err)}).`
+		);
+	}
+
+	if (!res.ok) {
+		let detail = `Backend error (${res.status}) starting Google sign-in.`;
+		try {
+			const body = await res.json();
+			if (body?.detail) detail = String(body.detail);
+		} catch {
+			/* ignore non-JSON */
+		}
+		throw new Error(detail);
+	}
+
+	const html = await res.text();
+	const jsMatch = html.match(/window\.location\.replace\(\s*(["'])(.*?)\1\s*\)/);
+	const metaMatch = html.match(/content=["']0;url=([^"']+)["']/i);
+	const authorizationUrl = jsMatch?.[2] || metaMatch?.[1];
+	if (authorizationUrl) {
+		window.location.replace(authorizationUrl);
+		return;
+	}
+
+	// Fallback: full navigation to the start page (sets cookie again, then redirects).
+	window.location.href = startUrl;
 }
 
 /** @deprecated Prefer startGoogleAuth() — authorize endpoint returns JSON, not a redirect. */

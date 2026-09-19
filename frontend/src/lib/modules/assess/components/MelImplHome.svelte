@@ -74,9 +74,14 @@
 				lockIds: ASSET_SELECT_LOCK_IDS
 			});
 			if (isImpl) {
-				dashboard = await fetchImplementationDashboard(project.id, plan.id);
-				const formsRes = await fetchMelPlanForms(project.id, plan.id);
+				const [dash, formsRes] = await Promise.all([
+					fetchImplementationDashboard(project.id, plan.id),
+					fetchMelPlanForms(project.id, plan.id)
+				]);
+				dashboard = dash;
 				forms = formsRes.forms ?? [];
+				loading = false;
+				// QR is secondary — don't block the dashboard on ODK.
 				const form = forms.find((f) => f.packageId === 'cm-mapping') || forms[0];
 				cmQr = null;
 				if (form?.xmlFormId) {
@@ -87,6 +92,7 @@
 						cmQr = null;
 					}
 				}
+				return;
 			}
 		} catch (err) {
 			error = String(err);
@@ -131,9 +137,15 @@
 		return { lat: parts[0], lon: parts[1] };
 	}
 
+	/** Satellite static map (Esri) — OSM.de staticmap is unreliable / blocked. */
 	/** @param {number} lat @param {number} lon */
-	function osmThumbUrl(lat, lon) {
-		return `https://staticmap.openstreetmap.de/staticmap.php?center=${lat},${lon}&zoom=16&size=640x360&maptype=mapnik`;
+	function mapThumbUrl(lat, lon) {
+		const d = 0.006;
+		const bbox = `${lon - d},${lat - d},${lon + d},${lat + d}`;
+		return (
+			'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export' +
+			`?bbox=${encodeURIComponent(bbox)}&bboxSR=4326&imageSR=4326&size=640,360&format=png&f=image`
+		);
 	}
 
 	/** @param {any} ot */
@@ -492,7 +504,17 @@
 									<div class="relative z-10 flex w-full flex-col items-start gap-3">
 										<div class="asset-thumb">
 											{#if loc.lat != null && loc.lon != null}
-												<img src={osmThumbUrl(loc.lat, loc.lon)} alt="" class="asset-map" />
+												<img
+													src={mapThumbUrl(loc.lat, loc.lon)}
+													alt=""
+													class="asset-map"
+													loading="lazy"
+													decoding="async"
+													onerror={(e) => {
+														const el = e.currentTarget;
+														if (el instanceof HTMLImageElement) el.style.display = 'none';
+													}}
+												/>
 											{:else}
 												<div class="asset-map-fallback">No location</div>
 											{/if}

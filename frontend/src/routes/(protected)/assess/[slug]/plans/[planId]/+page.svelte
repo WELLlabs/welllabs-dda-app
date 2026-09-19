@@ -29,6 +29,15 @@
 				return;
 			}
 			plan = await fetchMelPlan(project.id, planId);
+			// MEL plans open in the designer doc view — no intermediate home screen.
+			if (plan && (plan.kind || 'plan') !== 'implementation') {
+				const hasOutcomes = Array.isArray(plan.plan_json?.outcome_ids) && plan.plan_json.outcome_ids.length;
+				const step = hasOutcomes ? 'plan' : '0';
+				await goto(
+					`${itemPath('/assess', project, projects)}/plans/${plan.id}/new?step=${step}`,
+					{ replaceState: true }
+				);
+			}
 		} catch (err) {
 			error = String(err);
 		} finally {
@@ -53,7 +62,7 @@
 				Back to Assess
 			</button>
 		</div>
-	{:else}
+	{:else if (plan.kind || 'plan') === 'implementation'}
 		<MelImplHome {project} {plan} {projects} />
 	{/if}
 </div>
