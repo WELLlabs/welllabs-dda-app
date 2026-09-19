@@ -166,6 +166,13 @@
 		const idx = sections.findIndex((s) => s.id === id);
 		return String(Math.max(idx, 0) + 1).padStart(2, '0');
 	}
+
+	/** In-page jump — avoid href="#id" (resolves to /wst/#id via <base>). */
+	/** @param {MouseEvent} e @param {string} id */
+	function jumpToSection(e, id) {
+		e.preventDefault();
+		document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+	}
 </script>
 
 {#if logframe}
@@ -174,7 +181,11 @@
 			<p class="contents-label">Contents</p>
 			<nav class="doc-nav">
 				{#each sections as s, i}
-					<a href="#{s.id}" class="doc-nav-link">
+					<a
+						href="#{s.id}"
+						class="doc-nav-link"
+						onclick={(e) => jumpToSection(e, s.id)}
+					>
 						<span class="doc-nav-num">{String(i + 1).padStart(2, '0')}</span>
 						{s.label}
 					</a>
