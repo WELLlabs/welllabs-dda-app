@@ -90,7 +90,15 @@ async function proxy(event) {
 	try {
 		// Hung Docker/API processes otherwise leave the browser on
 		// "Redirecting to Google…" forever (no response, no error).
-		res = await fetch(target, { ...init, signal: AbortSignal.timeout(12_000) });
+		// SSE / long jobs (atlas PDF, QField package/sync) need a much longer
+		// budget — AbortSignal.timeout applies to the whole streamed body, and
+		// a 12s cut produces Safari "TypeError: Load failed" mid-export.
+		const path = params.path || '';
+		const wantsStream =
+			path.includes('/stream') ||
+			(request.headers.get('accept') || '').includes('text/event-stream');
+		const timeoutMs = wantsStream ? 15 * 60 * 1000 : 12_000;
+		res = await fetch(target, { ...init, signal: AbortSignal.timeout(timeoutMs) });
 	} catch (err) {
 		const timedOut = err?.name === 'TimeoutError' || err?.name === 'AbortError';
 		const message = timedOut

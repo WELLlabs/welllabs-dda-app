@@ -1,4 +1,4 @@
-"""Concise EPA/ePRA appendix pages (clinton notebook pack, fallback content)."""
+"""Concise EPA/ePRA appendix pages (clinton notebook pack + Problem Diagnosis v2 questions)."""
 
 from __future__ import annotations
 
@@ -24,66 +24,101 @@ EPRA_WISER_GUIDE_PARAGRAPHS = [
     "3. Ask compound questions: what happens, when does it happen, who is affected first, and what changed in the last 5-10 years?",
     "4. Separate location from explanation: ePRA maps where the issue appears; FGD explains why it persists and who carries the burden.",
     "5. Close with a problem register: problem, likely root cause, map evidence, field evidence, people evidence, confidence, and next action.",
+    "6. Working principle: Start broad → diagnose constraints → probe water only if it emerges as a constraint.",
 ]
 
-FIELD_SHEET_ROWS = [
-    ["Field question", "What to ask in the field", "Record"],
+# Problem Diagnosis v2 — columns: Question | What we want to understand | Probe if needed
+FIELD_SHEET_HEADER = ["Question", "What we want to understand", "Probe if needed"]
+
+FIELD_SHEET_QUESTIONS = [
     [
-        "Where are we and who is present?",
-        "Where are we, who is present, and which map clue are we checking?",
-        "Village/hamlet, group, GPS/photo, map layer",
+        "1. Community context: Who is present?",
+        "Who is represented in the discussion, and what people do for a living.",
+        "How many are farmers / non-farmers? What are the main occupations?",
     ],
     [
-        "How many are in agriculture?",
-        "How many households or people are in farming, agricultural labour, sharecropping, or seasonal farm work?",
-        "Households/share, farmer type, labour/sharecropper, season",
+        "2. How many have agriculture as their occupation?",
+        "How important agriculture is to livelihoods in the village.",
+        "Agricultural labour? Sharecropping? Seasonal work?",
     ],
     [
-        "What is the typical landholding size?",
-        "What is the typical landholding size by group, and who has marginal, small, fragmented, or larger holdings?",
-        "Typical size, range, farmer group, tenancy/sharecrop note",
+        "3. What is the typical landholding size?",
+        "How much land farmers hold and whether it is fragmented.",
+        "Small/medium/large? Fragmented holdings?",
     ],
     [
-        "How many have access to irrigation?",
-        "How many farmers have access to irrigation, what source do they use, who is excluded, and when does that source fail?",
-        "Access count/share, source, excluded group, failure month",
+        "4. How many have access to irrigation?",
+        "How widespread irrigation access is.",
+        "What is the source? Canal/well/other?",
     ],
     [
-        "Where are their plots located?",
-        "Where are their plots: upland or lowland, head or tail, near stream/canal, command or non-command, close or distant?",
-        "Plot position, distance, slope/soil clue, head/tail/command status",
+        "5. Where are their plots located?",
+        "Whether location influences access and production.",
+        "Canal command / non-command? Head/middle/tail? Higher / lower elevation?",
     ],
     [
-        "What kind of crops do they grow?",
-        "What crops do they grow in kharif, rabi, and summer, and which crops need assured water?",
-        "Season, crop, water need, crop change",
+        "6. What kind of crops do they grow?",
+        "Which crops farmers grow in each season.",
+        "What do they grow in kharif? What do they grow in rabi? Which crops require irrigation?",
     ],
     [
-        "How does water availability shift choices?",
-        "As water availability changes, which source lasts longest, which fails first, and how do crops, labour, or coping choices shift?",
-        "Source, month, crop/livelihood shift, coping",
+        "7. What is the most common rabi crop?",
+        "The typical rabi crop and its economic outcome.",
+        "What is the revenue per acre? What are the input costs per acre? What is the profit per acre?",
     ],
     [
-        "What is the seasonality of water stress?",
-        "Which months are water secure, stressed, dry, tanker-dependent, well-failure, or recovery months?",
-        "Month calendar, source status, stress period, recovery",
+        "8. What is the most common kharif crop?",
+        "The typical kharif crop and its economic outcome.",
+        "What is the revenue per acre? What are the input costs per acre? What is the profit per acre?",
     ],
     [
-        "Where does rainwater move or recharge?",
-        "When rain falls, where does water run, stand, soak, erode, or disappear?",
-        "Place, sign, season, field photo",
+        "9. What could improve income from farming?",
+        "Move from describing the system to understanding what is holding outcomes back.",
+        "",
     ],
     [
-        "Where does drainage or canal water fail?",
-        "Where does water stand or fail to reach, who is head/tail, and what blocks flow?",
-        "Location, blockage, salinity/waterlogging",
+        "10. Are there other crops that could give better returns?",
+        "Whether better-performing alternatives exist, whether people know about them, and whether it is a knowledge, land or market problem.",
+        "Are there crops that could earn you more money? Why aren't they being cultivated?",
     ],
     [
-        "Who manages water decisions and repairs?",
-        "Who repairs, decides turns or supply, and which past work helped or failed?",
-        "Institution, asset, maintenance issue",
+        "11. What stops you from switching to those crops?",
+        "What makes switching difficult, and what trade-offs farmers see.",
+        "Water? Market? Labour? Risk? Capital?",
+    ],
+    [
+        "12. Ask what is causing the constraint.",
+        "Use follow-up questions to clarify the explanation.",
+        "",
+    ],
+    [
+        "13. If water is the constraint, what exactly is the problem with water?",
+        "Identify the specific nature of the water constraint.",
+        "Reliability? Adequacy? Flexibility?",
+    ],
+    [
+        "14. How does water availability affect farming decisions?",
+        "Understand how water conditions change farmer decisions.",
+        "Which source lasts? Which fails? Do farmers change crops, adjust labour or take other measures when water is short?",
+    ],
+    [
+        "15. When and where does the water system fail?",
+        "Identify when and where the problem occurs.",
+        "Stress months? Source failure? Runoff / recharge? Canal or drainage failure?",
+    ],
+    [
+        "16. Who manages water decisions and repairs?",
+        "Check whether decisions about access, supply and maintenance contribute to the problem.",
+        "Who decides turns / supply? Who maintains? Who gets access?",
+    ],
+    [
+        "17. What do you think the main problem here is? How do you think you can solve it?",
+        "Understand the community's perspective.",
+        "",
     ],
 ]
+
+FIELD_SHEET_ROWS = [FIELD_SHEET_HEADER, *FIELD_SHEET_QUESTIONS]
 
 PROBLEM_REGISTER_ROWS = [
     ["Problem", "Likely cause", "Evidence", "Who affected", "Decision"],
@@ -125,7 +160,15 @@ HYPOTHESIS_SHEET_ROWS = [
 ]
 
 
-def _draw_table(pdf, title: str, subtitle: str, rows: list[list[str]], footer_label: str, page_num: int, col_weights: list[float] | None = None):
+def _draw_table(
+    pdf,
+    title: str,
+    subtitle: str,
+    rows: list[list[str]],
+    footer_label: str,
+    page_num: int,
+    col_weights: list[float] | None = None,
+):
     fig, ax = page_setup()
     report_header(ax, title, subtitle, section="Appendix")
     footer(ax, footer_label, page_num)
@@ -134,7 +177,7 @@ def _draw_table(pdf, title: str, subtitle: str, rows: list[list[str]], footer_la
     rows = [list(r) + [""] * (col_count - len(r)) for r in rows]
     if not col_weights:
         if col_count == 3:
-            col_weights = [0.24, 0.50, 0.26]
+            col_weights = [0.28, 0.40, 0.32]
         elif col_count == 5:
             col_weights = [0.18, 0.20, 0.25, 0.28, 0.09]
         else:
@@ -186,6 +229,41 @@ def _draw_table(pdf, title: str, subtitle: str, rows: list[list[str]], footer_la
         y -= rh
     pdf.savefig(fig)
     plt.close(fig)
+
+
+def _paginate_table_rows(
+    header: list[str],
+    data_rows: list[list[str]],
+    col_weights: list[float],
+    *,
+    available: float = 0.74,
+) -> list[list[list[str]]]:
+    """Split data rows into page chunks that fit under the header."""
+    pages: list[list[list[str]]] = []
+    current: list[list[str]] = []
+    used = 0.048  # header
+
+    def row_height(row: list[str], is_header: bool = False) -> float:
+        max_lines = 1
+        for c_idx, value in enumerate(row):
+            wrap = max(8, int(col_weights[c_idx] * 105))
+            lines = 0
+            for raw in str(value or "").splitlines() or [""]:
+                lines += max(1, len(textwrap.wrap(raw.strip(), width=wrap) or [""]))
+            max_lines = max(max_lines, min(lines, 6))
+        return 0.048 if is_header else min(0.11, max(0.052, 0.018 + max_lines * 0.013))
+
+    for row in data_rows:
+        rh = row_height(row)
+        if current and used + rh > available:
+            pages.append([header, *current])
+            current = []
+            used = 0.048
+        current.append(row)
+        used += rh
+    if current or not pages:
+        pages.append([header, *current])
+    return pages
 
 
 def save_appendix_divider(pdf, scale_name: str, page_num: int):
@@ -251,16 +329,35 @@ def save_epra_method_guide(pdf, page_num: int):
     plt.close(fig)
 
 
-def save_epra_field_sheet(pdf, page_num: int):
-    _draw_table(
-        pdf,
-        "Concise EPA/ePRA Field Sheet",
-        "Use this as a fast field guide. The first column keeps the review inputs visible, but phrases them as natural field questions.",
-        FIELD_SHEET_ROWS,
-        "Concise EPA/ePRA Field Sheet",
-        page_num,
-        col_weights=[0.24, 0.50, 0.26],
+def save_epra_field_sheet(pdf, page_num: int) -> int:
+    """Problem Diagnosis v2 questions as a 3-column table. Returns last page number used."""
+    col_weights = [0.28, 0.40, 0.32]
+    pages = _paginate_table_rows(
+        FIELD_SHEET_HEADER,
+        FIELD_SHEET_QUESTIONS,
+        col_weights,
+        available=0.74,
     )
+    last = page_num
+    for idx, rows in enumerate(pages):
+        if idx:
+            last += 1
+        title = "EPA/ePRA Field Sheet" if idx == 0 else "EPA/ePRA Field Sheet (continued)"
+        subtitle = (
+            "Problem Diagnosis questions. Start broad → diagnose constraints → probe water only if it emerges."
+            if idx == 0
+            else "Continued from previous page."
+        )
+        _draw_table(
+            pdf,
+            title,
+            subtitle,
+            rows,
+            "Problem Diagnosis ePRA field sheet",
+            last,
+            col_weights=col_weights,
+        )
+    return last
 
 
 def save_problem_register(pdf, page_num: int):
@@ -285,7 +382,7 @@ def append_epra_pack(pdf, scale_name: str, start_page: int) -> int:
     page += 1
     save_epra_method_guide(pdf, page)
     page += 1
-    save_epra_field_sheet(pdf, page)
+    page = save_epra_field_sheet(pdf, page)
     page += 1
     save_problem_register(pdf, page)
     return page

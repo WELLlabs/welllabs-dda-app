@@ -256,6 +256,7 @@ CREATE TABLE hypotheses (
     root_cause   TEXT NOT NULL DEFAULT '',
     status       TEXT NOT NULL DEFAULT 'untested'
                  CHECK (status IN ('untested', 'validated', 'invalidated', 'discarded')),
+    landscape_objective_id TEXT NOT NULL DEFAULT '',
     created_by   UUID REFERENCES users(id),
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()

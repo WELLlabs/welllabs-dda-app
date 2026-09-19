@@ -33,6 +33,10 @@ from app.modules.diagnose.services.diagnosis_atlas.clip import (  # noqa: E402
     state_context_names,
 )
 from app.modules.diagnose.services.diagnosis_atlas.climate import load_climate_trend  # noqa: E402
+from app.modules.diagnose.services.landscape_objectives import (  # noqa: E402
+    get_landscape_objective,
+    specific_objectives_for_landscape,
+)
 from app.modules.diagnose.services.diagnosis_atlas.theme import (  # noqa: E402
     FIELD_HANDOFF_ROWS,
     MAP_GUIDE,
@@ -823,23 +827,24 @@ def _save_cover(pdf, project: dict, results: dict, zones: list, hypotheses: list
 def _save_guide(pdf, project: dict, page_num: int):
     fig, ax = page_setup()
     scale = project.get("watershed_name") or project.get("name") or "this watershed"
-    report_header(ax, "Map Section Guide", f"Four map categories used for {scale}.", section="Map Guide")
+    report_header(ax, "Map Section Guide", f"Five map categories used for {scale}.", section="Map Guide")
     footer(ax, "Map categories shown before the map atlas begins", page_num)
     wrapped(
         ax,
-        "Use this guide to read the atlas in order: first locate the area, then read physical water controls, then check who is affected.",
+        "Use this guide to read the atlas in order: locate the area, read observed surface-water dynamics, "
+        "interpret physical controls and outcomes, then check who is affected.",
         0.070,
         0.815,
         width=118,
         fontsize=9.0,
         line_step=0.021,
     )
-    y = 0.720
+    y = 0.695
     for idx, (title, body) in enumerate(MAP_GUIDE, start=1):
-        rounded_panel(ax, 0.070, y - 0.100, 0.860, 0.090, face="panel")
-        ax.text(0.095, y - 0.028, f"{idx}. {title}", fontsize=10.8, color=theme("ink"), fontweight="bold", ha="left", va="top")
-        wrapped(ax, body, 0.095, y - 0.055, width=120, fontsize=7.5, color="muted", line_step=0.015)
-        y -= 0.115
+        rounded_panel(ax, 0.070, y - 0.085, 0.860, 0.078, face="panel")
+        ax.text(0.095, y - 0.026, f"{idx}. {title}", fontsize=10.8, color=theme("ink"), fontweight="bold", ha="left", va="top")
+        wrapped(ax, body, 0.095, y - 0.052, width=132, fontsize=7.5, color="muted", line_step=0.015)
+        y -= 0.105
     ax.text(
         0.070,
         0.115,
@@ -1754,6 +1759,84 @@ def _save_hypotheses_pages(pdf, zones: list, hypotheses: list, page_num: int) ->
     return page_num
 
 
+def _landscape_specific_table_rows(specifics: list[dict], wraps: list[int]) -> list[dict]:
+    rows = []
+    for ri, spec in enumerate(specifics):
+        vals = [
+            spec.get("landscape_id") or "",
+            spec.get("landscape_objective") or "",
+            spec.get("objective_id") or "",
+            spec.get("previous_objective_id") or "",
+            spec.get("specific_objective") or "",
+            spec.get("wiser_dimension") or "",
+        ]
+        rows.append(
+            {
+                "face": "#ffffff" if ri % 2 == 0 else theme("panel_alt"),
+                "cells": [wrap_field(v, wraps[j]) for j, v in enumerate(vals)],
+            }
+        )
+    return rows
+
+
+def _save_landscape_objective_pages(pdf, hypotheses: list, page_num: int) -> int:
+    """Pages listing specific objectives under each selected landscape (L-01…L-08).
+
+    Columns: Landscape ID, Landscape Objective, Objective ID, Previous Objective ID,
+    Specific Objective, WISER Dimension — no Purpose / Intended Outcome or Solution Design X MEL.
+    """
+    headers = [
+        "Landscape ID",
+        "Landscape Objective",
+        "Objective ID",
+        "Prev. ID",
+        "Specific Objective",
+        "WISER",
+    ]
+    col_w = [0.08, 0.20, 0.09, 0.06, 0.32, 0.10]
+    wraps = [8, 22, 10, 6, 36, 12]
+    first = True
+    for h in hypotheses or []:
+        obj = h.get("landscape_objective")
+        if not obj:
+            obj_id = (h.get("landscape_objective_id") or "").strip()
+            obj = get_landscape_objective(obj_id) if obj_id else None
+        if not obj:
+            continue
+
+        landscape_id = obj.get("landscape_id") or obj.get("objective_id")
+        specifics = specific_objectives_for_landscape(landscape_id)
+        if not specifics:
+            continue
+
+        status = str(h.get("status") or "untested").replace("_", " ").title()
+        hyp_text = (h.get("hypothesis") or "").strip() or "Untitled hypothesis"
+        hyp_preview = hyp_text if len(hyp_text) <= 90 else f"{hyp_text[:87]}…"
+        lid = landscape_id or ""
+        lname = obj.get("landscape_objective") or ""
+        subtitle = f"{lid} · {lname} — {status} · {hyp_preview}"
+
+        pages = paginate_rows(_landscape_specific_table_rows(specifics, wraps), available=0.70)
+        for idx, chunk in enumerate(pages):
+            if not first:
+                page_num += 1
+            first = False
+            fig, ax = page_setup()
+            title = "Landscape objective" if idx == 0 else "Landscape objective (continued)"
+            report_header(
+                ax,
+                title,
+                subtitle if idx == 0 else "Continued from previous page.",
+                section="Field Entities",
+            )
+            footer(ax, "Solutions Basket landscape objective", page_num)
+            y = _draw_table_header(ax, headers, col_w, 0.045, 0.84, 0.050)
+            _draw_table_chunk(ax, chunk, col_w, 0.045, y, swatch_cols=set())
+            pdf.savefig(fig)
+            plt.close(fig)
+    return page_num
+
+
 def _draw_stats_panel(ax_bg, stats: dict, *, x: float = 0.755, note: str | None = None):
     if not stats and not note:
         return
@@ -2131,6 +2214,15 @@ def build_atlas_pdf(
         if progress:
             progress.emit(92, "Hypotheses…")
         page = _save_hypotheses_pages(pdf, observation_zones, hypotheses, page)
+
+        if any(
+            (h.get("landscape_objective") or h.get("landscape_objective_id"))
+            for h in (hypotheses or [])
+        ):
+            page += 1
+            if progress:
+                progress.emit(92, "Landscape objectives…")
+            page = _save_landscape_objective_pages(pdf, hypotheses, page)
 
         page += 1
         if progress:

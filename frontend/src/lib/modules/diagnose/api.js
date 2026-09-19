@@ -232,6 +232,14 @@ export async function fetchDemMesh(projectId) {
 	return request(`/layers/dem/mesh?project_id=${encodeURIComponent(projectId)}`);
 }
 
+/** Watershed-clipped GeoJSON for a vector layer (villages, canals, streams, …). */
+export async function fetchVectorLayerData(layerId, projectId, { signal } = {}) {
+	return request(
+		`/layers/vector/${encodeURIComponent(layerId)}/data?project_id=${encodeURIComponent(projectId)}`,
+		{ signal, retries: 1, retryDelayMs: 700 }
+	);
+}
+
 /** Plotly surfacecolor grid for draping a layer on the DEM mesh. */
 export async function fetchLayerDrapeGrid(layerId, projectId) {
 	return request(
@@ -332,6 +340,11 @@ export async function deleteFieldNote(id) {
 export async function fetchHypotheses(projectId) {
 	const data = await request(`/hypotheses?project_id=${encodeURIComponent(projectId)}`);
 	return data.hypotheses ?? [];
+}
+
+export async function fetchLandscapeObjectives() {
+	const data = await request('/hypotheses/landscape-objectives');
+	return data.objectives ?? [];
 }
 
 export async function createHypothesis(projectId, hypothesis, observationZoneIds) {
@@ -435,6 +448,7 @@ export async function exportDiagnosisPdfStream(projectId, handlers = {}) {
 		`${API}/projects/${encodeURIComponent(projectId)}/export-pdf/stream`,
 		{
 			method: 'POST',
+			credentials: 'include',
 			headers: {
 				Accept: 'text/event-stream'
 			},
