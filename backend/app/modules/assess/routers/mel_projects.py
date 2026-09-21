@@ -399,13 +399,9 @@ def delete_mel_plan(
 async def list_mel_plan_forms(
     project_id: str, plan_id: str, user: dict = Depends(require_assess_access)
 ):
+    """List published forms for a plan (DB only — no ODK round-trip)."""
     get_mel_project(project_id)
     get_mel_plan(plan_id, project_id=project_id)
-    # Point Collect QR at the ODK form that actually has farm-pond CM rows.
-    try:
-        await ensure_plan_cm_form_linked(plan_id, project_id)
-    except Exception:
-        logger.exception("CM form relink failed for plan %s", plan_id)
     with db_cursor() as cur:
         cur.execute(
             """
@@ -470,21 +466,30 @@ def list_mel_project_forms(project_id: str, user: dict = Depends(require_assess_
     }
 
 
-async def _fetch_all_odata_submissions(client: ODKClient, odk_project_id: int, xml_form_id: str) -> list[dict]:
-    """Page OData Submissions until exhausted (cap pages for safety)."""
+async def _fetch_all_odata_submissions(
+    client: ODKClient,
+    odk_project_id: int,
+    xml_form_id: str,
+    *,
+    top: int | None = None,
+) -> list[dict]:
+    """Page OData Submissions until exhausted (or until ``top`` rows if set)."""
     path = f"/v1/projects/{odk_project_id}/forms/{xml_form_id}.svc/Submissions"
     rows: list[dict] = []
     skip = 0
-    page_size = 500
+    page_size = min(500, top) if top is not None else 500
     max_pages = 40
     for _ in range(max_pages):
-        payload = await client.get(path, params={"$top": page_size, "$skip": skip})
+        params: dict[str, int] = {"$top": page_size, "$skip": skip}
+        payload = await client.get(path, params=params)
         if not isinstance(payload, dict):
             break
         batch = payload.get("value")
         if not isinstance(batch, list):
             break
         rows.extend(item for item in batch if isinstance(item, dict))
+        if top is not None and len(rows) >= top:
+            return rows[:top]
         if len(batch) < page_size:
             break
         skip += page_size
@@ -583,32 +588,27 @@ async def get_mel_form_collect_qr(
         raise HTTPException(404, "Form not found on this MEL plan")
 
     use_form_id = str(form_row["xml_form_id"])
+    # Prefer the already-linked cm-mapping row from DB (no ODK verify on QR path).
     if (form_row.get("package_id") or "") == "cm-mapping":
-        try:
-            linked = await ensure_plan_cm_form_linked(plan_id, project_id)
-        except Exception:
-            logger.exception("CM form relink failed for plan %s", plan_id)
-            linked = None
-        if linked:
-            use_form_id = linked
-            with db_cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT id, xml_form_id, name, package_title, package_id
-                    FROM mel_forms
-                    WHERE project_id = %(project_id)s
-                      AND plan_id = %(plan_id)s
-                      AND xml_form_id = %(xml_form_id)s
-                    """,
-                    {
-                        "project_id": project_id,
-                        "plan_id": plan_id,
-                        "xml_form_id": use_form_id,
-                    },
-                )
-                linked_row = cur.fetchone()
-            if linked_row:
-                form_row = linked_row
+        with db_cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, xml_form_id, name, package_title, package_id
+                FROM mel_forms
+                WHERE project_id = %(project_id)s
+                  AND plan_id = %(plan_id)s
+                  AND package_id = 'cm-mapping'
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                {"project_id": project_id, "plan_id": plan_id},
+            )
+            cm_row = cur.fetchone()
+        if cm_row and cm_row.get("xml_form_id"):
+            use_form_id = str(cm_row["xml_form_id"])
+            form_row = cm_row
+        # Relink empty/wrong CM forms in the background — don't block Collect QR.
+        background_tasks.add_task(_ensure_plan_cm_form_linked_safe, plan_id, project_id)
 
     client = ODKClient()
     odk_project_id = int(settings.odk_project_id)
@@ -1177,21 +1177,16 @@ def _matched_cm_count(rows: list[dict], known_asset_ids: set[str]) -> int:
     return n
 
 
-async def _fetch_one_odk_form_cm(
-    xml_form_id: str, odk_project_id: int
-) -> tuple[list[dict], str | None]:
-    form_client = ODKClient()
-    try:
-        odata_rows = await _fetch_all_odata_submissions(
-            form_client, odk_project_id, xml_form_id
-        )
-    except Exception:
-        logger.exception(
-            "ODK CM fetch failed for form %s (project %s)",
-            xml_form_id,
-            odk_project_id,
-        )
-        return [], None
+# --- ODK CM caches (process-local; avoid multi-second Central round-trips) ---
+_CM_BUNDLE_CACHE: dict[str, tuple[float, list[dict], dict]] = {}
+_CM_BUNDLE_TTL_S = 300.0
+_ODK_SUBMISSIONS_CACHE: dict[str, tuple[float, list[dict], str | None]] = {}
+_ODK_SUBMISSIONS_TTL_S = 300.0
+_CM_LINK_CACHE: dict[str, tuple[float, str | None]] = {}
+_CM_LINK_TTL_S = 900.0
+
+
+def _normalize_odk_rows(odata_rows: list[dict]) -> tuple[list[dict], str | None]:
     latest: str | None = None
     for raw in odata_rows:
         system = raw.get("__system") if isinstance(raw, dict) else None
@@ -1200,6 +1195,38 @@ async def _fetch_one_odk_form_cm(
             latest = str(ts)
     normalized = normalize_submissions(odata_rows)
     out = [sub for sub in (normalized.get("rows") or []) if isinstance(sub, dict)]
+    return out, latest
+
+
+async def _fetch_one_odk_form_cm(
+    xml_form_id: str,
+    odk_project_id: int,
+    *,
+    sample: int | None = None,
+    use_cache: bool = True,
+) -> tuple[list[dict], str | None]:
+    """Fetch CM rows for one form. ``sample`` limits to a cheap probe ($top=N)."""
+    cache_key = f"{odk_project_id}:{xml_form_id}"
+    if use_cache and sample is None:
+        hit = _ODK_SUBMISSIONS_CACHE.get(cache_key)
+        if hit and (time.monotonic() - hit[0]) < _ODK_SUBMISSIONS_TTL_S:
+            return hit[1], hit[2]
+
+    form_client = ODKClient()
+    try:
+        odata_rows = await _fetch_all_odata_submissions(
+            form_client, odk_project_id, xml_form_id, top=sample
+        )
+    except Exception:
+        logger.exception(
+            "ODK CM fetch failed for form %s (project %s)",
+            xml_form_id,
+            odk_project_id,
+        )
+        return [], None
+    out, latest = _normalize_odk_rows(odata_rows)
+    if use_cache and sample is None:
+        _ODK_SUBMISSIONS_CACHE[cache_key] = (time.monotonic(), out, latest)
     return out, latest
 
 
@@ -1223,6 +1250,13 @@ def _cm_form_discovery_score(xml_form_id: str, name: str, *, intervention_slug: 
     return score
 
 
+def _looks_like_seeded_cm_form(xml_form_id: str, intervention_slug: str) -> bool:
+    """True when the linked form id is already the seeded CM form pattern."""
+    return _cm_form_discovery_score(
+        xml_form_id, "", intervention_slug=intervention_slug
+    ) >= 100
+
+
 async def _discover_odk_cm_rows(
     *,
     known_asset_ids: set[str],
@@ -1233,8 +1267,7 @@ async def _discover_odk_cm_rows(
     """Find an ODK form whose submissions match this plan's pond coordinates.
 
     Returns (rows, latest_submission_at, xml_form_id, form_name).
-    Beta often has a republished empty CM form while the seeded Medak readings
-    live on an earlier xmlFormId in the same ODK project.
+    Probes with a small $top sample before downloading the full series.
     """
     if settings.odk_project_id is None or not assets_by_coord:
         return [], None, None, None
@@ -1265,9 +1298,17 @@ async def _discover_odk_cm_rows(
     ranked.sort(key=lambda item: (-item[0], item[1]))
 
     for _score, fid, name in ranked[:8]:
-        rows, latest = await _fetch_one_odk_form_cm(fid, odk_project_id)
-        if not rows:
+        sample_rows, _sample_latest = await _fetch_one_odk_form_cm(
+            fid, odk_project_id, sample=15, use_cache=False
+        )
+        if not sample_rows:
             continue
+        remapped_sample = remap_odk_cm_to_plan_assets(
+            sample_rows, known_asset_ids=known_asset_ids, assets_by_coord=assets_by_coord
+        )
+        if _matched_cm_count(remapped_sample, known_asset_ids) == 0:
+            continue
+        rows, latest = await _fetch_one_odk_form_cm(fid, odk_project_id)
         remapped = remap_odk_cm_to_plan_assets(
             rows, known_asset_ids=known_asset_ids, assets_by_coord=assets_by_coord
         )
@@ -1347,9 +1388,18 @@ def _link_plan_cm_form(
 
 
 async def ensure_plan_cm_form_linked(plan_id: str, project_id: str) -> str | None:
-    """Ensure cm-mapping QR/form id is the ODK form that holds matching CM rows."""
+    """Ensure cm-mapping QR/form id is the ODK form that holds matching CM rows.
+
+    Fast paths avoid full OData downloads: in-memory link cache, seeded form-id
+    patterns, then a tiny $top sample before any discovery.
+    """
     if settings.odk_project_id is None:
         return None
+
+    cache_key = f"{project_id}:{plan_id}"
+    link_hit = _CM_LINK_CACHE.get(cache_key)
+    if link_hit and (time.monotonic() - link_hit[0]) < _CM_LINK_TTL_S:
+        return link_hit[1]
 
     known, by_coord = _plan_asset_coord_index(plan_id, project_id)
     with db_cursor() as cur:
@@ -1376,18 +1426,26 @@ async def ensure_plan_cm_form_linked(plan_id: str, project_id: str) -> str | Non
     intervention_slug = str(plan_row.get("intervention_slug") or "")
     current_id = str(current["xml_form_id"]) if current and current.get("xml_form_id") else None
 
+    def _remember(fid: str | None) -> str | None:
+        _CM_LINK_CACHE[cache_key] = (time.monotonic(), fid)
+        return fid
+
+    # Already pointing at the seeded farm_pond_cm / pmds_cm form — trust DB.
+    if current_id and _looks_like_seeded_cm_form(current_id, intervention_slug):
+        return _remember(current_id)
+
     if current_id and by_coord:
-        rows, _latest = await _fetch_one_odk_form_cm(
-            current_id, int(settings.odk_project_id)
+        sample, _ = await _fetch_one_odk_form_cm(
+            current_id, int(settings.odk_project_id), sample=15, use_cache=False
         )
         remapped = remap_odk_cm_to_plan_assets(
-            rows, known_asset_ids=known, assets_by_coord=by_coord
+            sample, known_asset_ids=known, assets_by_coord=by_coord
         )
         if _matched_cm_count(remapped, known) > 0:
-            return current_id
+            return _remember(current_id)
 
     if not by_coord:
-        return current_id
+        return _remember(current_id)
 
     exclude = {current_id} if current_id else set()
     _rows, _latest, discovered_id, discovered_name = await _discover_odk_cm_rows(
@@ -1397,7 +1455,6 @@ async def ensure_plan_cm_form_linked(plan_id: str, project_id: str) -> str | Non
         exclude_form_ids=exclude,
     )
     if not discovered_id:
-        # Also try without excluding current (in case current had rows we failed to match)
         _rows, _latest, discovered_id, discovered_name = await _discover_odk_cm_rows(
             known_asset_ids=known,
             assets_by_coord=by_coord,
@@ -1411,10 +1468,16 @@ async def ensure_plan_cm_form_linked(plan_id: str, project_id: str) -> str | Non
             xml_form_id=discovered_id,
             name=discovered_name or discovered_id,
         )
-        # Drop cached CM bundle so dashboard picks up the linked form.
-        _CM_BUNDLE_CACHE.pop(f"{project_id}:{plan_id}", None)
-        return discovered_id
-    return discovered_id or current_id
+        _CM_BUNDLE_CACHE.pop(cache_key, None)
+        return _remember(discovered_id)
+    return _remember(discovered_id or current_id)
+
+
+async def _ensure_plan_cm_form_linked_safe(plan_id: str, project_id: str) -> None:
+    try:
+        await ensure_plan_cm_form_linked(plan_id, project_id)
+    except Exception:
+        logger.exception("Background CM form relink failed for plan %s", plan_id)
 
 
 async def _odk_cm_rows(plan_id: str, project_id: str) -> tuple[list[dict], str | None, set[str]]:
@@ -1459,13 +1522,8 @@ async def _odk_cm_rows(plan_id: str, project_id: str) -> tuple[list[dict], str |
     return rows, last_submission_at, fetched_ids
 
 
-# Short in-memory cache so repeat dashboard opens don't re-hit ODK every time.
-_CM_BUNDLE_CACHE: dict[str, tuple[float, list[dict], dict]] = {}
-_CM_BUNDLE_TTL_S = 90.0
-
-
 async def _collect_plan_cm_bundle(plan_id: str, project_id: str) -> tuple[list[dict], dict]:
-    """Load CM submissions from ODK (short TTL cache). No local CM fallback."""
+    """Load CM submissions from ODK (cached). No local CM fallback."""
     cache_key = f"{project_id}:{plan_id}"
     now = time.monotonic()
     hit = _CM_BUNDLE_CACHE.get(cache_key)
@@ -1509,10 +1567,16 @@ async def _collect_plan_cm_bundle(plan_id: str, project_id: str) -> tuple[list[d
                     xml_form_id=discovered_id,
                     name=discovered_name or discovered_id,
                 )
+                _CM_LINK_CACHE[cache_key] = (now, discovered_id)
             except Exception:
                 logger.exception(
                     "Failed to link CM form %s for plan %s", discovered_id, plan_id
                 )
+    elif odk_rows and fetched_ids:
+        # Remember the working linked form so QR/forms stay off the ODK hot path.
+        linked_id = next(iter(fetched_ids), None)
+        if linked_id and _looks_like_seeded_cm_form(linked_id, intervention_slug):
+            _CM_LINK_CACHE[cache_key] = (now, linked_id)
 
     if odk_rows and _matched_cm_count(odk_rows, known) > 0:
         stats = _cm_stats_from_rows(
