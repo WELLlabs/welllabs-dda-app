@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Seed Medak MEL sample project from medak.csv.
 
-Assets stay in MEL. Continuous-monitoring rows are written to mel_cm_readings
-(dashboard fallback) and, when a CM form is published, also posted to ODK.
+Assets stay in MEL. Continuous-monitoring rows are posted to the plan's
+published ODK CM form — they are not stored in mel_cm_readings.
+
+Provide the CSV via MEDAK_CSV or place medak.csv at the repo root (gitignored).
 """
 
 from __future__ import annotations
@@ -32,13 +34,12 @@ def _csv_path() -> Path:
         return Path(env)
     here = Path(__file__).resolve().parent
     for candidate in (
-        here / "data" / "medak.csv",
         here.parent.parent.parent / "medak.csv",
         Path.cwd() / "medak.csv",
     ):
         if candidate.is_file():
             return candidate
-    return here / "data" / "medak.csv"
+    return here.parent.parent.parent / "medak.csv"
 
 
 CSV_PATH = _csv_path()
@@ -478,65 +479,6 @@ async def push_cm_to_odk(ctx: dict) -> int:
     return submitted + skipped + len(existing_ids)
 
 
-def seed_local_cm(ctx: dict) -> int:
-    """Upsert medak.csv CM rows into mel_cm_readings for dashboard fallback."""
-    import psycopg
-    from psycopg.types.json import Jsonb
-
-    project_id = ctx["project_id"]
-    plan_id = ctx["plan_id"]
-    inserted = 0
-    with psycopg.connect(DATABASE_URL) as conn:
-        with conn.cursor() as cur:
-            if SQL_PATH.is_file():
-                cur.execute(SQL_PATH.read_text())
-            # Replace existing sample readings for these assets so re-runs stay idempotent.
-            asset_ids = [a["id"] for a in ctx["assets"]]
-            if asset_ids:
-                cur.execute(
-                    """
-                    DELETE FROM mel_cm_readings
-                    WHERE plan_id = %s AND project_id = %s AND asset_id = ANY(%s::uuid[])
-                    """,
-                    (plan_id, project_id, asset_ids),
-                )
-            for asset in ctx["assets"]:
-                for row in asset["rows"]:
-                    d = _parse_date(row.get("Date of reading"))
-                    rain = _num(row.get("Rainfall (mm)"))
-                    wl = _num(row.get("Water level (m)"))
-                    if d is None and rain is None and wl is None:
-                        continue
-                    payload = {
-                        "fp_cm_select_the_asset_id": asset["id"],
-                        "fp_cm_date_of_reading": d.isoformat() if d else None,
-                        "fp_cm_rainfall": rain,
-                        "fp_cm_staff_gauge_reading": wl,
-                        "fp_cm_water_source": ["Rainfall"],
-                    }
-                    cur.execute(
-                        """
-                        INSERT INTO mel_cm_readings (
-                            id, project_id, plan_id, asset_id, reading_date,
-                            rainfall_mm, water_level_m, payload
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                        """,
-                        (
-                            str(uuid.uuid4()),
-                            project_id,
-                            plan_id,
-                            asset["id"],
-                            d,
-                            rain,
-                            wl,
-                            Jsonb(payload),
-                        ),
-                    )
-                    inserted += 1
-        conn.commit()
-    return inserted
-
-
 def delete_local_readings(plan_id: str, project_id: str) -> int:
     import psycopg
 
@@ -556,7 +498,10 @@ def delete_local_readings(plan_id: str, project_id: str) -> int:
 
 def main():
     if not CSV_PATH.is_file():
-        raise SystemExit(f"Missing {CSV_PATH}")
+        raise SystemExit(
+            f"Missing {CSV_PATH}. Set MEDAK_CSV to the sample CSV path "
+            "(file is gitignored; keep it outside the repo or at the repo root)."
+        )
 
     ponds = load_ponds()
     ctx = seed_db(ponds)
@@ -566,14 +511,14 @@ def main():
     print(f"  assets={[a['id'] for a in ctx['assets']]}")
     print(f"  xml_form_id={ctx.get('xml_form_id')}")
 
-    local_n = seed_local_cm(ctx)
-    print(f"  local mel_cm_readings={local_n}")
+    if not ctx.get("xml_form_id"):
+        raise SystemExit(
+            "No published CM form on this plan. Publish from Edit forms, then re-run this seed."
+        )
 
-    try:
-        posted = asyncio.run(push_cm_to_odk(ctx))
-        print(f"  ODK submissions processed={posted}")
-    except Exception as exc:
-        print(f"  ODK push skipped/failed (local CM still available): {exc}", file=sys.stderr)
+    posted = asyncio.run(push_cm_to_odk(ctx))
+    deleted = delete_local_readings(ctx["plan_id"], ctx["project_id"])
+    print(f"Cleared {deleted} local mel_cm_readings rows (ODK submissions={posted})")
 
 
 if __name__ == "__main__":

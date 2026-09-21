@@ -1012,7 +1012,7 @@ def _cm_stats_from_rows(
 
 
 def _local_cm_rows(plan_id: str, project_id: str) -> list[dict]:
-    """Sample / offline CM rows from mel_cm_readings (used when ODK is empty)."""
+    """Legacy helper — dashboards use ODK only."""
     rows: list[dict] = []
     with db_cursor() as cur:
         cur.execute(
@@ -1101,7 +1101,7 @@ _CM_BUNDLE_TTL_S = 90.0
 
 
 async def _collect_plan_cm_bundle(plan_id: str, project_id: str) -> tuple[list[dict], dict]:
-    """Load CM from ODK when present; fall back to mel_cm_readings for sample data."""
+    """Load CM submissions from ODK (short TTL cache). No local CM fallback."""
     cache_key = f"{project_id}:{plan_id}"
     now = time.monotonic()
     hit = _CM_BUNDLE_CACHE.get(cache_key)
@@ -1115,13 +1115,6 @@ async def _collect_plan_cm_bundle(plan_id: str, project_id: str) -> tuple[list[d
         )
         _CM_BUNDLE_CACHE[cache_key] = (now, odk_rows, stats)
         return odk_rows, stats
-
-    local_rows = _local_cm_rows(plan_id, project_id)
-    if local_rows:
-        stats = _cm_stats_from_rows(local_rows, source="local")
-        _CM_BUNDLE_CACHE[cache_key] = (now, local_rows, stats)
-        return local_rows, stats
-
     empty = _empty_cm_stats()
     _CM_BUNDLE_CACHE[cache_key] = (now, [], empty)
     return [], empty

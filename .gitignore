@@ -45,6 +45,9 @@ indicators_mel_usable.csv
 indicators MEL.csv
 frontend/static/indicators_mel.csv
 frontend/static/outcomes_indicators.csv
+medak.csv
+medak-pmds.csv
+backend/db/migrations/data/
 
 # OS
 .DS_Store
