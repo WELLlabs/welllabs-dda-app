@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import time
 
@@ -11,6 +12,8 @@ from pydantic import BaseModel, Field
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import Response
+
+logger = logging.getLogger(__name__)
 
 from app.modules.assess.access import (
     assess_access_where,
@@ -39,7 +42,7 @@ from app.modules.assess.services.mel_mapping_catalog import (
     get_mapping_intervention,
     resolve_mapping_outcomes,
 )
-from app.modules.assess.services.odk_submissions import normalize_submissions
+from app.modules.assess.services.odk_submissions import normalize_submissions, parse_geopoint
 from app.shared.auth import get_current_user
 from app.shared.config import settings
 from app.shared.database import db_cursor
@@ -1045,6 +1048,87 @@ def _local_cm_rows(plan_id: str, project_id: str) -> list[dict]:
     return rows
 
 
+def _coord_key(lat: float | str, lon: float | str) -> tuple[str, str] | None:
+    try:
+        return f"{float(lat):.5f}", f"{float(lon):.5f}"
+    except (TypeError, ValueError):
+        return None
+
+
+def _coord_key_from_location(loc: str | None) -> tuple[str, str] | None:
+    parts = [p.strip() for p in str(loc or "").replace(",", " ").split() if p.strip()]
+    if len(parts) < 2:
+        return None
+    return _coord_key(parts[0], parts[1])
+
+
+def _plan_asset_coord_index(plan_id: str, project_id: str) -> tuple[set[str], dict[tuple[str, str], str]]:
+    """Return (known_asset_ids, coord_key -> asset_id) for a MEL plan."""
+    known: set[str] = set()
+    by_coord: dict[tuple[str, str], str] = {}
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, ot_answers
+            FROM mel_assets
+            WHERE plan_id = %(plan_id)s AND project_id = %(project_id)s
+            """,
+            {"plan_id": plan_id, "project_id": project_id},
+        )
+        for asset in cur.fetchall():
+            aid = str(asset["id"])
+            known.add(aid)
+            ot = asset.get("ot_answers") or {}
+            if not isinstance(ot, dict):
+                continue
+            key = _coord_key_from_location(
+                ot.get("fp_ot_location") or ot.get("bm_ot_location") or ""
+            )
+            if key and key not in by_coord:
+                by_coord[key] = aid
+    return known, by_coord
+
+
+def remap_odk_cm_to_plan_assets(
+    rows: list[dict],
+    *,
+    known_asset_ids: set[str],
+    assets_by_coord: dict[tuple[str, str], str],
+) -> list[dict]:
+    """Rewrite CM asset-select fields so ODK rows match this plan's asset UUIDs.
+
+    Sample Medak submissions were posted with one environment's asset IDs; beta
+    has different UUIDs for the same ponds. Match by lat/lon when the stored
+    select id is foreign to this plan.
+    """
+    if not rows or not assets_by_coord:
+        return rows
+    out: list[dict] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        r = dict(row)
+        sel = str(
+            r.get("fp_cm_select_the_asset_id")
+            or r.get("bm_cm_select_the_asset_id")
+            or ""
+        ).strip()
+        if sel and sel in known_asset_ids:
+            out.append(r)
+            continue
+        lat, lon = parse_geopoint(r.get("coordinates"))
+        if lat is None or lon is None:
+            # Some OData payloads split lat/lon; try those next.
+            lat, lon = r.get("lat"), r.get("lon")
+        key = _coord_key(lat, lon) if lat is not None and lon is not None else None
+        mapped = assets_by_coord.get(key) if key else None
+        if mapped:
+            r["fp_cm_select_the_asset_id"] = mapped
+            r["bm_cm_select_the_asset_id"] = mapped
+        out.append(r)
+    return out
+
+
 async def _odk_cm_rows(plan_id: str, project_id: str) -> tuple[list[dict], str | None]:
     if settings.odk_project_id is None:
         return [], None
@@ -1074,6 +1158,11 @@ async def _odk_cm_rows(plan_id: str, project_id: str) -> tuple[list[dict], str |
                 form_client, odk_project_id, form["xml_form_id"]
             )
         except Exception:
+            logger.exception(
+                "ODK CM fetch failed for form %s (project %s)",
+                form.get("xml_form_id"),
+                odk_project_id,
+            )
             return [], None
         latest: str | None = None
         for raw in odata_rows:
@@ -1110,6 +1199,10 @@ async def _collect_plan_cm_bundle(plan_id: str, project_id: str) -> tuple[list[d
 
     odk_rows, last_submission_at = await _odk_cm_rows(plan_id, project_id)
     if odk_rows:
+        known, by_coord = _plan_asset_coord_index(plan_id, project_id)
+        odk_rows = remap_odk_cm_to_plan_assets(
+            odk_rows, known_asset_ids=known, assets_by_coord=by_coord
+        )
         stats = _cm_stats_from_rows(
             odk_rows, source="odk", last_submission_at=last_submission_at
         )
