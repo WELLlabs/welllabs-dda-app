@@ -1129,9 +1129,127 @@ def remap_odk_cm_to_plan_assets(
     return out
 
 
-async def _odk_cm_rows(plan_id: str, project_id: str) -> tuple[list[dict], str | None]:
-    if settings.odk_project_id is None:
+def _matched_cm_count(rows: list[dict], known_asset_ids: set[str]) -> int:
+    n = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        sel = str(
+            row.get("fp_cm_select_the_asset_id")
+            or row.get("bm_cm_select_the_asset_id")
+            or ""
+        ).strip()
+        if sel and sel in known_asset_ids:
+            n += 1
+    return n
+
+
+async def _fetch_one_odk_form_cm(
+    xml_form_id: str, odk_project_id: int
+) -> tuple[list[dict], str | None]:
+    form_client = ODKClient()
+    try:
+        odata_rows = await _fetch_all_odata_submissions(
+            form_client, odk_project_id, xml_form_id
+        )
+    except Exception:
+        logger.exception(
+            "ODK CM fetch failed for form %s (project %s)",
+            xml_form_id,
+            odk_project_id,
+        )
         return [], None
+    latest: str | None = None
+    for raw in odata_rows:
+        system = raw.get("__system") if isinstance(raw, dict) else None
+        ts = system.get("submissionDate") if isinstance(system, dict) else None
+        if ts and (latest is None or str(ts) > latest):
+            latest = str(ts)
+    normalized = normalize_submissions(odata_rows)
+    out = [sub for sub in (normalized.get("rows") or []) if isinstance(sub, dict)]
+    return out, latest
+
+
+def _cm_form_discovery_score(xml_form_id: str, name: str, *, intervention_slug: str) -> int:
+    fid = (xml_form_id or "").lower()
+    label = (name or "").lower()
+    slug = (intervention_slug or "").lower()
+    score = 0
+    if "farm-pond" in slug or "farm_pond" in slug or slug in {"farmpond", "farm-ponds"}:
+        if "farm_pond_cm" in fid:
+            score += 100
+        if "farm pond" in label and "cm" in label:
+            score += 40
+    if "pmds" in slug:
+        if "pmds_cm" in fid:
+            score += 100
+        if "pmds" in label and "cm" in label:
+            score += 40
+    if score == 0 and ("_cm_" in fid or fid.endswith("_cm") or "continuous" in label):
+        score += 5
+    return score
+
+
+async def _discover_odk_cm_rows(
+    *,
+    known_asset_ids: set[str],
+    assets_by_coord: dict[tuple[str, str], str],
+    intervention_slug: str,
+    exclude_form_ids: set[str],
+) -> tuple[list[dict], str | None]:
+    """Find an ODK form whose submissions match this plan's pond coordinates.
+
+    Beta often has a republished empty CM form while the seeded Medak readings
+    live on an earlier xmlFormId in the same ODK project.
+    """
+    if settings.odk_project_id is None or not assets_by_coord:
+        return [], None
+    odk_project_id = int(settings.odk_project_id)
+    client = ODKClient()
+    try:
+        forms = await client.get(f"/v1/projects/{odk_project_id}/forms")
+    except Exception:
+        logger.exception("ODK form list failed during CM discovery")
+        return [], None
+    if not isinstance(forms, list):
+        return [], None
+
+    ranked: list[tuple[int, str]] = []
+    for form in forms:
+        if not isinstance(form, dict):
+            continue
+        fid = str(form.get("xmlFormId") or form.get("xml_form_id") or "")
+        if not fid or fid in exclude_form_ids:
+            continue
+        score = _cm_form_discovery_score(
+            fid, str(form.get("name") or ""), intervention_slug=intervention_slug
+        )
+        if score <= 0:
+            continue
+        ranked.append((score, fid))
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+
+    for _score, fid in ranked[:8]:
+        rows, latest = await _fetch_one_odk_form_cm(fid, odk_project_id)
+        if not rows:
+            continue
+        remapped = remap_odk_cm_to_plan_assets(
+            rows, known_asset_ids=known_asset_ids, assets_by_coord=assets_by_coord
+        )
+        if _matched_cm_count(remapped, known_asset_ids) > 0:
+            logger.info(
+                "ODK CM discovery: using form %s (%s matched rows)",
+                fid,
+                _matched_cm_count(remapped, known_asset_ids),
+            )
+            return remapped, latest
+    return [], None
+
+
+async def _odk_cm_rows(plan_id: str, project_id: str) -> tuple[list[dict], str | None, set[str]]:
+    """Return (rows, latest_submission_at, fetched_form_ids)."""
+    if settings.odk_project_id is None:
+        return [], None, set()
 
     with db_cursor() as cur:
         cur.execute(
@@ -1144,44 +1262,30 @@ async def _odk_cm_rows(plan_id: str, project_id: str) -> tuple[list[dict], str |
             {"plan_id": plan_id, "project_id": project_id},
         )
         forms = cur.fetchall()
+    fetched_ids: set[str] = set()
     if not forms:
-        return [], None
+        return [], None, fetched_ids
 
     preferred = [f for f in forms if (f.get("package_id") or "") == "cm-mapping"]
-    to_fetch = preferred or forms
+    to_fetch = [f for f in (preferred or forms) if f.get("xml_form_id")]
+    if not to_fetch:
+        return [], None, fetched_ids
     odk_project_id = int(settings.odk_project_id)
 
-    async def _one(form: dict) -> tuple[list[dict], str | None]:
-        form_client = ODKClient()
-        try:
-            odata_rows = await _fetch_all_odata_submissions(
-                form_client, odk_project_id, form["xml_form_id"]
-            )
-        except Exception:
-            logger.exception(
-                "ODK CM fetch failed for form %s (project %s)",
-                form.get("xml_form_id"),
-                odk_project_id,
-            )
-            return [], None
-        latest: str | None = None
-        for raw in odata_rows:
-            system = raw.get("__system") if isinstance(raw, dict) else None
-            ts = system.get("submissionDate") if isinstance(system, dict) else None
-            if ts and (latest is None or str(ts) > latest):
-                latest = str(ts)
-        normalized = normalize_submissions(odata_rows)
-        out = [sub for sub in (normalized.get("rows") or []) if isinstance(sub, dict)]
-        return out, latest
-
-    results = await asyncio.gather(*[_one(f) for f in to_fetch])
+    results = await asyncio.gather(
+        *[
+            _fetch_one_odk_form_cm(str(f["xml_form_id"]), odk_project_id)
+            for f in to_fetch
+        ]
+    )
     rows: list[dict] = []
     last_submission_at: str | None = None
-    for batch, latest in results:
+    for form, (batch, latest) in zip(to_fetch, results):
+        fetched_ids.add(str(form["xml_form_id"]))
         rows.extend(batch)
         if latest and (last_submission_at is None or latest > last_submission_at):
             last_submission_at = latest
-    return rows, last_submission_at
+    return rows, last_submission_at, fetched_ids
 
 
 # Short in-memory cache so repeat dashboard opens don't re-hit ODK every time.
@@ -1197,17 +1301,42 @@ async def _collect_plan_cm_bundle(plan_id: str, project_id: str) -> tuple[list[d
     if hit and (now - hit[0]) < _CM_BUNDLE_TTL_S:
         return hit[1], hit[2]
 
-    odk_rows, last_submission_at = await _odk_cm_rows(plan_id, project_id)
+    known, by_coord = _plan_asset_coord_index(plan_id, project_id)
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT intervention_slug FROM mel_plans
+            WHERE id = %(plan_id)s AND project_id = %(project_id)s
+            """,
+            {"plan_id": plan_id, "project_id": project_id},
+        )
+        plan_row = cur.fetchone() or {}
+    intervention_slug = str(plan_row.get("intervention_slug") or "")
+
+    odk_rows, last_submission_at, fetched_ids = await _odk_cm_rows(plan_id, project_id)
     if odk_rows:
-        known, by_coord = _plan_asset_coord_index(plan_id, project_id)
         odk_rows = remap_odk_cm_to_plan_assets(
             odk_rows, known_asset_ids=known, assets_by_coord=by_coord
         )
+
+    if _matched_cm_count(odk_rows, known) == 0 and by_coord:
+        discovered, discovered_latest = await _discover_odk_cm_rows(
+            known_asset_ids=known,
+            assets_by_coord=by_coord,
+            intervention_slug=intervention_slug,
+            exclude_form_ids=fetched_ids,
+        )
+        if discovered:
+            odk_rows = discovered
+            last_submission_at = discovered_latest or last_submission_at
+
+    if odk_rows and _matched_cm_count(odk_rows, known) > 0:
         stats = _cm_stats_from_rows(
             odk_rows, source="odk", last_submission_at=last_submission_at
         )
         _CM_BUNDLE_CACHE[cache_key] = (now, odk_rows, stats)
         return odk_rows, stats
+
     empty = _empty_cm_stats()
     _CM_BUNDLE_CACHE[cache_key] = (now, [], empty)
     return [], empty
