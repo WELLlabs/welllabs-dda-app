@@ -88,6 +88,18 @@
 					try {
 						const qrRes = await fetchMelFormCollectQr(project.id, plan.id, form.xmlFormId);
 						cmQr = qrRes.collectQr ?? null;
+						// Backend may relink CM to the ODK form that has farm-pond rows.
+						if (qrRes.xmlFormId && qrRes.xmlFormId !== form.xmlFormId) {
+							forms = forms.map((f) =>
+								f.packageId === 'cm-mapping' || f.xmlFormId === form.xmlFormId
+									? {
+											...f,
+											xmlFormId: qrRes.xmlFormId,
+											name: qrRes.formName || f.name
+										}
+									: f
+							);
+						}
 					} catch {
 						cmQr = null;
 					}

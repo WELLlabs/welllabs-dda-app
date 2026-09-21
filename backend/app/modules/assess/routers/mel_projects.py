@@ -396,11 +396,16 @@ def delete_mel_plan(
 
 
 @router.get("/{project_id}/plans/{plan_id}/forms")
-def list_mel_plan_forms(
+async def list_mel_plan_forms(
     project_id: str, plan_id: str, user: dict = Depends(require_assess_access)
 ):
     get_mel_project(project_id)
     get_mel_plan(plan_id, project_id=project_id)
+    # Point Collect QR at the ODK form that actually has farm-pond CM rows.
+    try:
+        await ensure_plan_cm_form_linked(plan_id, project_id)
+    except Exception:
+        logger.exception("CM form relink failed for plan %s", plan_id)
     with db_cursor() as cur:
         cur.execute(
             """
@@ -561,7 +566,7 @@ async def get_mel_form_collect_qr(
     with db_cursor() as cur:
         cur.execute(
             """
-            SELECT id, xml_form_id, name, package_title
+            SELECT id, xml_form_id, name, package_title, package_id
             FROM mel_forms
             WHERE project_id = %(project_id)s
               AND plan_id = %(plan_id)s
@@ -576,6 +581,34 @@ async def get_mel_form_collect_qr(
         form_row = cur.fetchone()
     if not form_row:
         raise HTTPException(404, "Form not found on this MEL plan")
+
+    use_form_id = str(form_row["xml_form_id"])
+    if (form_row.get("package_id") or "") == "cm-mapping":
+        try:
+            linked = await ensure_plan_cm_form_linked(plan_id, project_id)
+        except Exception:
+            logger.exception("CM form relink failed for plan %s", plan_id)
+            linked = None
+        if linked:
+            use_form_id = linked
+            with db_cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, xml_form_id, name, package_title, package_id
+                    FROM mel_forms
+                    WHERE project_id = %(project_id)s
+                      AND plan_id = %(plan_id)s
+                      AND xml_form_id = %(xml_form_id)s
+                    """,
+                    {
+                        "project_id": project_id,
+                        "plan_id": plan_id,
+                        "xml_form_id": use_form_id,
+                    },
+                )
+                linked_row = cur.fetchone()
+            if linked_row:
+                form_row = linked_row
 
     client = ODKClient()
     odk_project_id = int(settings.odk_project_id)
@@ -599,13 +632,13 @@ async def get_mel_form_collect_qr(
         assign_mel_forms_to_collect_user,
         odk_project_id=odk_project_id,
         app_user_id=int(collect_qr["appUserId"]),
-        xml_form_ids=[xml_form_id],
+        xml_form_ids=[use_form_id],
     )
 
     return {
         "projectId": project_id,
         "planId": plan_id,
-        "xmlFormId": xml_form_id,
+        "xmlFormId": use_form_id,
         "formName": form_row["name"],
         "packageTitle": form_row.get("package_title") or "",
         "collectQr": collect_qr,
@@ -1196,54 +1229,192 @@ async def _discover_odk_cm_rows(
     assets_by_coord: dict[tuple[str, str], str],
     intervention_slug: str,
     exclude_form_ids: set[str],
-) -> tuple[list[dict], str | None]:
+) -> tuple[list[dict], str | None, str | None, str | None]:
     """Find an ODK form whose submissions match this plan's pond coordinates.
 
+    Returns (rows, latest_submission_at, xml_form_id, form_name).
     Beta often has a republished empty CM form while the seeded Medak readings
     live on an earlier xmlFormId in the same ODK project.
     """
     if settings.odk_project_id is None or not assets_by_coord:
-        return [], None
+        return [], None, None, None
     odk_project_id = int(settings.odk_project_id)
     client = ODKClient()
     try:
         forms = await client.get(f"/v1/projects/{odk_project_id}/forms")
     except Exception:
         logger.exception("ODK form list failed during CM discovery")
-        return [], None
+        return [], None, None, None
     if not isinstance(forms, list):
-        return [], None
+        return [], None, None, None
 
-    ranked: list[tuple[int, str]] = []
+    ranked: list[tuple[int, str, str]] = []
     for form in forms:
         if not isinstance(form, dict):
             continue
         fid = str(form.get("xmlFormId") or form.get("xml_form_id") or "")
         if not fid or fid in exclude_form_ids:
             continue
+        name = str(form.get("name") or "")
         score = _cm_form_discovery_score(
-            fid, str(form.get("name") or ""), intervention_slug=intervention_slug
+            fid, name, intervention_slug=intervention_slug
         )
         if score <= 0:
             continue
-        ranked.append((score, fid))
+        ranked.append((score, fid, name))
     ranked.sort(key=lambda item: (-item[0], item[1]))
 
-    for _score, fid in ranked[:8]:
+    for _score, fid, name in ranked[:8]:
         rows, latest = await _fetch_one_odk_form_cm(fid, odk_project_id)
         if not rows:
             continue
         remapped = remap_odk_cm_to_plan_assets(
             rows, known_asset_ids=known_asset_ids, assets_by_coord=assets_by_coord
         )
-        if _matched_cm_count(remapped, known_asset_ids) > 0:
+        matched = _matched_cm_count(remapped, known_asset_ids)
+        if matched > 0:
             logger.info(
                 "ODK CM discovery: using form %s (%s matched rows)",
                 fid,
-                _matched_cm_count(remapped, known_asset_ids),
+                matched,
             )
-            return remapped, latest
-    return [], None
+            return remapped, latest, fid, name or fid
+    return [], None, None, None
+
+
+def _link_plan_cm_form(
+    *,
+    plan_id: str,
+    project_id: str,
+    xml_form_id: str,
+    name: str,
+    created_by: str | None = None,
+) -> None:
+    """Point the plan's cm-mapping mel_forms row at the ODK form with farm-pond data.
+
+    Collect QR and dashboard then share the same xmlFormId.
+    """
+    with db_cursor() as cur:
+        if created_by is None:
+            cur.execute(
+                """
+                SELECT created_by FROM mel_plans
+                WHERE id = %(plan_id)s AND project_id = %(project_id)s
+                """,
+                {"plan_id": plan_id, "project_id": project_id},
+            )
+            plan = cur.fetchone() or {}
+            created_by = str(plan["created_by"]) if plan.get("created_by") else None
+
+        cur.execute(
+            """
+            DELETE FROM mel_forms
+            WHERE plan_id = %(plan_id)s
+              AND project_id = %(project_id)s
+              AND package_id = 'cm-mapping'
+              AND xml_form_id <> %(xml_form_id)s
+            """,
+            {
+                "plan_id": plan_id,
+                "project_id": project_id,
+                "xml_form_id": xml_form_id,
+            },
+        )
+        cur.execute(
+            """
+            INSERT INTO mel_forms (
+                project_id, plan_id, xml_form_id, name, package_id, package_title, created_by
+            )
+            VALUES (
+                %(project_id)s, %(plan_id)s, %(xml_form_id)s, %(name)s,
+                'cm-mapping', 'Continuous monitoring', %(created_by)s
+            )
+            ON CONFLICT (plan_id, xml_form_id) DO UPDATE SET
+                name = EXCLUDED.name,
+                package_id = 'cm-mapping',
+                package_title = COALESCE(
+                    EXCLUDED.package_title, mel_forms.package_title
+                )
+            """,
+            {
+                "project_id": project_id,
+                "plan_id": plan_id,
+                "xml_form_id": xml_form_id,
+                "name": name,
+                "created_by": created_by,
+            },
+        )
+
+
+async def ensure_plan_cm_form_linked(plan_id: str, project_id: str) -> str | None:
+    """Ensure cm-mapping QR/form id is the ODK form that holds matching CM rows."""
+    if settings.odk_project_id is None:
+        return None
+
+    known, by_coord = _plan_asset_coord_index(plan_id, project_id)
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT intervention_slug FROM mel_plans
+            WHERE id = %(plan_id)s AND project_id = %(project_id)s
+            """,
+            {"plan_id": plan_id, "project_id": project_id},
+        )
+        plan_row = cur.fetchone() or {}
+        cur.execute(
+            """
+            SELECT xml_form_id, name
+            FROM mel_forms
+            WHERE plan_id = %(plan_id)s AND project_id = %(project_id)s
+              AND package_id = 'cm-mapping'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            {"plan_id": plan_id, "project_id": project_id},
+        )
+        current = cur.fetchone()
+    intervention_slug = str(plan_row.get("intervention_slug") or "")
+    current_id = str(current["xml_form_id"]) if current and current.get("xml_form_id") else None
+
+    if current_id and by_coord:
+        rows, _latest = await _fetch_one_odk_form_cm(
+            current_id, int(settings.odk_project_id)
+        )
+        remapped = remap_odk_cm_to_plan_assets(
+            rows, known_asset_ids=known, assets_by_coord=by_coord
+        )
+        if _matched_cm_count(remapped, known) > 0:
+            return current_id
+
+    if not by_coord:
+        return current_id
+
+    exclude = {current_id} if current_id else set()
+    _rows, _latest, discovered_id, discovered_name = await _discover_odk_cm_rows(
+        known_asset_ids=known,
+        assets_by_coord=by_coord,
+        intervention_slug=intervention_slug,
+        exclude_form_ids=exclude,
+    )
+    if not discovered_id:
+        # Also try without excluding current (in case current had rows we failed to match)
+        _rows, _latest, discovered_id, discovered_name = await _discover_odk_cm_rows(
+            known_asset_ids=known,
+            assets_by_coord=by_coord,
+            intervention_slug=intervention_slug,
+            exclude_form_ids=set(),
+        )
+    if discovered_id and discovered_id != current_id:
+        _link_plan_cm_form(
+            plan_id=plan_id,
+            project_id=project_id,
+            xml_form_id=discovered_id,
+            name=discovered_name or discovered_id,
+        )
+        # Drop cached CM bundle so dashboard picks up the linked form.
+        _CM_BUNDLE_CACHE.pop(f"{project_id}:{plan_id}", None)
+        return discovered_id
+    return discovered_id or current_id
 
 
 async def _odk_cm_rows(plan_id: str, project_id: str) -> tuple[list[dict], str | None, set[str]]:
@@ -1320,15 +1491,28 @@ async def _collect_plan_cm_bundle(plan_id: str, project_id: str) -> tuple[list[d
         )
 
     if _matched_cm_count(odk_rows, known) == 0 and by_coord:
-        discovered, discovered_latest = await _discover_odk_cm_rows(
-            known_asset_ids=known,
-            assets_by_coord=by_coord,
-            intervention_slug=intervention_slug,
-            exclude_form_ids=fetched_ids,
+        discovered, discovered_latest, discovered_id, discovered_name = (
+            await _discover_odk_cm_rows(
+                known_asset_ids=known,
+                assets_by_coord=by_coord,
+                intervention_slug=intervention_slug,
+                exclude_form_ids=fetched_ids,
+            )
         )
-        if discovered:
+        if discovered and discovered_id:
             odk_rows = discovered
             last_submission_at = discovered_latest or last_submission_at
+            try:
+                _link_plan_cm_form(
+                    plan_id=plan_id,
+                    project_id=project_id,
+                    xml_form_id=discovered_id,
+                    name=discovered_name or discovered_id,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to link CM form %s for plan %s", discovered_id, plan_id
+                )
 
     if odk_rows and _matched_cm_count(odk_rows, known) > 0:
         stats = _cm_stats_from_rows(
