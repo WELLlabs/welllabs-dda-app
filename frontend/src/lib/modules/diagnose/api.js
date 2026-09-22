@@ -1,4 +1,4 @@
-import { createApiClient, streamSSE } from '$lib/shared/api-client.js';
+import { createApiClient, streamSSE, parseErrorMessage } from '$lib/shared/api-client.js';
 import { apiPath } from '$lib/shared/paths.js';
 
 const API = apiPath('/diagnose');
@@ -465,16 +465,7 @@ export async function downloadDiagnosisPdf(projectId, filename, { signal } = {})
 		{ method: 'GET', credentials: 'include', signal }
 	);
 	if (!res.ok) {
-		const text = await res.text();
-		let message = text || res.statusText;
-		try {
-			const json = JSON.parse(text);
-			if (json.detail)
-				message = typeof json.detail === 'string' ? json.detail : JSON.stringify(json.detail);
-		} catch {
-			/* keep raw */
-		}
-		throw new Error(message);
+		throw new Error(await parseErrorMessage(res));
 	}
 	const blob = await res.blob();
 	return { blob, filename };
@@ -488,16 +479,7 @@ export async function exportDiagnosisPdf(projectId, { signal } = {}) {
 		signal
 	});
 	if (!res.ok) {
-		const text = await res.text();
-		let message = text || res.statusText;
-		try {
-			const json = JSON.parse(text);
-			if (json.detail)
-				message = typeof json.detail === 'string' ? json.detail : JSON.stringify(json.detail);
-		} catch {
-			/* keep raw */
-		}
-		throw new Error(message);
+		throw new Error(await parseErrorMessage(res));
 	}
 	const blob = await res.blob();
 	const disposition = res.headers.get('Content-Disposition') || '';

@@ -103,6 +103,9 @@ _PC11_STATE_NAMES = {
 }
 _PC11_DISTRICT_NAMES: dict[str, str] | None = None
 _VILLAGE_LOOKUP_FILENAME = "Village_pan_India_lookup.jsonl"
+# Pre-rename artifact; kept as S3 fallback until Village_pan_India_lookup.jsonl is rebuilt.
+_LEGACY_VILLAGE_LOOKUP_FILENAME = "villages_lookup.jsonl"
+_village_index_rebuild_started = False
 
 # Guardrails for custom / union AOIs (degrees / vertex count)
 _MAX_BBOX_SPAN_DEG = 8.0
@@ -1014,27 +1017,67 @@ def _index_centroid_coverage(records: list[dict]) -> float:
     return with_c / len(records)
 
 
+def _index_state_count(records: list[dict]) -> int:
+    """Distinct usable state labels (skips numeric junk like ``0.0``)."""
+    states: set[str] = set()
+    for row in records:
+        raw = str(row.get("state") or "").strip()
+        if not raw or raw.lower() in {"0", "0.0", "nan", "none"}:
+            continue
+        if re.fullmatch(r"-?\d+(\.\d+)?", raw):
+            continue
+        states.add(raw.lower())
+    return len(states)
+
+
+# Stale pan-India caches from the pre-rename lookup only had ~15 states.
+_MIN_VILLAGE_LOOKUP_STATES = 20
+
+
+def _village_lookup_s3_candidate_keys() -> list[str]:
+    """Preferred lookup key first, then legacy villages_lookup.jsonl."""
+    keys = [_villages_lookup_s3_key(), f"vector/{_LEGACY_VILLAGE_LOOKUP_FILENAME}"]
+    # Preserve order, drop dupes if filenames ever coincide.
+    seen: set[str] = set()
+    out: list[str] = []
+    for key in keys:
+        if key not in seen:
+            seen.add(key)
+            out.append(key)
+    return out
+
+
 def _download_villages_lookup_from_s3(dest: Path) -> bool:
-    """Fetch prebuilt lookup from S3 into packages_dir. Returns True on success."""
+    """Fetch prebuilt lookup from S3 into packages_dir. Returns True on success.
+
+    Tries ``Village_pan_India_lookup.jsonl`` then the legacy ``villages_lookup.jsonl``
+    (still present after the pan-India FGB rename). Geometry resolve falls back to
+    centroid containment when numeric legacy ids do not match hex FGB ids.
+    """
     if not settings.aws_s3_bucket:
         return False
     try:
         import boto3
     except ImportError:
         return False
-    key = _villages_lookup_s3_key()
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".tmp")
-    try:
-        client = boto3.client("s3", region_name=settings.aws_default_region or None)
-        logger.info("Downloading village lookup s3://%s/%s …", settings.aws_s3_bucket, key)
-        client.download_file(settings.aws_s3_bucket, key, str(tmp))
-        tmp.replace(dest)
-        return dest.is_file() and dest.stat().st_size > 0
-    except Exception as exc:
-        logger.warning("Village lookup S3 download failed: %s", exc)
-        tmp.unlink(missing_ok=True)
-        return False
+    client = boto3.client("s3", region_name=settings.aws_default_region or None)
+    last_exc: Exception | None = None
+    for key in _village_lookup_s3_candidate_keys():
+        try:
+            logger.info("Downloading village lookup s3://%s/%s …", settings.aws_s3_bucket, key)
+            client.download_file(settings.aws_s3_bucket, key, str(tmp))
+            tmp.replace(dest)
+            if dest.is_file() and dest.stat().st_size > 0:
+                return True
+        except Exception as exc:
+            last_exc = exc
+            logger.warning("Village lookup S3 download failed for %s: %s", key, exc)
+            tmp.unlink(missing_ok=True)
+    if last_exc is not None:
+        logger.warning("Village lookup S3 download failed: %s", last_exc)
+    return False
 
 
 def _set_village_indexes(records: list[dict]) -> list[dict]:
@@ -1056,8 +1099,14 @@ def _rebuild_village_lookup_indexes(records: list[dict]) -> None:
         district_raw = row.get("district")
         if not state_raw:
             continue
-        states.add(state_raw)
-        state_key = str(state_raw).lower()
+        state_text = str(state_raw).strip()
+        # Drop census-code leftovers that leaked into the lookup as labels.
+        if not state_text or state_text.lower() in {"0", "0.0", "nan", "none"}:
+            continue
+        if re.fullmatch(r"-?\d+(\.\d+)?", state_text):
+            continue
+        states.add(state_text)
+        state_key = state_text.lower()
         if not district_raw:
             continue
         district_key = str(district_raw).lower()
@@ -1069,7 +1118,7 @@ def _rebuild_village_lookup_indexes(records: list[dict]) -> None:
                 "id": row["id"],
                 "name": row["name"],
                 "district": district_raw,
-                "state": state_raw,
+                "state": state_text,
             }
         )
     _village_states_sorted = sorted(states, key=str.lower)
@@ -1230,14 +1279,40 @@ def _build_village_name_index_from_fgb(source: str | None = None) -> list[dict]:
     return records
 
 
+def _schedule_village_index_rebuild() -> None:
+    """Kick a one-shot background FGB rebuild; never block the request path.
+
+    Caller may already hold ``_village_index_lock`` — do not re-acquire it here.
+    """
+    global _village_index_rebuild_started
+    if _village_index_rebuild_started:
+        return
+    _village_index_rebuild_started = True
+
+    def _run() -> None:
+        global _village_index_rebuild_started
+        try:
+            logger.warning(
+                "Building village name index from FGB in background "
+                "(missing prebuilt %s) …",
+                _VILLAGE_LOOKUP_FILENAME,
+            )
+            ensure_village_name_index(force_rebuild=True)
+        except Exception as exc:
+            logger.warning("Background village index rebuild failed: %s", exc)
+            _village_index_rebuild_started = False
+
+    threading.Thread(target=_run, name="village-index-rebuild", daemon=True).start()
+
+
 def ensure_village_name_index(*, force_rebuild: bool = False) -> list[dict]:
     """Load national village lookup (id/name/state/district + centroids when available).
 
     Preference order:
       1. In-memory
-      2. Local packages_dir/Village_pan_India_lookup.jsonl
-      3. Download vector/Village_pan_India_lookup.jsonl from S3
-      4. Attribute-only build from Village_pan_India.fgb
+      2. Local packages_dir/Village_pan_India_lookup.jsonl (or legacy villages_lookup.jsonl)
+      3. Download from S3 (new key, then legacy villages_lookup.jsonl)
+      4. Background rebuild from Village_pan_India.fgb (request path does not wait)
     """
     global _village_name_index
     if _village_name_index is not None and not force_rebuild:
@@ -1247,24 +1322,41 @@ def ensure_village_name_index(*, force_rebuild: bool = False) -> list[dict]:
             return _village_name_index
 
         lookup_path = _village_index_cache_path()
+        legacy_path = Path(settings.packages_dir) / _LEGACY_VILLAGE_LOOKUP_FILENAME
 
         if not force_rebuild:
             cached = _load_village_index_from_cache(lookup_path)
+            if cached is None:
+                cached = _load_village_index_from_cache(legacy_path)
+                if cached is not None:
+                    logger.info(
+                        "Loaded legacy village index from %s (%s rows)",
+                        legacy_path.name,
+                        len(cached),
+                    )
             if cached is not None:
                 coverage = _index_centroid_coverage(cached)
-                if coverage < 0.5 and _download_villages_lookup_from_s3(lookup_path):
+                states_n = _index_state_count(cached)
+                # Old villages_lookup.jsonl (~15 states) was copied to the pan-India
+                # key; keep refreshing from S3 until the disk cache is national.
+                need_upgrade = coverage < 0.5 or states_n < _MIN_VILLAGE_LOOKUP_STATES
+                if need_upgrade and _download_villages_lookup_from_s3(lookup_path):
                     upgraded = _load_village_index_from_cache(lookup_path)
-                    if upgraded is not None and _index_centroid_coverage(upgraded) >= 0.5:
-                        logger.info(
-                            "Loaded village lookup from S3 (%s rows, %.0f%% centroids)",
-                            len(upgraded),
-                            100 * _index_centroid_coverage(upgraded),
-                        )
-                        return _set_village_indexes(upgraded)
+                    if upgraded is not None:
+                        up_states = _index_state_count(upgraded)
+                        up_cov = _index_centroid_coverage(upgraded)
+                        if up_states > states_n or (up_cov >= 0.5 and up_cov > coverage):
+                            logger.info(
+                                "Upgraded village lookup from S3 (%s rows, %s states, %.0f%% centroids)",
+                                len(upgraded),
+                                up_states,
+                                100 * up_cov,
+                            )
+                            return _set_village_indexes(upgraded)
                 logger.info(
-                    "Loaded village index from %s (%s rows, %.0f%% centroids)",
-                    lookup_path.name,
+                    "Loaded village index from cache (%s rows, %s states, %.0f%% centroids)",
                     len(cached),
+                    states_n,
                     100 * coverage,
                 )
                 return _set_village_indexes(cached)
@@ -1278,6 +1370,14 @@ def ensure_village_name_index(*, force_rebuild: bool = False) -> list[dict]:
                         100 * _index_centroid_coverage(cached),
                     )
                     return _set_village_indexes(cached)
+
+            # Missing prebuilt lookup: do not block API behind a multi-minute FGB rebuild.
+            _schedule_village_index_rebuild()
+            raise RuntimeError(
+                f"Village lookup not ready ({_VILLAGE_LOOKUP_FILENAME} missing). "
+                "Background rebuild started — retry shortly, or run "
+                "`python scripts/build_village_lookup.py --upload`."
+            )
 
         records = _build_village_name_index_from_fgb()
         _write_village_index_cache(lookup_path, records)

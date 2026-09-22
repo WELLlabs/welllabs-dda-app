@@ -1,9 +1,13 @@
 /** API client for MEL plan design in the Assess module. */
 
-import { createApiClient } from '$lib/shared/api-client.js';
+import { createApiClient, parseErrorMessage } from '$lib/shared/api-client.js';
 import { apiPath } from '$lib/shared/paths.js';
 
 const request = createApiClient(apiPath('/assess/mel'));
+
+async function throwIfNotOk(res) {
+	if (!res.ok) throw new Error(await parseErrorMessage(res));
+}
 
 /** List MEL projects the current user owns or is a member of. */
 export async function fetchMelProjects() {
@@ -164,16 +168,7 @@ export async function exportMelPlanDocx(projectId, planId) {
 		{ method: 'GET', credentials: 'include' }
 	);
 	if (!res.ok) {
-		const text = await res.text();
-		let message = text || res.statusText;
-		try {
-			const json = JSON.parse(text);
-			if (json.detail)
-				message = typeof json.detail === 'string' ? json.detail : JSON.stringify(json.detail);
-		} catch {
-			/* keep */
-		}
-		throw new Error(message);
+		throw new Error(await parseErrorMessage(res));
 	}
 	const blob = await res.blob();
 	const disposition = res.headers.get('Content-Disposition') || '';
@@ -188,18 +183,7 @@ export async function exportMelProjectPdf(projectId) {
 		apiPath(`/assess/mel/projects/${encodeURIComponent(projectId)}/export-pdf`),
 		{ method: 'GET', credentials: 'include' }
 	);
-	if (!res.ok) {
-		const text = await res.text();
-		let message = text || res.statusText;
-		try {
-			const json = JSON.parse(text);
-			if (json.detail)
-				message = typeof json.detail === 'string' ? json.detail : JSON.stringify(json.detail);
-		} catch {
-			/* keep */
-		}
-		throw new Error(message);
-	}
+	await throwIfNotOk(res);
 	const blob = await res.blob();
 	const disposition = res.headers.get('Content-Disposition') || '';
 	const match = disposition.match(/filename="?([^"]+)"?/i);
@@ -213,18 +197,7 @@ export async function exportMelProjectDocx(projectId) {
 		apiPath(`/assess/mel/projects/${encodeURIComponent(projectId)}/export-docx`),
 		{ method: 'GET', credentials: 'include' }
 	);
-	if (!res.ok) {
-		const text = await res.text();
-		let message = text || res.statusText;
-		try {
-			const json = JSON.parse(text);
-			if (json.detail)
-				message = typeof json.detail === 'string' ? json.detail : JSON.stringify(json.detail);
-		} catch {
-			/* keep */
-		}
-		throw new Error(message);
-	}
+	await throwIfNotOk(res);
 	const blob = await res.blob();
 	const disposition = res.headers.get('Content-Disposition') || '';
 	const match = disposition.match(/filename="?([^"]+)"?/i);
@@ -393,18 +366,7 @@ export async function exportMelPlanDocxFromSelection({
 			plan_id: planId || null
 		})
 	});
-	if (!res.ok) {
-		const text = await res.text();
-		let message = text || res.statusText;
-		try {
-			const json = JSON.parse(text);
-			if (json.detail)
-				message = typeof json.detail === 'string' ? json.detail : JSON.stringify(json.detail);
-		} catch {
-			/* keep */
-		}
-		throw new Error(message);
-	}
+	await throwIfNotOk(res);
 	const blob = await res.blob();
 	const disposition = res.headers.get('Content-Disposition') || '';
 	const match = disposition.match(/filename="?([^"]+)"?/i);
@@ -449,18 +411,7 @@ export async function exportMelPlanPdf({ interventionSlug, outcomeIds, projectId
 			plan_id: planId || null
 		})
 	});
-	if (!res.ok) {
-		const text = await res.text();
-		let message = text || res.statusText;
-		try {
-			const json = JSON.parse(text);
-			if (json.detail)
-				message = typeof json.detail === 'string' ? json.detail : JSON.stringify(json.detail);
-		} catch {
-			// keep raw
-		}
-		throw new Error(message);
-	}
+	await throwIfNotOk(res);
 	const blob = await res.blob();
 	const disposition = res.headers.get('Content-Disposition') || '';
 	const match = disposition.match(/filename="?([^"]+)"?/i);

@@ -139,6 +139,28 @@ def test_village_id_str_keeps_hex_fgb_ids():
     assert _village_id_str(None) == ""
 
 
+def test_village_lookup_s3_candidate_keys_prefer_new_then_legacy():
+    from app.shared.watersheds import _village_lookup_s3_candidate_keys
+
+    keys = _village_lookup_s3_candidate_keys()
+    assert keys[0] == "vector/Village_pan_India_lookup.jsonl"
+    assert "vector/villages_lookup.jsonl" in keys
+
+
+def test_index_state_count_skips_numeric_junk():
+    from app.shared.watersheds import _index_state_count
+
+    rows = [
+        {"state": "andhra pradesh"},
+        {"state": "Assam"},
+        {"state": "0.0"},
+        {"state": "28"},
+        {"state": None},
+        {"state": "andhra pradesh"},
+    ]
+    assert _index_state_count(rows) == 2
+
+
 def test_village_place_labels_from_pc11_codes():
     from app.shared.watersheds import _village_district_label, _village_state_label
 
