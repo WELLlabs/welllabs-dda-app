@@ -75,15 +75,19 @@ FIELD_HANDOFF_ROWS = [
     ],
 ]
 
-# Matches reference atlas map-guide (four categories; JRC shown only if paired elsewhere).
+# Matches cf_code_sep19 / clinton atlas map guide (five categories).
 MAP_GUIDE = [
     (
         "Context Maps",
         "Location, selected boundary, state context, access routes, built environment, and satellite reference.",
     ),
     (
+        "Surface-Water Dynamics",
+        "JRC long-term surface-water occurrence and first-to-last water transitions from 1984 to 2024.",
+    ),
+    (
         "Hydrology & Landscape Controls",
-        "Elevation, drainage clues, land use / land cover, cropping intensity, WISER groundwater stress, aquifer setting, and climate trend.",
+        "Elevation, drainage clues, land use / land cover, cropping intensity, aquifer setting, soil, structures, and climate trend.",
     ),
     (
         "WISER Outcome Layers",

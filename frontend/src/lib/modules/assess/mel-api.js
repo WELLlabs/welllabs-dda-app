@@ -1,9 +1,13 @@
 /** API client for MEL plan design in the Assess module. */
 
-import { createApiClient } from '$lib/shared/api-client.js';
+import { createApiClient, parseErrorMessage } from '$lib/shared/api-client.js';
 import { apiPath } from '$lib/shared/paths.js';
 
 const request = createApiClient(apiPath('/assess/mel'));
+
+async function throwIfNotOk(res) {
+	if (!res.ok) throw new Error(await parseErrorMessage(res));
+}
 
 /** List MEL projects the current user owns or is a member of. */
 export async function fetchMelProjects() {
@@ -164,21 +168,40 @@ export async function exportMelPlanDocx(projectId, planId) {
 		{ method: 'GET', credentials: 'include' }
 	);
 	if (!res.ok) {
-		const text = await res.text();
-		let message = text || res.statusText;
-		try {
-			const json = JSON.parse(text);
-			if (json.detail)
-				message = typeof json.detail === 'string' ? json.detail : JSON.stringify(json.detail);
-		} catch {
-			/* keep */
-		}
-		throw new Error(message);
+		throw new Error(await parseErrorMessage(res));
 	}
 	const blob = await res.blob();
 	const disposition = res.headers.get('Content-Disposition') || '';
 	const match = disposition.match(/filename="?([^"]+)"?/i);
 	const filename = match?.[1] || 'mel-plan.docx';
+	return { blob, filename };
+}
+
+/** Download all MEL plans in a project as one PDF (shared prose once). */
+export async function exportMelProjectPdf(projectId) {
+	const res = await fetch(
+		apiPath(`/assess/mel/projects/${encodeURIComponent(projectId)}/export-pdf`),
+		{ method: 'GET', credentials: 'include' }
+	);
+	await throwIfNotOk(res);
+	const blob = await res.blob();
+	const disposition = res.headers.get('Content-Disposition') || '';
+	const match = disposition.match(/filename="?([^"]+)"?/i);
+	const filename = match?.[1] || 'mel-project-plans.pdf';
+	return { blob, filename };
+}
+
+/** Download all MEL plans in a project as one Word doc (shared prose once). */
+export async function exportMelProjectDocx(projectId) {
+	const res = await fetch(
+		apiPath(`/assess/mel/projects/${encodeURIComponent(projectId)}/export-docx`),
+		{ method: 'GET', credentials: 'include' }
+	);
+	await throwIfNotOk(res);
+	const blob = await res.blob();
+	const disposition = res.headers.get('Content-Disposition') || '';
+	const match = disposition.match(/filename="?([^"]+)"?/i);
+	const filename = match?.[1] || 'mel-project-plans.docx';
 	return { blob, filename };
 }
 
@@ -311,6 +334,46 @@ export async function fetchMelPackages({ interventionSlug, outcomeIds, projectId
 	});
 }
 
+/** Filtered log-frame preview for selected outcomes. */
+export async function fetchMelLogframe({ interventionSlug, outcomeIds, projectId, planId }) {
+	return request('/plans/logframe', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({
+			intervention_slug: interventionSlug,
+			outcome_ids: outcomeIds,
+			project_id: projectId || null,
+			plan_id: planId || null
+		})
+	});
+}
+
+/** Download log-frame MEL plan as .docx (designer / preview flow). */
+export async function exportMelPlanDocxFromSelection({
+	interventionSlug,
+	outcomeIds,
+	projectId,
+	planId
+}) {
+	const res = await fetch(apiPath('/assess/mel/plans/export-docx'), {
+		method: 'POST',
+		credentials: 'include',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({
+			intervention_slug: interventionSlug,
+			outcome_ids: outcomeIds,
+			project_id: projectId || null,
+			plan_id: planId || null
+		})
+	});
+	await throwIfNotOk(res);
+	const blob = await res.blob();
+	const disposition = res.headers.get('Content-Disposition') || '';
+	const match = disposition.match(/filename="?([^"]+)"?/i);
+	const filename = match?.[1] || 'mel-plan.docx';
+	return { blob, filename };
+}
+
 /** Publish one or more schedule packages as ODK forms under a MEL plan.
 
  * Pass ``xml_form_id`` on a package to publish a new version of an existing form.
@@ -348,18 +411,7 @@ export async function exportMelPlanPdf({ interventionSlug, outcomeIds, projectId
 			plan_id: planId || null
 		})
 	});
-	if (!res.ok) {
-		const text = await res.text();
-		let message = text || res.statusText;
-		try {
-			const json = JSON.parse(text);
-			if (json.detail)
-				message = typeof json.detail === 'string' ? json.detail : JSON.stringify(json.detail);
-		} catch {
-			// keep raw
-		}
-		throw new Error(message);
-	}
+	await throwIfNotOk(res);
 	const blob = await res.blob();
 	const disposition = res.headers.get('Content-Disposition') || '';
 	const match = disposition.match(/filename="?([^"]+)"?/i);

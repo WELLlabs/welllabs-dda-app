@@ -3,6 +3,8 @@
 
 Assets stay in MEL. Continuous-monitoring rows are posted to the plan's
 published ODK CM form — they are not stored in mel_cm_readings.
+
+Provide the CSV via MEDAK_CSV or place medak.csv at the repo root (gitignored).
 """
 
 from __future__ import annotations
@@ -32,13 +34,12 @@ def _csv_path() -> Path:
         return Path(env)
     here = Path(__file__).resolve().parent
     for candidate in (
-        here / "data" / "medak.csv",
         here.parent.parent.parent / "medak.csv",
         Path.cwd() / "medak.csv",
     ):
         if candidate.is_file():
             return candidate
-    return here / "data" / "medak.csv"
+    return here.parent.parent.parent / "medak.csv"
 
 
 CSV_PATH = _csv_path()
@@ -216,12 +217,25 @@ def seed_db(ponds: dict) -> dict:
                 """
                 SELECT id FROM mel_plans
                 WHERE project_id = %s AND kind = 'implementation'
+                  AND intervention_slug IN ('farm-pond', 'farm_pond', 'farmpond')
                 ORDER BY created_at ASC
                 LIMIT 1
                 """,
                 (project_id,),
             )
             impl = cur.fetchone()
+            if not impl:
+                cur.execute(
+                    """
+                    SELECT id FROM mel_plans
+                    WHERE project_id = %s AND kind = 'implementation'
+                      AND (name ILIKE %s OR name ILIKE %s)
+                    ORDER BY created_at ASC
+                    LIMIT 1
+                    """,
+                    (project_id, "%farm pond%", "%Medak monitoring%"),
+                )
+                impl = cur.fetchone()
             if impl:
                 plan_id = str(impl["id"])
             else:
@@ -484,7 +498,10 @@ def delete_local_readings(plan_id: str, project_id: str) -> int:
 
 def main():
     if not CSV_PATH.is_file():
-        raise SystemExit(f"Missing {CSV_PATH}")
+        raise SystemExit(
+            f"Missing {CSV_PATH}. Set MEDAK_CSV to the sample CSV path "
+            "(file is gitignored; keep it outside the repo or at the repo root)."
+        )
 
     ponds = load_ponds()
     ctx = seed_db(ponds)
@@ -493,6 +510,11 @@ def main():
     print(f"  implementation_plan_id={ctx['plan_id']}")
     print(f"  assets={[a['id'] for a in ctx['assets']]}")
     print(f"  xml_form_id={ctx.get('xml_form_id')}")
+
+    if not ctx.get("xml_form_id"):
+        raise SystemExit(
+            "No published CM form on this plan. Publish from Edit forms, then re-run this seed."
+        )
 
     posted = asyncio.run(push_cm_to_odk(ctx))
     deleted = delete_local_readings(ctx["plan_id"], ctx["project_id"])

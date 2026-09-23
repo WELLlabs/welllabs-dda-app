@@ -17,9 +17,8 @@
 	let editAssetId = $derived(page.url.searchParams.get('asset') || '');
 	let planStartStep = $derived.by(() => {
 		const raw = page.url.searchParams.get('step');
-		if (raw === 'assets' || raw === '1') return 1;
-		if (raw === 'cm' || raw === '2') return 2;
-		if (raw === 'export' || raw === '3') return 3;
+		// 0 = select outcomes, 1 = full MEL plan (export)
+		if (raw === 'plan' || raw === 'export' || raw === '1' || raw === '2' || raw === '3') return 1;
 		return 0;
 	});
 	let projects = $state([]);
@@ -29,28 +28,17 @@
 	let error = $state('');
 
 	const isImpl = $derived((plan?.kind || 'plan') === 'implementation');
-	const crumbs = $derived(
-		project && plan
-			? assessCrumbs({
-					projects,
-					project,
-					plan,
-					tail: [
-						{
-							label: startNewAsset
-								? 'Add asset'
-								: editAssetId
-									? 'Edit asset'
-									: startAtAssets
-										? 'Assets'
-										: isImpl
-											? 'Edit forms'
-											: 'Design plan'
-						}
-					]
-				})
-			: []
-	);
+	const crumbs = $derived.by(() => {
+		if (!project || !plan) return [];
+		/** @type {{ label: string }[]} */
+		const tail = [];
+		if (startNewAsset) tail.push({ label: 'Add asset' });
+		else if (editAssetId) tail.push({ label: 'Edit asset' });
+		else if (startAtAssets) tail.push({ label: 'Assets' });
+		else if (isImpl) tail.push({ label: 'Edit forms' });
+		// MEL plan designer: Assess → project → plan name (no "Design plan")
+		return assessCrumbs({ projects, project, plan, tail });
+	});
 
 	onMount(load);
 
@@ -74,9 +62,16 @@
 	}
 
 	function onBack() {
-		if (project && plan) {
-			goto(`${itemPath('/assess', project, projects)}/plans/${plan.id}`);
-		} else if (project) {
+		if (project) {
+			// MEL plans live in the designer; don't bounce to the old plan home.
+			if (plan && (plan.kind || 'plan') !== 'implementation') {
+				goto(`${itemPath('/assess', project, projects)}?tab=plans`);
+				return;
+			}
+			if (plan) {
+				goto(`${itemPath('/assess', project, projects)}/plans/${plan.id}`);
+				return;
+			}
 			goto(itemPath('/assess', project, projects));
 		} else {
 			goto(appPath('/assess'));

@@ -658,16 +658,14 @@
 		map.getCanvas().style.cursor = interactiveClick ? 'crosshair' : 'default';
 		if (markerVisible) {
 			placeMarker(lng, lat);
-			if (!interactiveClick) {
-				const key = `${Number(lng).toFixed(5)},${Number(lat).toFixed(5)}`;
-				if (key !== lastMarkerKey) {
-					lastMarkerKey = key;
-					map.flyTo({
-						center: [lng, lat],
-						zoom: Math.max(map.getZoom(), 9),
-						duration: 500
-					});
-				}
+			const key = `${Number(lng).toFixed(5)},${Number(lat).toFixed(5)}`;
+			if (key !== lastMarkerKey) {
+				lastMarkerKey = key;
+				map.flyTo({
+					center: [lng, lat],
+					zoom: Math.max(map.getZoom(), 11),
+					duration: 550
+				});
 			}
 		} else {
 			clearMarker();

@@ -44,9 +44,36 @@ def connect_qfield(body: QFieldConnectRequest, user: dict = Depends(get_current_
     data = resp.json()
     token = data.get("token", "")
     expires_at = data.get("expires_at")
+    # Login accepts email or username; store the canonical username for later
+    # project-owner / collaborator API calls (email as owner → 404).
+    qfield_username = (
+        data.get("username")
+        or (data.get("user") or {}).get("username")
+        or body.username
+    )
 
     if not token:
         raise HTTPException(502, "QField Cloud did not return a token.")
+
+    if token and ("@" in str(qfield_username) or qfield_username == body.username):
+        try:
+            user_resp = httpx.get(
+                settings.qfield_cloud_url.rstrip("/") + "/auth/user/",
+                headers={
+                    "Authorization": f"Token {token}",
+                    "User-Agent": "sdk|dda-product/1.0.0",
+                },
+                timeout=15,
+            )
+            if user_resp.status_code == 200:
+                user_data = user_resp.json()
+                resolved = user_data.get("username") or (user_data.get("user") or {}).get(
+                    "username"
+                )
+                if resolved:
+                    qfield_username = resolved
+        except httpx.HTTPError as exc:
+            logger.warning("Could not resolve QField Cloud username after login: %s", exc)
 
     with db_cursor() as cur:
         cur.execute(
@@ -60,11 +87,10 @@ def connect_qfield(body: QFieldConnectRequest, user: dict = Depends(get_current_
                 qfield_token_expires_at = EXCLUDED.qfield_token_expires_at,
                 updated_at = now()
             """,
-            {"uid": user["id"], "qfu": body.username, "tok": token, "exp": expires_at},
+            {"uid": user["id"], "qfu": qfield_username, "tok": token, "exp": expires_at},
         )
 
-    return {"connected": True, "qfield_username": body.username}
-
+    return {"connected": True, "qfield_username": qfield_username}
 
 @router.get("/status")
 def qfield_status(user: dict = Depends(get_current_user)):

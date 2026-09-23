@@ -13,6 +13,7 @@
 		fetchCogLayers,
 		fetchFieldNotes,
 		fetchHypotheses,
+		fetchLandscapeObjectives,
 		fetchLayerAnalysis,
 		fetchBatchLayerAnalysis,
 		fetchObservationZones,
@@ -863,6 +864,8 @@
 	let savedZones = $state([]);
 	let savedFieldNotes = $state([]);
 	let hypotheses = $state([]);
+	/** @type {any[]} */
+	let landscapeObjectives = $state([]);
 	let creatingHypothesis = $state(false);
 	let newHypothesisText = $state('');
 	let newHypothesisZoneIds = $state([]);
@@ -1061,7 +1064,8 @@
 						await Promise.allSettled([
 							reloadObservationZones(),
 							reloadFieldNotes(),
-							reloadHypotheses()
+							reloadHypotheses(),
+							reloadLandscapeObjectives()
 						]);
 					} catch (err) {
 						if (err?.name !== 'AbortError' && !mapDataAbort.signal.aborted) {
@@ -1189,6 +1193,11 @@
 			} catch (err) {
 				console.error('Failed to refresh hypotheses', err);
 				status = `Could not load hypotheses: ${err instanceof Error ? err.message : String(err)}`;
+			}
+			try {
+				await reloadLandscapeObjectives();
+			} catch (err) {
+				console.error('Failed to refresh landscape objectives', err);
 			}
 		})();
 	});
@@ -2667,6 +2676,22 @@
 		hypotheses = await fetchHypotheses(project.id);
 	}
 
+	async function reloadLandscapeObjectives() {
+		try {
+			landscapeObjectives = await fetchLandscapeObjectives();
+		} catch {
+			landscapeObjectives = [];
+		}
+	}
+
+	function landscapeObjectiveLabel(obj) {
+		if (!obj) return '';
+		const id = String(obj.landscape_id || obj.objective_id || '').trim();
+		const name = String(obj.landscape_objective ?? '').trim();
+		if (id && name) return `${id} — ${name}`;
+		return name || id || 'Landscape objective';
+	}
+
 	function hypothesisLabel(h) {
 		const text = String(h?.hypothesis ?? '').trim();
 		return text.length > 60 ? `${text.slice(0, 60)}…` : text || 'Untitled hypothesis';
@@ -2846,6 +2871,7 @@
 			hypothesis: selectedHypothesis.hypothesis,
 			root_cause: selectedHypothesis.root_cause ?? '',
 			status: selectedHypothesis.status,
+			landscape_objective_id: selectedHypothesis.landscape_objective_id ?? '',
 			observation_zone_ids: [...(selectedHypothesis.observation_zone_ids ?? [])],
 			field_note_count: selectedHypothesis.field_note_count ?? 0
 		};
@@ -2878,13 +2904,20 @@
 			hypothesisError = 'Hypothesis text is required';
 			return;
 		}
+		const evidenceStatus =
+			editingHypothesis.status === 'validated' || editingHypothesis.status === 'invalidated';
+		if (evidenceStatus && !String(editingHypothesis.landscape_objective_id || '').trim()) {
+			hypothesisError = 'Select a landscape objective when validating or invalidating';
+			return;
+		}
 		savingHypothesis = true;
 		hypothesisError = '';
 		try {
 			const payload = {
 				hypothesis: editingHypothesis.hypothesis.trim(),
 				status: editingHypothesis.status,
-				observation_zone_ids: editingHypothesis.observation_zone_ids
+				observation_zone_ids: editingHypothesis.observation_zone_ids,
+				landscape_objective_id: String(editingHypothesis.landscape_objective_id || '').trim()
 			};
 			if (editingHypothesis.field_note_count > 0) {
 				payload.root_cause = editingHypothesis.root_cause.trim();
@@ -3369,6 +3402,11 @@
 					<Terrain3DView
 						projectId={project.id}
 						layerId={selectedLayer?.kind === 'secondary' ? selectedLayer.id : 'dem'}
+						overlayVisibility={{
+							village_boundaries: cogVisibility['village_boundaries'] ?? true,
+							canals: cogVisibility['canals'] ?? true,
+							drainage: cogVisibility['drainage'] ?? true
+						}}
 					/>
 				{/key}
 			</div>
@@ -4089,6 +4127,21 @@
 									<option value={value}>{label}</option>
 								{/each}
 							</select>
+							{#if editingHypothesis.status === 'validated' || editingHypothesis.status === 'invalidated'}
+								<label for="edit-landscape-objective" class="text-sm text-gray-600"
+									>Landscape objective</label
+								>
+								<select
+									id="edit-landscape-objective"
+									class="my-1.5 mb-3 box-border w-full rounded border border-gray-300 p-2 text-sm"
+									bind:value={editingHypothesis.landscape_objective_id}
+								>
+									<option value="">Select landscape objective…</option>
+									{#each landscapeObjectives as obj (obj.objective_id)}
+										<option value={obj.objective_id}>{landscapeObjectiveLabel(obj)}</option>
+									{/each}
+								</select>
+							{/if}
 							<p class="m-0 mb-3 text-xs text-gray-500">
 								{editingHypothesis.field_note_count} field note(s) linked as evidence.
 							</p>
@@ -4196,6 +4249,16 @@
 									>Root cause</span
 								>
 								<p class="m-0 text-sm whitespace-pre-wrap">{selectedHypothesis.root_cause}</p>
+							</div>
+						{/if}
+						{#if selectedHypothesis.landscape_objective}
+							<div class="mb-3">
+								<span class="mb-0.5 block text-xs font-semibold text-gray-500 uppercase"
+									>Landscape objective</span
+								>
+								<p class="m-0 text-sm">
+									{landscapeObjectiveLabel(selectedHypothesis.landscape_objective)}
+								</p>
 							</div>
 						{/if}
 						<div class="mb-3">

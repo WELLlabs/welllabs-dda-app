@@ -564,10 +564,12 @@ def _load_zones_for_pdf(project_id: str) -> list[dict]:
 
 
 def _load_hypotheses_for_pdf(project_id: str) -> list[dict]:
+    from app.modules.diagnose.services.landscape_objectives import get_landscape_objective
+
     with db_cursor() as cur:
         cur.execute(
             """
-            SELECT id, hypothesis, root_cause, status, created_at
+            SELECT id, hypothesis, root_cause, status, landscape_objective_id, created_at
             FROM hypotheses
             WHERE project_id = %(project_id)s
             ORDER BY created_at ASC
@@ -588,12 +590,15 @@ def _load_hypotheses_for_pdf(project_id: str) -> list[dict]:
                 {"id": hid},
             )
             note_count = cur.fetchone()["n"]
+            obj_id = (row.get("landscape_objective_id") or "").strip() or None
             out.append(
                 {
                     "id": hid,
                     "hypothesis": row.get("hypothesis") or "",
                     "root_cause": row.get("root_cause") or "",
                     "status": row.get("status") or "untested",
+                    "landscape_objective_id": obj_id,
+                    "landscape_objective": get_landscape_objective(obj_id) if obj_id else None,
                     "observation_zone_ids": zone_ids,
                     "field_note_count": note_count,
                 }

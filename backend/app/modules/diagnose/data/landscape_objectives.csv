@@ -1,0 +1,30 @@
+Landscape ID,Landscape Objective,Objective ID,Previous Objective ID,Specific Objective,Purpose / Intended Outcome,WISER Dimension
+L-01,"Increase water availability, storage & recharge",L-01-01,1,Develop surface-water bodies,Extend seasonal water availability; enhance groundwater recharge; support protective irrigation.,Balance
+L-01,"Increase water availability, storage & recharge",L-01-02,2,Improve existing groundwater sources,Enhance groundwater recharge and extend seasonal water availability.,Balance
+L-01,"Increase water availability, storage & recharge",L-01-03,5,Improve water-holding capacity of streams and drainage channels,Capture and retain monsoon flows; extend water availability into the dry period.,Balance
+L-02,"Improve drinking-water access, quality & sanitation",L-02-01,7,Improve access to reliable drinking water,Increase seasonal reliability and ensure year-round drinking-water availability.,Balance
+L-02,"Improve drinking-water access, quality & sanitation",L-02-02,8,Improve drinking-water quality and safety,Reduce water-quality risks for communities using drinking-water sources.,Ecosystem Health
+L-02,"Improve drinking-water access, quality & sanitation",L-02-03,9,Improve surface-water quality,Reduce identified pollutant loads and pathways.,Ecosystem Health
+L-02,"Improve drinking-water access, quality & sanitation",L-02-04,10,Improve groundwater quality,Reduce identified pollutant loads and pathways.,Ecosystem Health
+L-02,"Improve drinking-water access, quality & sanitation",L-02-05,11,Improve sanitation infrastructure and management,Reduce contamination of water sources and human exposure.,Ecosystem Health
+L-03,Restore land & ecosystem health,L-03-01,3,Undertake land treatment activities,Reduce soil erosion and land degradation; improve groundwater recharge and seasonal water availability.,Ecosystem Health
+L-03,Restore land & ecosystem health,L-03-02,4,Increase vegetative cover,Mitigate future land degradation and restore water-regulating ecosystem functions.,Ecosystem Health
+L-03,Restore land & ecosystem health,L-03-03,6,Reduce stream degradation,Control soil erosion; enhance groundwater recharge; improve the long-term health of the drainage network.,Ecosystem Health
+L-04,Improve irrigation & agricultural water management,L-04-01,12,Develop irrigation infrastructure,Improve agricultural productivity and farm resilience.,Access
+L-04,Improve irrigation & agricultural water management,L-04-02,13,Improve irrigation-water reliability and distribution,Increase seasonal reliability and equitable access to irrigation water.,Access
+L-04,Improve irrigation & agricultural water management,L-04-03,14,Improve irrigation efficiency,Reduce losses and enhance water availability for agriculture.,Access
+L-04,Improve irrigation & agricultural water management,L-04-04,15,Improve agricultural field drainage,Reduce waterlogging and increase drainage capacity.,Resilience
+L-04,Improve irrigation & agricultural water management,L-04-05,18,Align cropping systems with local water availability,Improve water-use efficiency through appropriate crops and cultivation practices.,Productivity
+L-04,Improve irrigation & agricultural water management,L-04-06,19,Increase in-situ soil moisture and water retention,Improve water-use efficiency in agricultural fields.,Productivity
+L-05,Increase agricultural productivity & resilience,L-05-01,16,Restore agricultural soil health,"Reduce soil degradation; restore physical, chemical and biological properties; improve water-holding capacity.",Resilience
+L-05,Increase agricultural productivity & resilience,L-05-02,17,Improve access to agricultural inputs and advisory services,Enable adoption and sustained use of water-smart practices.,Governance
+L-05,Increase agricultural productivity & resilience,L-05-03,23,Improve nutrient management,Enhance crop health and productivity.,Ecosystem Health
+L-05,Increase agricultural productivity & resilience,L-05-04,24,Improve pest management,Enhance crop health and productivity.,Ecosystem Health
+L-06,Strengthen livelihood & domestic water management,L-06-01,20,Improve domestic and non-farm water management,Improve water-use efficiency.,Productivity
+L-06,Strengthen livelihood & domestic water management,L-06-02,21,Diversify non-farm livelihoods,Reduce water dependency and income vulnerability.,Resilience
+L-06,Strengthen livelihood & domestic water management,L-06-03,22,Diversify on-farm livelihoods,Reduce income vulnerability.,Resilience
+L-07,Strengthen community governance & capacity,L-07-01,25,Strengthen inclusive and participatory local water governance,Enable community institutions to manage water and natural resources.,Governance
+L-07,Strengthen community governance & capacity,L-07-02,26,Mobilise communities for participatory planning,Support sustainable natural resource management.,Governance
+L-07,Strengthen community governance & capacity,L-07-03,27,Build community and institutional capacity,"Improve monitoring, planning and management of water and natural resources.",Governance
+L-08,"Improve coordination, information & decision support",L-08-01,28,Improve institutional coordination and convergence,"Strengthen coordination across community institutions, government institutions and schemes.",Governance
+L-08,"Improve coordination, information & decision support",L-08-02,29,Improve access to water information,Enable data-driven participatory decision-making.,Governance

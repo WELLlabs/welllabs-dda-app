@@ -24,6 +24,16 @@ async def iter_sse_with_keepalive(
     """
     task = asyncio.create_task(run())
     try:
+        # First bytes immediately — Cloudflare ~100s idle budget starts after the
+        # response begins; delaying the first chunk until work starts can 502.
+        yield ": connected\n\n"
+        yield (
+            "data: "
+            + json.dumps(
+                {"type": "progress", "percent": 0, "message": "Starting…"}
+            )
+            + "\n\n"
+        )
         while True:
             try:
                 item: dict[str, Any] = await asyncio.wait_for(queue.get(), timeout=keepalive_s)

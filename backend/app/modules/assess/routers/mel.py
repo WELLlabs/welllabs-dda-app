@@ -189,9 +189,33 @@ def mel_interventions(_user: dict = Depends(get_current_user)):
 
 @router.get("/interventions/{slug}")
 def mel_intervention_detail(slug: str, _user: dict = Depends(get_current_user)):
+    from app.modules.assess.services.mel_logframe import (
+        get_logframe_intervention,
+        resolve_logframe_slug,
+        selectable_outcomes,
+    )
+
     mapped = get_mapping_intervention(slug)
+    logframe_outs = selectable_outcomes(slug)
     if mapped:
-        return mapped
+        payload = dict(mapped)
+        # Prefer full doc outcomes for MEL plan selection when a log-frame exists.
+        if logframe_outs:
+            payload["outcomes"] = logframe_outs
+        return payload
+
+    if logframe_outs:
+        base = get_logframe_intervention(slug) or {}
+        return {
+            "slug": resolve_logframe_slug(slug) or slug,
+            "name": base.get("name") or slug,
+            "outcomes": logframe_outs,
+            "questions": [],
+            "one_time_questions": [],
+            "cm_questions": [],
+            "from_logframe": True,
+        }
+
     intervention = get_intervention(slug)
     if intervention is None:
         raise HTTPException(404, "Intervention not found")
@@ -204,7 +228,24 @@ def mel_mapping_outcomes(
     outcome_ids: str | None = None,
     _user: dict = Depends(get_current_user),
 ):
+    from app.modules.assess.services.mel_logframe import (
+        get_logframe_intervention,
+        resolve_logframe_slug,
+        resolve_selectable_outcomes,
+        selectable_outcomes,
+    )
+
     ids = [x.strip() for x in (outcome_ids or "").split(",") if x.strip()]
+    if selectable_outcomes(slug):
+        base = get_logframe_intervention(slug) or {}
+        mapped = get_mapping_intervention(slug)
+        return {
+            "intervention": {
+                "slug": resolve_logframe_slug(slug) or slug,
+                "name": (mapped or {}).get("name") or base.get("name") or slug,
+            },
+            "outcomes": resolve_selectable_outcomes(slug, ids),
+        }
     intervention = get_mapping_intervention(slug)
     if not intervention:
         raise HTTPException(404, "Intervention not found in mapping catalog")
@@ -476,6 +517,7 @@ async def mel_plan_create_form(body: MelPlanCreateRequest, user: dict = Depends(
             odk_project_id=int(odk_project_id),
             project_name=project["name"],
             xml_form_ids=[stored_xml_id],
+            assign_forms=True,
         )
     except Exception as exc:
         logger.warning("Could not build Collect QR after publish: %s", exc)
@@ -497,13 +539,79 @@ async def mel_plan_create_form(body: MelPlanCreateRequest, user: dict = Depends(
     }
 
 
+def _flatten_mapping_indicators(outcomes: list[dict]) -> list[dict]:
+    """Turn mapping-catalog outcome.indicators into schedule-package indicator rows."""
+    indicators: list[dict] = []
+    seen: set[str] = set()
+    for outcome in outcomes:
+        for index, ind in enumerate(outcome.get("indicators") or []):
+            if isinstance(ind, dict):
+                title = (ind.get("title") or ind.get("indicator") or "").strip()
+                iid = str(ind.get("id") or f"{outcome.get('id')}_{index}")
+            else:
+                title = str(ind or "").strip()
+                iid = f"{outcome.get('id')}_{index}"
+            if not title or iid in seen:
+                continue
+            seen.add(iid)
+            indicators.append(
+                {
+                    "id": iid,
+                    "outcome_id": outcome.get("id"),
+                    "outcome": outcome.get("title") or "",
+                    "assumptions": outcome.get("assumptions") or "",
+                    "category": "",
+                    "category_label": outcome.get("outcome_type") or "",
+                    "indicator": title,
+                    "must_measure": False,
+                }
+            )
+    return indicators
+
+
+def _resolve_plan_selection(slug: str, outcome_ids: list[str]) -> dict:
+    """Resolve outcomes from the MEL log-frame docs when available, else mapping/legacy."""
+    from app.modules.assess.services.mel_logframe import (
+        get_logframe_intervention,
+        resolve_logframe_slug,
+        resolve_selectable_outcomes,
+        selectable_outcomes,
+    )
+
+    if selectable_outcomes(slug):
+        outcomes = resolve_selectable_outcomes(slug, outcome_ids)
+        mapped = get_mapping_intervention(slug)
+        base = get_logframe_intervention(slug) or {}
+        return {
+            "intervention": {
+                "slug": resolve_logframe_slug(slug) or (mapped or {}).get("slug") or slug,
+                "name": (mapped or {}).get("name") or base.get("name") or slug,
+            },
+            "outcomes": outcomes,
+            "indicators": _flatten_mapping_indicators(outcomes),
+            "from_mapping": bool(mapped),
+        }
+
+    mapped = get_mapping_intervention(slug)
+    if mapped:
+        outcomes = resolve_mapping_outcomes(slug, outcome_ids)
+        return {
+            "intervention": {"slug": mapped["slug"], "name": mapped["name"]},
+            "outcomes": outcomes,
+            "indicators": _flatten_mapping_indicators(outcomes),
+            "from_mapping": True,
+        }
+    try:
+        resolved = resolve_selected_outcomes(slug, outcome_ids)
+    except KeyError as exc:
+        raise HTTPException(404, "Intervention not found") from exc
+    return {**resolved, "from_mapping": False}
+
+
 @router.post("/plans/packages")
 def mel_plan_packages(body: MelPlanPreviewRequest, user: dict = Depends(get_current_user)):
     intervention_slug = _resolve_intervention_slug(body, user["id"])
-    try:
-        resolved = resolve_selected_outcomes(intervention_slug, body.outcome_ids)
-    except KeyError:
-        raise HTTPException(404, "Intervention not found")
+    resolved = _resolve_plan_selection(intervention_slug, body.outcome_ids)
 
     packaged = build_schedule_packages(resolved["indicators"])
     for package in packaged["packages"]:
@@ -517,7 +625,81 @@ def mel_plan_packages(body: MelPlanPreviewRequest, user: dict = Depends(get_curr
         "matched_indicators": packaged["matched_indicators"],
         "unmatched_indicators": packaged["unmatched_indicators"],
         "input_types": list_input_types(),
+        "logframe": _safe_logframe(intervention_slug, resolved["outcomes"]),
     }
+
+
+def _safe_logframe(intervention_slug: str, outcomes: list[dict]) -> dict | None:
+    try:
+        from app.modules.assess.services.mel_logframe import build_logframe_plan
+
+        return build_logframe_plan(
+            intervention_slug=intervention_slug,
+            selected_outcomes=outcomes,
+            selected_outcome_ids=[o.get("id") for o in outcomes if o.get("id")],
+        )
+    except KeyError:
+        logger.warning("No log-frame template for %s", intervention_slug)
+        return None
+    except Exception:
+        logger.exception("Log-frame build failed for %s", intervention_slug)
+        return None
+
+
+@router.post("/plans/logframe")
+def mel_plan_logframe(body: MelPlanPreviewRequest, user: dict = Depends(get_current_user)):
+    """Filtered log-frame preview for the selected intervention + outcomes."""
+    intervention_slug = _resolve_intervention_slug(body, user["id"])
+    resolved = _resolve_plan_selection(intervention_slug, body.outcome_ids)
+    frame = _safe_logframe(intervention_slug, resolved["outcomes"])
+    if not frame:
+        raise HTTPException(
+            404,
+            f"No log-frame template for intervention '{intervention_slug}'",
+        )
+    return {"intervention": resolved["intervention"], "logframe": frame}
+
+
+@router.post("/plans/export-docx")
+def mel_plan_export_docx_preview(body: MelPlanPreviewRequest, user: dict = Depends(get_current_user)):
+    """Export log-frame Word doc from intervention + selected outcomes (designer flow)."""
+    intervention_slug = _resolve_intervention_slug(body, user["id"])
+    resolved = _resolve_plan_selection(intervention_slug, body.outcome_ids)
+    intervention_name = resolved["intervention"]["name"]
+    outcomes = resolved["outcomes"]
+
+    project_name = "MEL Project"
+    plan_name = "MEL Plan"
+    if body.project_id:
+        try:
+            project_name = get_mel_project(body.project_id)["name"]
+        except Exception:
+            pass
+    if body.plan_id and body.project_id:
+        try:
+            plan_name = get_mel_plan(body.plan_id, project_id=body.project_id)["name"]
+        except Exception:
+            pass
+
+    try:
+        from app.modules.assess.services.mel_plan_docx import build_mel_plan_docx
+
+        content = build_mel_plan_docx(
+            project_name=project_name,
+            plan_name=plan_name,
+            intervention_name=intervention_name,
+            intervention_slug=intervention_slug,
+            outcomes=outcomes,
+        )
+    except Exception as exc:
+        logger.exception("MEL plan docx export failed")
+        raise HTTPException(500, f"MEL plan export failed: {exc}") from exc
+    filename = f"mel-plan-{intervention_slug}.docx"
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post("/plans/create-forms")
@@ -645,6 +827,7 @@ async def mel_plan_create_forms(body: MelPlanCreateFormsRequest, user: dict = De
             odk_project_id=int(odk_project_id),
             project_name=project["name"],
             xml_form_ids=[f["xmlFormId"] for f in created_forms],
+            assign_forms=True,
         )
         for form in created_forms:
             form["collectQr"] = collect_qr

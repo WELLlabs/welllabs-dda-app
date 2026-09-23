@@ -2,6 +2,11 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from app.modules.diagnose.services.landscape_objectives import (
+    get_landscape_objective,
+    known_objective_ids,
+    load_landscape_objectives,
+)
 from app.shared.access import assert_diagnosis_access
 from app.shared.auth import get_current_user
 from app.shared.database import db_cursor
@@ -10,6 +15,12 @@ router = APIRouter()
 
 VALID_STATUSES = frozenset({"untested", "validated", "invalidated", "discarded"})
 EVIDENCE_STATUSES = frozenset({"validated", "invalidated"})
+
+_HYPOTHESIS_SELECT = """
+    SELECT id, project_id, hypothesis, root_cause, status,
+           landscape_objective_id, created_at, updated_at
+    FROM hypotheses
+"""
 
 
 class HypothesisCreate(BaseModel):
@@ -22,16 +33,21 @@ class HypothesisUpdate(BaseModel):
     hypothesis: str | None = None
     root_cause: str | None = None
     status: str | None = None
+    landscape_objective_id: str | None = None
     observation_zone_ids: list[str] | None = None
 
 
 def _row_to_dict(row: dict, zone_ids: list[str], field_note_count: int) -> dict:
+    obj_id = (row.get("landscape_objective_id") or "").strip() or None
+    landscape_objective = get_landscape_objective(obj_id) if obj_id else None
     return {
         "id": str(row["id"]),
         "project_id": str(row["project_id"]),
         "hypothesis": row["hypothesis"],
         "root_cause": row["root_cause"],
         "status": row["status"],
+        "landscape_objective_id": obj_id,
+        "landscape_objective": landscape_objective,
         "observation_zone_ids": zone_ids,
         "field_note_count": field_note_count,
         "created_at": row["created_at"].isoformat(),
@@ -79,6 +95,15 @@ def _validate_zone_ids(cur, project_id: str, zone_ids: list[str]) -> None:
         raise HTTPException(400, f"Observation zone(s) not in this project: {', '.join(missing)}")
 
 
+def _normalize_objective_id(value: str | None) -> str:
+    return (value or "").strip()
+
+
+def _assert_known_objective(objective_id: str) -> None:
+    if objective_id and objective_id not in known_objective_ids():
+        raise HTTPException(400, f"Unknown landscape objective id: {objective_id}")
+
+
 def _set_zone_links(cur, hypothesis_id: str, zone_ids: list[str]) -> None:
     cur.execute(
         "DELETE FROM hypothesis_observation_zones WHERE hypothesis_id = %(id)s",
@@ -94,14 +119,20 @@ def _set_zone_links(cur, hypothesis_id: str, zone_ids: list[str]) -> None:
         )
 
 
+@router.get("/landscape-objectives")
+def list_landscape_objectives(user: dict = Depends(get_current_user)):
+    """Solutions Basket landscape objectives for hypothesis validation."""
+    _ = user
+    return {"objectives": load_landscape_objectives()}
+
+
 @router.get("")
 def list_hypotheses(project_id: str = Query(...), user: dict = Depends(get_current_user)):
     assert_diagnosis_access(user["id"], project_id)
     with db_cursor() as cur:
         cur.execute(
-            """
-            SELECT id, project_id, hypothesis, root_cause, status, created_at, updated_at
-            FROM hypotheses
+            f"""
+            {_HYPOTHESIS_SELECT}
             WHERE project_id = %(project_id)s
             ORDER BY created_at DESC
             """,
@@ -123,10 +154,7 @@ def get_hypothesis(hypothesis_id: str, user: dict = Depends(get_current_user)):
         project_id = _hypothesis_project_id(cur, hypothesis_id)
         assert_diagnosis_access(user["id"], project_id)
         cur.execute(
-            """
-            SELECT id, project_id, hypothesis, root_cause, status, created_at, updated_at
-            FROM hypotheses WHERE id = %(id)s
-            """,
+            f"{_HYPOTHESIS_SELECT} WHERE id = %(id)s",
             {"id": hypothesis_id},
         )
         row = cur.fetchone()
@@ -146,7 +174,8 @@ def create_hypothesis(body: HypothesisCreate, user: dict = Depends(get_current_u
             """
             INSERT INTO hypotheses (project_id, hypothesis, created_by)
             VALUES (%(project_id)s, %(hypothesis)s, %(created_by)s)
-            RETURNING id, project_id, hypothesis, root_cause, status, created_at, updated_at
+            RETURNING id, project_id, hypothesis, root_cause, status,
+                      landscape_objective_id, created_at, updated_at
             """,
             {
                 "project_id": body.project_id,
@@ -167,6 +196,14 @@ def update_hypothesis(hypothesis_id: str, body: HypothesisUpdate, user: dict = D
         project_id = _hypothesis_project_id(cur, hypothesis_id)
         assert_diagnosis_access(user["id"], project_id)
 
+        cur.execute(
+            f"{_HYPOTHESIS_SELECT} WHERE id = %(id)s",
+            {"id": hypothesis_id},
+        )
+        current = cur.fetchone()
+        if not current:
+            raise HTTPException(404, "Hypothesis not found")
+
         if body.status is not None and body.status not in VALID_STATUSES:
             raise HTTPException(400, f"Invalid status. Must be one of: {', '.join(sorted(VALID_STATUSES))}")
 
@@ -180,6 +217,20 @@ def update_hypothesis(hypothesis_id: str, body: HypothesisUpdate, user: dict = D
 
         if body.observation_zone_ids is not None:
             _validate_zone_ids(cur, project_id, body.observation_zone_ids)
+
+        effective_status = body.status if body.status is not None else current["status"]
+        current_obj = _normalize_objective_id(current.get("landscape_objective_id"))
+        if body.landscape_objective_id is not None:
+            effective_obj = _normalize_objective_id(body.landscape_objective_id)
+            _assert_known_objective(effective_obj)
+        else:
+            effective_obj = current_obj
+
+        if effective_status in EVIDENCE_STATUSES and not effective_obj:
+            raise HTTPException(
+                400,
+                "Select a landscape objective when validating or invalidating a hypothesis",
+            )
 
         sets = []
         params: dict = {"id": hypothesis_id}
@@ -200,6 +251,9 @@ def update_hypothesis(hypothesis_id: str, body: HypothesisUpdate, user: dict = D
         if body.status is not None:
             sets.append("status = %(status)s")
             params["status"] = body.status
+        if body.landscape_objective_id is not None:
+            sets.append("landscape_objective_id = %(landscape_objective_id)s")
+            params["landscape_objective_id"] = effective_obj
 
         if sets:
             cur.execute(
@@ -216,10 +270,7 @@ def update_hypothesis(hypothesis_id: str, body: HypothesisUpdate, user: dict = D
             raise HTTPException(400, "No fields to update")
 
         cur.execute(
-            """
-            SELECT id, project_id, hypothesis, root_cause, status, created_at, updated_at
-            FROM hypotheses WHERE id = %(id)s
-            """,
+            f"{_HYPOTHESIS_SELECT} WHERE id = %(id)s",
             {"id": hypothesis_id},
         )
         row = cur.fetchone()

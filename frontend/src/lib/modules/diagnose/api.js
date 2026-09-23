@@ -1,4 +1,4 @@
-import { createApiClient, streamSSE } from '$lib/shared/api-client.js';
+import { createApiClient, streamSSE, parseErrorMessage } from '$lib/shared/api-client.js';
 import { apiPath } from '$lib/shared/paths.js';
 
 const API = apiPath('/diagnose');
@@ -107,6 +107,28 @@ export async function removeOrgAccess(projectId, orgId) {
 
 export async function lookupWatershed(lng, lat, { signal } = {}) {
 	return request('/watersheds/lookup', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ lng, lat }),
+		signal,
+		retries: 1,
+		retryDelayMs: 800
+	});
+}
+
+/** Nominatim place search (India-biased) for map village pick. */
+export async function searchPlaces(q, limit = 6, { signal } = {}) {
+	const params = new URLSearchParams({ q, limit: String(limit) });
+	const data = await request(`/watersheds/places/search?${params}`, { signal });
+	return data.places ?? [];
+}
+
+/**
+ * Map/geocode point → village polygon from configured FGB → L12 union.
+ * Prefer this over the state/district dropdown when the name index is stale.
+ */
+export async function watershedsFromPoint({ lng, lat, signal } = {}) {
+	return request('/watersheds/from-point', {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({ lng, lat }),
@@ -232,6 +254,14 @@ export async function fetchDemMesh(projectId) {
 	return request(`/layers/dem/mesh?project_id=${encodeURIComponent(projectId)}`);
 }
 
+/** Watershed-clipped GeoJSON for a vector layer (villages, canals, streams, …). */
+export async function fetchVectorLayerData(layerId, projectId, { signal } = {}) {
+	return request(
+		`/layers/vector/${encodeURIComponent(layerId)}/data?project_id=${encodeURIComponent(projectId)}`,
+		{ signal, retries: 1, retryDelayMs: 700 }
+	);
+}
+
 /** Plotly surfacecolor grid for draping a layer on the DEM mesh. */
 export async function fetchLayerDrapeGrid(layerId, projectId) {
 	return request(
@@ -332,6 +362,11 @@ export async function deleteFieldNote(id) {
 export async function fetchHypotheses(projectId) {
 	const data = await request(`/hypotheses?project_id=${encodeURIComponent(projectId)}`);
 	return data.hypotheses ?? [];
+}
+
+export async function fetchLandscapeObjectives() {
+	const data = await request('/hypotheses/landscape-objectives');
+	return data.objectives ?? [];
 }
 
 export async function createHypothesis(projectId, hypothesis, observationZoneIds) {
@@ -435,6 +470,7 @@ export async function exportDiagnosisPdfStream(projectId, handlers = {}) {
 		`${API}/projects/${encodeURIComponent(projectId)}/export-pdf/stream`,
 		{
 			method: 'POST',
+			credentials: 'include',
 			headers: {
 				Accept: 'text/event-stream'
 			},
@@ -451,16 +487,7 @@ export async function downloadDiagnosisPdf(projectId, filename, { signal } = {})
 		{ method: 'GET', credentials: 'include', signal }
 	);
 	if (!res.ok) {
-		const text = await res.text();
-		let message = text || res.statusText;
-		try {
-			const json = JSON.parse(text);
-			if (json.detail)
-				message = typeof json.detail === 'string' ? json.detail : JSON.stringify(json.detail);
-		} catch {
-			/* keep raw */
-		}
-		throw new Error(message);
+		throw new Error(await parseErrorMessage(res));
 	}
 	const blob = await res.blob();
 	return { blob, filename };
@@ -474,16 +501,7 @@ export async function exportDiagnosisPdf(projectId, { signal } = {}) {
 		signal
 	});
 	if (!res.ok) {
-		const text = await res.text();
-		let message = text || res.statusText;
-		try {
-			const json = JSON.parse(text);
-			if (json.detail)
-				message = typeof json.detail === 'string' ? json.detail : JSON.stringify(json.detail);
-		} catch {
-			/* keep raw */
-		}
-		throw new Error(message);
+		throw new Error(await parseErrorMessage(res));
 	}
 	const blob = await res.blob();
 	const disposition = res.headers.get('Content-Disposition') || '';

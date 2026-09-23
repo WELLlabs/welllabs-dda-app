@@ -14,8 +14,10 @@ import {
 	lookupWatershed,
 	removeOrgAccess,
 	removeUserAccess,
+	searchPlaces,
 	searchVillages,
 	watershedsFromGeometry,
+	watershedsFromPoint,
 	watershedsFromVillage
 } from '../modules/diagnose/api.js';
 
@@ -147,9 +149,29 @@ describe('diagnose api', () => {
 			{ id: '1', name: 'maraliga' }
 		]);
 		expect(fetch).toHaveBeenCalledWith(
-			'/wst/backend/diagnose/watersheds/villages/by-district?state=karnataka&district=mandya&limit=500',
+			'/wst/backend/diagnose/watersheds/villages/by-district?state=karnataka&district=mandya',
 			{ credentials: 'include' }
 		);
+	});
+
+	it('searchPlaces and watershedsFromPoint hit map-search endpoints', async () => {
+		mockJson({ places: [{ label: 'Periyakulam', lat: 10.1, lng: 77.5 }] });
+		await expect(searchPlaces('Periyakulam')).resolves.toEqual([
+			{ label: 'Periyakulam', lat: 10.1, lng: 77.5 }
+		]);
+		expect(fetch).toHaveBeenCalledWith(
+			'/wst/backend/diagnose/watersheds/places/search?q=Periyakulam&limit=6',
+			{ credentials: 'include' }
+		);
+
+		mockJson({ watershed_id: 'union:2', village_name: 'Demo' });
+		await watershedsFromPoint({ lng: 77.5, lat: 10.1 });
+		expect(fetch).toHaveBeenCalledWith('/wst/backend/diagnose/watersheds/from-point', {
+			credentials: 'include',
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ lng: 77.5, lat: 10.1 })
+		});
 	});
 
 	it('watershedsFromVillage and watershedsFromGeometry post payloads', async () => {

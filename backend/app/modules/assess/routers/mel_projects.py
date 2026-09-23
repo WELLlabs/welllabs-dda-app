@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
+import re
+import time
 
 from pydantic import BaseModel, Field
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import Response
+
+logger = logging.getLogger(__name__)
 
 from app.modules.assess.access import (
     assess_access_where,
@@ -20,7 +26,10 @@ from app.modules.assess.access import (
     require_assess_admin,
     require_assess_owner,
 )
-from app.modules.assess.services.collect_qr import build_mel_collect_qr
+from app.modules.assess.services.collect_qr import (
+    assign_mel_forms_to_collect_user,
+    build_mel_collect_qr,
+)
 from app.modules.assess.services.mel_analyses import (
     asset_label_from_answers,
     compute_asset_metrics,
@@ -28,15 +37,12 @@ from app.modules.assess.services.mel_analyses import (
     is_plot_intervention,
 )
 from app.modules.assess.services.mel_catalog import get_intervention
+from app.modules.assess.services.mel_logframe import resolve_selectable_outcomes
 from app.modules.assess.services.mel_mapping_catalog import (
     get_mapping_intervention,
     resolve_mapping_outcomes,
 )
-from app.modules.assess.services.mel_plan_docx import (
-    _apply_question_overrides,
-    build_mel_plan_docx,
-)
-from app.modules.assess.services.odk_submissions import normalize_submissions
+from app.modules.assess.services.odk_submissions import normalize_submissions, parse_geopoint
 from app.shared.auth import get_current_user
 from app.shared.config import settings
 from app.shared.database import db_cursor
@@ -390,9 +396,10 @@ def delete_mel_plan(
 
 
 @router.get("/{project_id}/plans/{plan_id}/forms")
-def list_mel_plan_forms(
+async def list_mel_plan_forms(
     project_id: str, plan_id: str, user: dict = Depends(require_assess_access)
 ):
+    """List published forms for a plan (DB only — no ODK round-trip)."""
     get_mel_project(project_id)
     get_mel_plan(plan_id, project_id=project_id)
     with db_cursor() as cur:
@@ -459,21 +466,30 @@ def list_mel_project_forms(project_id: str, user: dict = Depends(require_assess_
     }
 
 
-async def _fetch_all_odata_submissions(client: ODKClient, odk_project_id: int, xml_form_id: str) -> list[dict]:
-    """Page OData Submissions until exhausted (cap pages for safety)."""
+async def _fetch_all_odata_submissions(
+    client: ODKClient,
+    odk_project_id: int,
+    xml_form_id: str,
+    *,
+    top: int | None = None,
+) -> list[dict]:
+    """Page OData Submissions until exhausted (or until ``top`` rows if set)."""
     path = f"/v1/projects/{odk_project_id}/forms/{xml_form_id}.svc/Submissions"
     rows: list[dict] = []
     skip = 0
-    page_size = 500
+    page_size = min(500, top) if top is not None else 500
     max_pages = 40
     for _ in range(max_pages):
-        payload = await client.get(path, params={"$top": page_size, "$skip": skip})
+        params: dict[str, int] = {"$top": page_size, "$skip": skip}
+        payload = await client.get(path, params=params)
         if not isinstance(payload, dict):
             break
         batch = payload.get("value")
         if not isinstance(batch, list):
             break
         rows.extend(item for item in batch if isinstance(item, dict))
+        if top is not None and len(rows) >= top:
+            return rows[:top]
         if len(batch) < page_size:
             break
         skip += page_size
@@ -540,6 +556,7 @@ async def get_mel_form_collect_qr(
     project_id: str,
     plan_id: str,
     xml_form_id: str,
+    background_tasks: BackgroundTasks,
     user: dict = Depends(require_assess_access),
 ):
     """Return an ODK Collect QR payload for a published MEL form."""
@@ -554,7 +571,7 @@ async def get_mel_form_collect_qr(
     with db_cursor() as cur:
         cur.execute(
             """
-            SELECT id, xml_form_id, name, package_title
+            SELECT id, xml_form_id, name, package_title, package_id
             FROM mel_forms
             WHERE project_id = %(project_id)s
               AND plan_id = %(plan_id)s
@@ -570,14 +587,39 @@ async def get_mel_form_collect_qr(
     if not form_row:
         raise HTTPException(404, "Form not found on this MEL plan")
 
+    use_form_id = str(form_row["xml_form_id"])
+    # Prefer the already-linked cm-mapping row from DB (no ODK verify on QR path).
+    if (form_row.get("package_id") or "") == "cm-mapping":
+        with db_cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, xml_form_id, name, package_title, package_id
+                FROM mel_forms
+                WHERE project_id = %(project_id)s
+                  AND plan_id = %(plan_id)s
+                  AND package_id = 'cm-mapping'
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                {"project_id": project_id, "plan_id": plan_id},
+            )
+            cm_row = cur.fetchone()
+        if cm_row and cm_row.get("xml_form_id"):
+            use_form_id = str(cm_row["xml_form_id"])
+            form_row = cm_row
+        # Relink empty/wrong CM forms in the background — don't block Collect QR.
+        background_tasks.add_task(_ensure_plan_cm_form_linked_safe, plan_id, project_id)
+
     client = ODKClient()
     odk_project_id = int(settings.odk_project_id)
     try:
+        # Fast path: build QR from cached app-user token; assign form in background.
         collect_qr = await build_mel_collect_qr(
             client,
             odk_project_id=odk_project_id,
             project_name=project.get("name") or "WELL Labs MEL",
-            xml_form_ids=[xml_form_id],
+            xml_form_ids=[],
+            assign_forms=False,
         )
     except ODKConnectionError:
         raise HTTPException(502, "Could not reach ODK Central. Try again later.")
@@ -586,10 +628,17 @@ async def get_mel_form_collect_qr(
     except ODKAPIError as exc:
         raise HTTPException(exc.status_code, f"ODK API error: {exc}")
 
+    background_tasks.add_task(
+        assign_mel_forms_to_collect_user,
+        odk_project_id=odk_project_id,
+        app_user_id=int(collect_qr["appUserId"]),
+        xml_form_ids=[use_form_id],
+    )
+
     return {
         "projectId": project_id,
         "planId": plan_id,
-        "xmlFormId": xml_form_id,
+        "xmlFormId": use_form_id,
         "formName": form_row["name"],
         "packageTitle": form_row.get("package_title") or "",
         "collectQr": collect_qr,
@@ -999,6 +1048,7 @@ def _cm_stats_from_rows(
 
 
 def _local_cm_rows(plan_id: str, project_id: str) -> list[dict]:
+    """Legacy helper — dashboards use ODK only."""
     rows: list[dict] = []
     with db_cursor() as cur:
         cur.execute(
@@ -1031,9 +1081,409 @@ def _local_cm_rows(plan_id: str, project_id: str) -> list[dict]:
     return rows
 
 
-async def _odk_cm_rows(plan_id: str, project_id: str) -> tuple[list[dict], str | None]:
-    if settings.odk_project_id is None:
+def _coord_key(lat: float | str, lon: float | str) -> tuple[str, str] | None:
+    try:
+        return f"{float(lat):.5f}", f"{float(lon):.5f}"
+    except (TypeError, ValueError):
+        return None
+
+
+def _coord_key_from_location(loc: str | None) -> tuple[str, str] | None:
+    parts = [p.strip() for p in str(loc or "").replace(",", " ").split() if p.strip()]
+    if len(parts) < 2:
+        return None
+    return _coord_key(parts[0], parts[1])
+
+
+def _plan_asset_coord_index(plan_id: str, project_id: str) -> tuple[set[str], dict[tuple[str, str], str]]:
+    """Return (known_asset_ids, coord_key -> asset_id) for a MEL plan."""
+    known: set[str] = set()
+    by_coord: dict[tuple[str, str], str] = {}
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, ot_answers
+            FROM mel_assets
+            WHERE plan_id = %(plan_id)s AND project_id = %(project_id)s
+            """,
+            {"plan_id": plan_id, "project_id": project_id},
+        )
+        for asset in cur.fetchall():
+            aid = str(asset["id"])
+            known.add(aid)
+            ot = asset.get("ot_answers") or {}
+            if not isinstance(ot, dict):
+                continue
+            key = _coord_key_from_location(
+                ot.get("fp_ot_location") or ot.get("bm_ot_location") or ""
+            )
+            if key and key not in by_coord:
+                by_coord[key] = aid
+    return known, by_coord
+
+
+def remap_odk_cm_to_plan_assets(
+    rows: list[dict],
+    *,
+    known_asset_ids: set[str],
+    assets_by_coord: dict[tuple[str, str], str],
+) -> list[dict]:
+    """Rewrite CM asset-select fields so ODK rows match this plan's asset UUIDs.
+
+    Sample Medak submissions were posted with one environment's asset IDs; beta
+    has different UUIDs for the same ponds. Match by lat/lon when the stored
+    select id is foreign to this plan.
+    """
+    if not rows or not assets_by_coord:
+        return rows
+    out: list[dict] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        r = dict(row)
+        sel = str(
+            r.get("fp_cm_select_the_asset_id")
+            or r.get("bm_cm_select_the_asset_id")
+            or ""
+        ).strip()
+        if sel and sel in known_asset_ids:
+            out.append(r)
+            continue
+        lat, lon = parse_geopoint(r.get("coordinates"))
+        if lat is None or lon is None:
+            # Some OData payloads split lat/lon; try those next.
+            lat, lon = r.get("lat"), r.get("lon")
+        key = _coord_key(lat, lon) if lat is not None and lon is not None else None
+        mapped = assets_by_coord.get(key) if key else None
+        if mapped:
+            r["fp_cm_select_the_asset_id"] = mapped
+            r["bm_cm_select_the_asset_id"] = mapped
+        out.append(r)
+    return out
+
+
+def _matched_cm_count(rows: list[dict], known_asset_ids: set[str]) -> int:
+    n = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        sel = str(
+            row.get("fp_cm_select_the_asset_id")
+            or row.get("bm_cm_select_the_asset_id")
+            or ""
+        ).strip()
+        if sel and sel in known_asset_ids:
+            n += 1
+    return n
+
+
+# --- ODK CM caches (process-local; avoid multi-second Central round-trips) ---
+_CM_BUNDLE_CACHE: dict[str, tuple[float, list[dict], dict]] = {}
+_CM_BUNDLE_TTL_S = 300.0
+_ODK_SUBMISSIONS_CACHE: dict[str, tuple[float, list[dict], str | None]] = {}
+_ODK_SUBMISSIONS_TTL_S = 300.0
+_CM_LINK_CACHE: dict[str, tuple[float, str | None]] = {}
+_CM_LINK_TTL_S = 900.0
+
+
+def _normalize_odk_rows(odata_rows: list[dict]) -> tuple[list[dict], str | None]:
+    latest: str | None = None
+    for raw in odata_rows:
+        system = raw.get("__system") if isinstance(raw, dict) else None
+        ts = system.get("submissionDate") if isinstance(system, dict) else None
+        if ts and (latest is None or str(ts) > latest):
+            latest = str(ts)
+    normalized = normalize_submissions(odata_rows)
+    out = [sub for sub in (normalized.get("rows") or []) if isinstance(sub, dict)]
+    return out, latest
+
+
+async def _fetch_one_odk_form_cm(
+    xml_form_id: str,
+    odk_project_id: int,
+    *,
+    sample: int | None = None,
+    use_cache: bool = True,
+) -> tuple[list[dict], str | None]:
+    """Fetch CM rows for one form. ``sample`` limits to a cheap probe ($top=N)."""
+    cache_key = f"{odk_project_id}:{xml_form_id}"
+    if use_cache and sample is None:
+        hit = _ODK_SUBMISSIONS_CACHE.get(cache_key)
+        if hit and (time.monotonic() - hit[0]) < _ODK_SUBMISSIONS_TTL_S:
+            return hit[1], hit[2]
+
+    form_client = ODKClient()
+    try:
+        odata_rows = await _fetch_all_odata_submissions(
+            form_client, odk_project_id, xml_form_id, top=sample
+        )
+    except Exception:
+        logger.exception(
+            "ODK CM fetch failed for form %s (project %s)",
+            xml_form_id,
+            odk_project_id,
+        )
         return [], None
+    out, latest = _normalize_odk_rows(odata_rows)
+    if use_cache and sample is None:
+        _ODK_SUBMISSIONS_CACHE[cache_key] = (time.monotonic(), out, latest)
+    return out, latest
+
+
+def _cm_form_discovery_score(xml_form_id: str, name: str, *, intervention_slug: str) -> int:
+    fid = (xml_form_id or "").lower()
+    label = (name or "").lower()
+    slug = (intervention_slug or "").lower()
+    score = 0
+    if "farm-pond" in slug or "farm_pond" in slug or slug in {"farmpond", "farm-ponds"}:
+        if "farm_pond_cm" in fid:
+            score += 100
+        if "farm pond" in label and "cm" in label:
+            score += 40
+    if "pmds" in slug:
+        if "pmds_cm" in fid:
+            score += 100
+        if "pmds" in label and "cm" in label:
+            score += 40
+    if score == 0 and ("_cm_" in fid or fid.endswith("_cm") or "continuous" in label):
+        score += 5
+    return score
+
+
+def _looks_like_seeded_cm_form(xml_form_id: str, intervention_slug: str) -> bool:
+    """True when the linked form id is already the seeded CM form pattern."""
+    return _cm_form_discovery_score(
+        xml_form_id, "", intervention_slug=intervention_slug
+    ) >= 100
+
+
+async def _discover_odk_cm_rows(
+    *,
+    known_asset_ids: set[str],
+    assets_by_coord: dict[tuple[str, str], str],
+    intervention_slug: str,
+    exclude_form_ids: set[str],
+) -> tuple[list[dict], str | None, str | None, str | None]:
+    """Find an ODK form whose submissions match this plan's pond coordinates.
+
+    Returns (rows, latest_submission_at, xml_form_id, form_name).
+    Probes with a small $top sample before downloading the full series.
+    """
+    if settings.odk_project_id is None or not assets_by_coord:
+        return [], None, None, None
+    odk_project_id = int(settings.odk_project_id)
+    client = ODKClient()
+    try:
+        forms = await client.get(f"/v1/projects/{odk_project_id}/forms")
+    except Exception:
+        logger.exception("ODK form list failed during CM discovery")
+        return [], None, None, None
+    if not isinstance(forms, list):
+        return [], None, None, None
+
+    ranked: list[tuple[int, str, str]] = []
+    for form in forms:
+        if not isinstance(form, dict):
+            continue
+        fid = str(form.get("xmlFormId") or form.get("xml_form_id") or "")
+        if not fid or fid in exclude_form_ids:
+            continue
+        name = str(form.get("name") or "")
+        score = _cm_form_discovery_score(
+            fid, name, intervention_slug=intervention_slug
+        )
+        if score <= 0:
+            continue
+        ranked.append((score, fid, name))
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+
+    for _score, fid, name in ranked[:8]:
+        sample_rows, _sample_latest = await _fetch_one_odk_form_cm(
+            fid, odk_project_id, sample=15, use_cache=False
+        )
+        if not sample_rows:
+            continue
+        remapped_sample = remap_odk_cm_to_plan_assets(
+            sample_rows, known_asset_ids=known_asset_ids, assets_by_coord=assets_by_coord
+        )
+        if _matched_cm_count(remapped_sample, known_asset_ids) == 0:
+            continue
+        rows, latest = await _fetch_one_odk_form_cm(fid, odk_project_id)
+        remapped = remap_odk_cm_to_plan_assets(
+            rows, known_asset_ids=known_asset_ids, assets_by_coord=assets_by_coord
+        )
+        matched = _matched_cm_count(remapped, known_asset_ids)
+        if matched > 0:
+            logger.info(
+                "ODK CM discovery: using form %s (%s matched rows)",
+                fid,
+                matched,
+            )
+            return remapped, latest, fid, name or fid
+    return [], None, None, None
+
+
+def _link_plan_cm_form(
+    *,
+    plan_id: str,
+    project_id: str,
+    xml_form_id: str,
+    name: str,
+    created_by: str | None = None,
+) -> None:
+    """Point the plan's cm-mapping mel_forms row at the ODK form with farm-pond data.
+
+    Collect QR and dashboard then share the same xmlFormId.
+    """
+    with db_cursor() as cur:
+        if created_by is None:
+            cur.execute(
+                """
+                SELECT created_by FROM mel_plans
+                WHERE id = %(plan_id)s AND project_id = %(project_id)s
+                """,
+                {"plan_id": plan_id, "project_id": project_id},
+            )
+            plan = cur.fetchone() or {}
+            created_by = str(plan["created_by"]) if plan.get("created_by") else None
+
+        cur.execute(
+            """
+            DELETE FROM mel_forms
+            WHERE plan_id = %(plan_id)s
+              AND project_id = %(project_id)s
+              AND package_id = 'cm-mapping'
+              AND xml_form_id <> %(xml_form_id)s
+            """,
+            {
+                "plan_id": plan_id,
+                "project_id": project_id,
+                "xml_form_id": xml_form_id,
+            },
+        )
+        cur.execute(
+            """
+            INSERT INTO mel_forms (
+                project_id, plan_id, xml_form_id, name, package_id, package_title, created_by
+            )
+            VALUES (
+                %(project_id)s, %(plan_id)s, %(xml_form_id)s, %(name)s,
+                'cm-mapping', 'Continuous monitoring', %(created_by)s
+            )
+            ON CONFLICT (plan_id, xml_form_id) DO UPDATE SET
+                name = EXCLUDED.name,
+                package_id = 'cm-mapping',
+                package_title = COALESCE(
+                    EXCLUDED.package_title, mel_forms.package_title
+                )
+            """,
+            {
+                "project_id": project_id,
+                "plan_id": plan_id,
+                "xml_form_id": xml_form_id,
+                "name": name,
+                "created_by": created_by,
+            },
+        )
+
+
+async def ensure_plan_cm_form_linked(plan_id: str, project_id: str) -> str | None:
+    """Ensure cm-mapping QR/form id is the ODK form that holds matching CM rows.
+
+    Fast paths avoid full OData downloads: in-memory link cache, seeded form-id
+    patterns, then a tiny $top sample before any discovery.
+    """
+    if settings.odk_project_id is None:
+        return None
+
+    cache_key = f"{project_id}:{plan_id}"
+    link_hit = _CM_LINK_CACHE.get(cache_key)
+    if link_hit and (time.monotonic() - link_hit[0]) < _CM_LINK_TTL_S:
+        return link_hit[1]
+
+    known, by_coord = _plan_asset_coord_index(plan_id, project_id)
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT intervention_slug FROM mel_plans
+            WHERE id = %(plan_id)s AND project_id = %(project_id)s
+            """,
+            {"plan_id": plan_id, "project_id": project_id},
+        )
+        plan_row = cur.fetchone() or {}
+        cur.execute(
+            """
+            SELECT xml_form_id, name
+            FROM mel_forms
+            WHERE plan_id = %(plan_id)s AND project_id = %(project_id)s
+              AND package_id = 'cm-mapping'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            {"plan_id": plan_id, "project_id": project_id},
+        )
+        current = cur.fetchone()
+    intervention_slug = str(plan_row.get("intervention_slug") or "")
+    current_id = str(current["xml_form_id"]) if current and current.get("xml_form_id") else None
+
+    def _remember(fid: str | None) -> str | None:
+        _CM_LINK_CACHE[cache_key] = (time.monotonic(), fid)
+        return fid
+
+    # Already pointing at the seeded farm_pond_cm / pmds_cm form — trust DB.
+    if current_id and _looks_like_seeded_cm_form(current_id, intervention_slug):
+        return _remember(current_id)
+
+    if current_id and by_coord:
+        sample, _ = await _fetch_one_odk_form_cm(
+            current_id, int(settings.odk_project_id), sample=15, use_cache=False
+        )
+        remapped = remap_odk_cm_to_plan_assets(
+            sample, known_asset_ids=known, assets_by_coord=by_coord
+        )
+        if _matched_cm_count(remapped, known) > 0:
+            return _remember(current_id)
+
+    if not by_coord:
+        return _remember(current_id)
+
+    exclude = {current_id} if current_id else set()
+    _rows, _latest, discovered_id, discovered_name = await _discover_odk_cm_rows(
+        known_asset_ids=known,
+        assets_by_coord=by_coord,
+        intervention_slug=intervention_slug,
+        exclude_form_ids=exclude,
+    )
+    if not discovered_id:
+        _rows, _latest, discovered_id, discovered_name = await _discover_odk_cm_rows(
+            known_asset_ids=known,
+            assets_by_coord=by_coord,
+            intervention_slug=intervention_slug,
+            exclude_form_ids=set(),
+        )
+    if discovered_id and discovered_id != current_id:
+        _link_plan_cm_form(
+            plan_id=plan_id,
+            project_id=project_id,
+            xml_form_id=discovered_id,
+            name=discovered_name or discovered_id,
+        )
+        _CM_BUNDLE_CACHE.pop(cache_key, None)
+        return _remember(discovered_id)
+    return _remember(discovered_id or current_id)
+
+
+async def _ensure_plan_cm_form_linked_safe(plan_id: str, project_id: str) -> None:
+    try:
+        await ensure_plan_cm_form_linked(plan_id, project_id)
+    except Exception:
+        logger.exception("Background CM form relink failed for plan %s", plan_id)
+
+
+async def _odk_cm_rows(plan_id: str, project_id: str) -> tuple[list[dict], str | None, set[str]]:
+    """Return (rows, latest_submission_at, fetched_form_ids)."""
+    if settings.odk_project_id is None:
+        return [], None, set()
 
     with db_cursor() as cur:
         cur.execute(
@@ -1046,46 +1496,98 @@ async def _odk_cm_rows(plan_id: str, project_id: str) -> tuple[list[dict], str |
             {"plan_id": plan_id, "project_id": project_id},
         )
         forms = cur.fetchall()
+    fetched_ids: set[str] = set()
     if not forms:
-        return [], None
+        return [], None, fetched_ids
 
     preferred = [f for f in forms if (f.get("package_id") or "") == "cm-mapping"]
-    to_fetch = preferred or forms
-
-    client = ODKClient()
+    to_fetch = [f for f in (preferred or forms) if f.get("xml_form_id")]
+    if not to_fetch:
+        return [], None, fetched_ids
     odk_project_id = int(settings.odk_project_id)
+
+    results = await asyncio.gather(
+        *[
+            _fetch_one_odk_form_cm(str(f["xml_form_id"]), odk_project_id)
+            for f in to_fetch
+        ]
+    )
     rows: list[dict] = []
     last_submission_at: str | None = None
-    for form in to_fetch:
-        try:
-            odata_rows = await _fetch_all_odata_submissions(
-                client, odk_project_id, form["xml_form_id"]
-            )
-        except Exception:
-            continue
-        for raw in odata_rows:
-            system = raw.get("__system") if isinstance(raw, dict) else None
-            ts = system.get("submissionDate") if isinstance(system, dict) else None
-            if ts and (last_submission_at is None or str(ts) > last_submission_at):
-                last_submission_at = str(ts)
-        normalized = normalize_submissions(odata_rows)
-        for sub in normalized.get("rows") or []:
-            if isinstance(sub, dict):
-                rows.append(sub)
-    return rows, last_submission_at
+    for form, (batch, latest) in zip(to_fetch, results):
+        fetched_ids.add(str(form["xml_form_id"]))
+        rows.extend(batch)
+        if latest and (last_submission_at is None or latest > last_submission_at):
+            last_submission_at = latest
+    return rows, last_submission_at, fetched_ids
 
 
 async def _collect_plan_cm_bundle(plan_id: str, project_id: str) -> tuple[list[dict], dict]:
-    """Prefer ODK CM submissions; fall back to local readings if ODK is empty."""
-    odk_rows, last_submission_at = await _odk_cm_rows(plan_id, project_id)
+    """Load CM submissions from ODK (cached). No local CM fallback."""
+    cache_key = f"{project_id}:{plan_id}"
+    now = time.monotonic()
+    hit = _CM_BUNDLE_CACHE.get(cache_key)
+    if hit and (now - hit[0]) < _CM_BUNDLE_TTL_S:
+        return hit[1], hit[2]
+
+    known, by_coord = _plan_asset_coord_index(plan_id, project_id)
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT intervention_slug FROM mel_plans
+            WHERE id = %(plan_id)s AND project_id = %(project_id)s
+            """,
+            {"plan_id": plan_id, "project_id": project_id},
+        )
+        plan_row = cur.fetchone() or {}
+    intervention_slug = str(plan_row.get("intervention_slug") or "")
+
+    odk_rows, last_submission_at, fetched_ids = await _odk_cm_rows(plan_id, project_id)
     if odk_rows:
-        return odk_rows, _cm_stats_from_rows(
+        odk_rows = remap_odk_cm_to_plan_assets(
+            odk_rows, known_asset_ids=known, assets_by_coord=by_coord
+        )
+
+    if _matched_cm_count(odk_rows, known) == 0 and by_coord:
+        discovered, discovered_latest, discovered_id, discovered_name = (
+            await _discover_odk_cm_rows(
+                known_asset_ids=known,
+                assets_by_coord=by_coord,
+                intervention_slug=intervention_slug,
+                exclude_form_ids=fetched_ids,
+            )
+        )
+        if discovered and discovered_id:
+            odk_rows = discovered
+            last_submission_at = discovered_latest or last_submission_at
+            try:
+                _link_plan_cm_form(
+                    plan_id=plan_id,
+                    project_id=project_id,
+                    xml_form_id=discovered_id,
+                    name=discovered_name or discovered_id,
+                )
+                _CM_LINK_CACHE[cache_key] = (now, discovered_id)
+            except Exception:
+                logger.exception(
+                    "Failed to link CM form %s for plan %s", discovered_id, plan_id
+                )
+    elif odk_rows and fetched_ids:
+        # Remember the working linked form so QR/forms stay off the ODK hot path.
+        linked_id = next(iter(fetched_ids), None)
+        if linked_id and _looks_like_seeded_cm_form(linked_id, intervention_slug):
+            _CM_LINK_CACHE[cache_key] = (now, linked_id)
+
+    if odk_rows and _matched_cm_count(odk_rows, known) > 0:
+        stats = _cm_stats_from_rows(
             odk_rows, source="odk", last_submission_at=last_submission_at
         )
-    local = _local_cm_rows(plan_id, project_id)
-    if local:
-        return local, _cm_stats_from_rows(local, source="local")
-    return [], _empty_cm_stats()
+        _CM_BUNDLE_CACHE[cache_key] = (now, odk_rows, stats)
+        return odk_rows, stats
+
+    empty = _empty_cm_stats()
+    _CM_BUNDLE_CACHE[cache_key] = (now, [], empty)
+    return [], empty
 
 
 async def _collect_plan_cm_submissions(plan_id: str, project_id: str) -> list[dict]:
@@ -1247,32 +1749,144 @@ async def asset_dashboard(
 def export_mel_plan_docx(
     project_id: str, plan_id: str, user: dict = Depends(require_assess_access)
 ):
+    try:
+        from app.modules.assess.services.mel_plan_docx import build_mel_plan_docx
+    except ModuleNotFoundError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "MEL Word export requires python-docx in the API image. "
+                "Rebuild with: docker compose build api && docker compose up -d api"
+            ),
+        ) from exc
+
     project = get_mel_project(project_id)
     plan = get_mel_plan(plan_id, project_id=project_id)
     plan_json = plan.get("plan_json") or {}
     outcome_ids = plan_json.get("outcome_ids") or []
-    outcomes = resolve_mapping_outcomes(plan["intervention_slug"], outcome_ids)
+    outcomes = resolve_selectable_outcomes(plan["intervention_slug"], outcome_ids)
+    # Fall back to mapping CSV outcomes if this intervention has no log-frame doc.
+    if not outcomes:
+        outcomes = resolve_mapping_outcomes(plan["intervention_slug"], outcome_ids)
     intervention = get_mapping_intervention(plan["intervention_slug"])
+    from app.modules.assess.services.mel_logframe import get_logframe_intervention
+
+    lf = get_logframe_intervention(plan["intervention_slug"]) or {}
     intervention_name = (
-        intervention["name"] if intervention else plan["intervention_slug"]
-    )
-    ot_qs = _apply_question_overrides(
-        (intervention or {}).get("one_time_questions") or [],
-        plan_json.get("asset_allocation"),
-    )
-    cm_qs = _apply_question_overrides(
-        (intervention or {}).get("cm_questions") or [],
-        plan_json.get("cm_form"),
+        (intervention or {}).get("name")
+        or lf.get("name")
+        or plan["intervention_slug"]
     )
     content = build_mel_plan_docx(
         project_name=project["name"],
         plan_name=plan["name"],
         intervention_name=intervention_name,
+        intervention_slug=plan["intervention_slug"],
         outcomes=outcomes,
-        one_time_questions=ot_qs,
-        cm_questions=cm_qs,
     )
     filename = f"{plan['name'].replace(' ', '_')}_MEL_plan.docx"
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/{project_id}/export-pdf")
+def export_mel_project_pdf(project_id: str, user: dict = Depends(require_assess_access)):
+    """Export all MEL plans in a project as one PDF (shared prose once)."""
+    try:
+        from app.modules.assess.services.mel_project_pdf import build_mel_project_pdf
+    except ModuleNotFoundError as exc:
+        raise HTTPException(503, f"PDF export unavailable: {exc}") from exc
+
+    project = get_mel_project(project_id)
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                mp.id,
+                mp.project_id,
+                mp.name,
+                mp.intervention_slug,
+                mp.kind,
+                mp.plan_json,
+                mp.created_by,
+                mp.created_at,
+                mp.updated_at
+            FROM mel_plans mp
+            WHERE mp.project_id = %(project_id)s
+              AND COALESCE(mp.kind, 'plan') = 'plan'
+            ORDER BY mp.updated_at ASC
+            """,
+            {"project_id": project_id},
+        )
+        rows = cur.fetchall()
+    plans = [mel_plan_to_dict(row) for row in rows]
+    if not plans:
+        raise HTTPException(400, "No MEL plans to export in this project")
+    try:
+        content = build_mel_project_pdf(project_name=project["name"], plans=plans)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(500, f"Project PDF export failed: {exc}") from exc
+    safe = re.sub(r"[^\w\-]+", "_", project["name"]).strip("_") or "MEL_project"
+    filename = f"{safe}_MEL_plans.pdf"
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/{project_id}/export-docx")
+def export_mel_project_docx(project_id: str, user: dict = Depends(require_assess_access)):
+    """Export all MEL plans in a project as one Word doc (shared prose once)."""
+    try:
+        from app.modules.assess.services.mel_plan_docx import build_mel_project_docx
+    except ModuleNotFoundError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "MEL Word export requires python-docx in the API image. "
+                "Rebuild with: docker compose build api && docker compose up -d api"
+            ),
+        ) from exc
+
+    project = get_mel_project(project_id)
+    with db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                mp.id,
+                mp.project_id,
+                mp.name,
+                mp.intervention_slug,
+                mp.kind,
+                mp.plan_json,
+                mp.created_by,
+                mp.created_at,
+                mp.updated_at
+            FROM mel_plans mp
+            WHERE mp.project_id = %(project_id)s
+              AND COALESCE(mp.kind, 'plan') = 'plan'
+            ORDER BY mp.updated_at ASC
+            """,
+            {"project_id": project_id},
+        )
+        rows = cur.fetchall()
+    plans = [mel_plan_to_dict(row) for row in rows]
+    if not plans:
+        raise HTTPException(400, "No MEL plans to export in this project")
+    try:
+        content = build_mel_project_docx(project_name=project["name"], plans=plans)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(500, f"Project Word export failed: {exc}") from exc
+    safe = re.sub(r"[^\w\-]+", "_", project["name"]).strip("_") or "MEL_project"
+    filename = f"{safe}_MEL_plans.docx"
     return Response(
         content=content,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",

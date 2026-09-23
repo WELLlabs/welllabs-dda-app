@@ -4,13 +4,16 @@
 	import MelFormQrCard from '$lib/modules/assess/components/MelFormQrCard.svelte';
 	import {
 		createMelOdkForms,
+		exportMelPlanDocxFromSelection,
 		exportMelPlanPdf,
 		fetchMelIntervention,
 		fetchMelInterventions,
+		fetchMelLogframe,
 		fetchMelPackages,
 		fetchMelPlan,
 		fetchMelPlanForms
 	} from '$lib/modules/assess/mel-api';
+	import MelLogFrameView from '$lib/modules/assess/components/MelLogFrameView.svelte';
 
 	/** @type {{ onBack: () => void, onFormCreated?: (payload: any) => void, projectId?: string, planId?: string, projectName?: string, planName?: string, lockedInterventionSlug?: string, odkFormsMode?: boolean, crumbs?: import('$lib/shared/components/ModuleHeader.svelte').Crumb[] }} */
 	let {
@@ -27,8 +30,8 @@
 
 	const STEPS = $derived(
 		lockedInterventionSlug
-			? ['Outcomes', 'MEL types', 'Edit forms', 'Publish']
-			: ['Intervention', 'Outcomes', 'MEL types', 'Edit forms', 'Publish']
+			? ['Outcomes', 'Visualize MEL plan', 'Edit forms', 'Publish']
+			: ['Intervention', 'Outcomes', 'Visualize MEL plan', 'Edit forms', 'Publish']
 	);
 	const displayStep = $derived(lockedInterventionSlug ? step - 1 : step);
 
@@ -76,6 +79,9 @@
 	let packagePayload = $state(null);
 	/** @type {any[]} */
 	let packages = $state([]);
+	/** @type {any} */
+	let logframe = $state(null);
+	let exportingDocx = $state(false);
 	let selectedPackageIds = $state([]);
 	let inputTypes = $state([]);
 	/** @type {Record<string, any[]>} */
@@ -371,13 +377,32 @@
 	}
 
 	async function hydratePackages({ selectIds = null, jumpToStep = 2 } = {}) {
-		packagePayload = await fetchMelPackages({
-			interventionSlug: selectedInterventionSlug,
-			outcomeIds: selectedOutcomeIds,
-			projectId: projectId || undefined,
-			planId: planId || undefined
-		});
+		let pkgRes = null;
+		let frameRes = null;
+		const results = await Promise.allSettled([
+			fetchMelPackages({
+				interventionSlug: selectedInterventionSlug,
+				outcomeIds: selectedOutcomeIds,
+				projectId: projectId || undefined,
+				planId: planId || undefined
+			}),
+			fetchMelLogframe({
+				interventionSlug: selectedInterventionSlug,
+				outcomeIds: selectedOutcomeIds,
+				projectId: projectId || undefined,
+				planId: planId || undefined
+			})
+		]);
+		if (results[0].status === 'fulfilled') pkgRes = results[0].value;
+		else error = String(results[0].reason || 'Failed to load MEL packages');
+		if (results[1].status === 'fulfilled') frameRes = results[1].value;
+
+		packagePayload = pkgRes || { packages: [], unmatched_indicators: [] };
 		packages = packagePayload.packages ?? [];
+		logframe = frameRes?.logframe || packagePayload.logframe || null;
+		if (!logframe && !packages.length && results[0].status === 'rejected') {
+			throw results[0].reason;
+		}
 		inputTypes = packagePayload.input_types ?? [];
 		const fields = {};
 		const titles = {};
@@ -621,6 +646,29 @@
 		}
 	}
 
+	async function handleExportDocx() {
+		exportingDocx = true;
+		error = '';
+		try {
+			const { blob, filename } = await exportMelPlanDocxFromSelection({
+				interventionSlug: selectedInterventionSlug,
+				outcomeIds: selectedOutcomeIds,
+				projectId: projectId || undefined,
+				planId: planId || undefined
+			});
+			const url = URL.createObjectURL(blob);
+			const anchor = document.createElement('a');
+			anchor.href = url;
+			anchor.download = filename;
+			anchor.click();
+			URL.revokeObjectURL(url);
+		} catch (err) {
+			error = String(err);
+		} finally {
+			exportingDocx = false;
+		}
+	}
+
 	async function handleExportPdf() {
 		exportingPdf = true;
 		error = '';
@@ -787,25 +835,34 @@
 						class="rounded-lg bg-[#1b75e0] px-4 py-2 text-sm font-medium text-white"
 						onclick={goToPackages}
 					>
-						Continue to MEL types
+						Continue to visualize
 					</button>
 				</div>
 			</section>
 		{:else if step === 2}
 			<section class="space-y-5">
 				<div>
-					<h2 class="m-0 font-headline text-lg font-semibold text-brand-navy">3. MEL types</h2>
+					<h2 class="m-0 font-headline text-lg font-semibold text-brand-navy">3. Visualize MEL plan</h2>
 					<p class="mt-1 text-sm text-brand-steel">
-						Packages derived from your outcomes. Export the plan, or continue to choose forms for ODK.
+						Log frame for your selected outcomes and indicators. Export the Word plan, or continue to ODK forms.
 					</p>
 				</div>
+
+				{#if logframe}
+					<div class="rounded-2xl border border-brand-navy/10 bg-white p-5 shadow-sm">
+						<MelLogFrameView {logframe} />
+					</div>
+				{:else}
+					<div class="rounded-xl border border-brand-navy/10 bg-gray-50 px-6 py-10 text-center text-sm text-brand-steel">
+						No log-frame template is available for this intervention yet. You can still continue to ODK packages.
+					</div>
+				{/if}
 
 				{#if packagePayload?.unmatched_indicators?.length}
 					<div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
 						<p class="m-0">
 							{packagePayload.unmatched_indicators.length} indicator{packagePayload.unmatched_indicators.length === 1 ? '' : 's'}
-							had no measurement recipe and will appear in the PDF only
-							(not in auto-generated ODK packages):
+							had no measurement recipe for ODK packages:
 						</p>
 						<ul class="mb-0 mt-2 list-disc space-y-1 pl-5">
 							{#each packagePayload.unmatched_indicators as ind (ind.id || ind.indicator)}
@@ -820,52 +877,24 @@
 					</div>
 				{/if}
 
-				{#if packages.length === 0}
-					<div class="rounded-xl border border-brand-navy/10 bg-gray-50 px-6 py-10 text-center text-sm text-brand-steel">
-						No schedule packages could be built from the selected indicators. You can still export the MEL plan PDF.
-					</div>
-				{:else}
-					<div class="grid gap-4 lg:grid-cols-3">
-						{#each familyGroups as group (group.family)}
-							<div class="min-w-0 rounded-xl border border-brand-navy/10 bg-white p-4">
-								<h3 class="m-0 text-sm font-semibold text-brand-navy">
-									{group.label}
-									<span class="font-normal text-brand-steel">({group.items.length})</span>
-								</h3>
-								<div class="mt-3 space-y-3">
-									{#each group.items as pkg (pkg.id)}
-										<div class="rounded-lg border border-brand-navy/10 bg-brand-sky/5 p-3">
-											<div class="flex flex-wrap items-center gap-2">
-												<span class="text-sm font-semibold text-brand-navy">{pkg.title}</span>
-												<span class="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-brand-steel uppercase">
-													{pkg.suggested_fields?.length ?? 0} fields
-												</span>
-											</div>
-											<p class="m-0 mt-1 text-xs text-brand-steel">{pkg.description}</p>
-											<p class="m-0 mt-1 text-xs text-brand-steel">When: {pkg.frequency_label}</p>
-											<ul class="m-0 mt-2 list-disc space-y-0.5 pl-4 text-xs text-brand-navy">
-												{#each pkg.indicators as ind (ind.id + ind.indicator)}
-													<li>{ind.indicator}</li>
-												{/each}
-											</ul>
-										</div>
-									{/each}
-								</div>
-							</div>
-						{/each}
-					</div>
-				{/if}
-
 				<div class="flex flex-wrap items-center justify-between gap-3 border-t border-brand-navy/10 pt-4">
 					<button type="button" class="action-btn" onclick={() => (step = 1)}>Back</button>
 					<div class="flex flex-wrap gap-2">
 						<button
 							type="button"
 							class="rounded-lg border border-brand-navy/20 bg-white px-4 py-2 text-sm font-medium text-brand-navy hover:bg-brand-sky/15 disabled:opacity-50"
+							disabled={exportingDocx || !selectedInterventionSlug}
+							onclick={handleExportDocx}
+						>
+							{exportingDocx ? 'Exporting…' : 'Export Word (.docx)'}
+						</button>
+						<button
+							type="button"
+							class="rounded-lg border border-brand-navy/20 bg-white px-4 py-2 text-sm font-medium text-brand-navy hover:bg-brand-sky/15 disabled:opacity-50"
 							disabled={exportingPdf || !selectedInterventionSlug}
 							onclick={handleExportPdf}
 						>
-							{exportingPdf ? 'Exporting…' : 'Export MEL plan'}
+							{exportingPdf ? 'Exporting…' : 'Export PDF'}
 						</button>
 						<button
 							type="button"

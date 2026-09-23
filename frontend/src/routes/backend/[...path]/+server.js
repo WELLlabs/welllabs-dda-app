@@ -88,11 +88,23 @@ async function proxy(event) {
 
 	let res;
 	try {
-		res = await fetch(target, init);
+		// Hung Docker/API processes otherwise leave the browser on
+		// "Redirecting to Google…" forever (no response, no error).
+		// SSE / long jobs (atlas PDF, QField package/sync) need a much longer
+		// budget — AbortSignal.timeout applies to the whole streamed body, and
+		// a 12s cut produces Safari "TypeError: Load failed" mid-export.
+		const path = params.path || '';
+		const wantsStream =
+			path.includes('/stream') ||
+			(request.headers.get('accept') || '').includes('text/event-stream');
+		const timeoutMs = wantsStream ? 15 * 60 * 1000 : 12_000;
+		res = await fetch(target, { ...init, signal: AbortSignal.timeout(timeoutMs) });
 	} catch (err) {
-		const message =
-			`Backend unreachable at ${apiBase()}. ` +
-			`Is the dda-fork API running on the port in API_URL? (${String(err?.message || err)})`;
+		const timedOut = err?.name === 'TimeoutError' || err?.name === 'AbortError';
+		const message = timedOut
+			? `Backend timed out at ${apiBase()}. The API on :8080 may be hung — restart with: cd backend && docker compose restart api`
+			: `Backend unreachable at ${apiBase()}. ` +
+				`Is the API running on the port in API_URL? (${String(err?.message || err)})`;
 		return new Response(JSON.stringify({ detail: message }), {
 			status: 503,
 			headers: { 'content-type': 'application/json' }

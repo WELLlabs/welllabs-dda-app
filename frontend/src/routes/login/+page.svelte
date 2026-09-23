@@ -82,7 +82,7 @@
 		googleBusy = true;
 		error = '';
 		try {
-			startGoogleAuth();
+			await startGoogleAuth();
 		} catch (err) {
 			error = String(err.message ?? err);
 			googleBusy = false;

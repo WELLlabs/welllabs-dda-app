@@ -139,6 +139,91 @@ def test_village_id_str_keeps_hex_fgb_ids():
     assert _village_id_str(None) == ""
 
 
+def test_village_lookup_s3_candidate_keys_prefer_new_then_legacy():
+    from app.shared.watersheds import _village_lookup_s3_candidate_keys
+
+    keys = _village_lookup_s3_candidate_keys()
+    assert keys[0] == "vector/Village_pan_India_lookup.jsonl"
+    assert "vector/villages_lookup.jsonl" in keys
+
+
+def test_index_state_count_skips_numeric_junk():
+    from app.shared.watersheds import _index_state_count
+
+    rows = [
+        {"state": "andhra pradesh"},
+        {"state": "Assam"},
+        {"state": "0.0"},
+        {"state": "28"},
+        {"state": None},
+        {"state": "andhra pradesh"},
+    ]
+    assert _index_state_count(rows) == 2
+
+
+def test_resolve_village_from_point_uses_fgb_then_union(monkeypatch):
+    from shapely.geometry import box
+
+    from app.shared import watersheds as ws
+
+    village = box(0, 0, 2, 2)
+    monkeypatch.setattr(
+        ws,
+        "village_containing_point",
+        lambda lng, lat, quick=False: (village, {"Village Na": "Demo Village", "id": "v1"}),
+    )
+    monkeypatch.setattr(
+        ws,
+        "watersheds_intersecting",
+        lambda _g: [
+            {
+                "watershed_id": "a",
+                "watershed_name": "A",
+                "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]},
+                "bounds": [0, 0, 1, 1],
+            },
+            {
+                "watershed_id": "b",
+                "watershed_name": "B",
+                "geometry": {"type": "Polygon", "coordinates": [[[1, 0], [2, 0], [2, 1], [1, 1], [1, 0]]]},
+                "bounds": [1, 0, 2, 1],
+            },
+        ],
+    )
+    result = ws.resolve_village_from_point(0.5, 0.5)
+    assert result["source"] == "village"
+    assert result["village_name"] == "Demo Village"
+    assert result["village_id"] == "v1"
+    assert result["seed_lng"] == 0.5
+    assert result["seed_lat"] == 0.5
+    assert result["village_geometry"] is not None
+    assert len(result["parts"]) == 2
+    from shapely.geometry import Point
+
+    from app.shared import watersheds as ws
+
+    meta = {
+        "id": "abc",
+        "name": "Demo",
+        "district": "medak",
+        "state": "telangana",
+        "lng": 78.5,
+        "lat": 17.6,
+    }
+    monkeypatch.setattr(ws, "_village_record_by_id", lambda _vid: meta)
+    monkeypatch.setattr(ws, "_configure_gdal_aws", lambda: None)
+    monkeypatch.setattr(ws, "_villages_vsis3_path", lambda: "/vsis3/bucket/villages.fgb")
+
+    def boom(*_a, **_k):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(ws, "_read_bbox_timed", boom)
+    geom, props = ws.village_geometry_by_id("abc")
+    assert props["name"] == "Demo"
+    assert geom.geom_type == "Polygon"
+    assert Point(78.5, 17.6).within(geom) or geom.contains(Point(78.5, 17.6))
+
+
 def test_village_place_labels_from_pc11_codes():
     from app.shared.watersheds import _village_district_label, _village_state_label
 

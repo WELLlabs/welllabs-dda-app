@@ -1,6 +1,7 @@
 /** Generic fetch helpers, reused by each module's API client (e.g. diagnose/api.js). */
 
-async function parseErrorMessage(res) {
+/** Parse a failed fetch response into a short user-facing message. */
+export async function parseErrorMessage(res) {
 	const text = await res.text();
 	if (text.includes('error code: 1101') || text.includes('Worker threw exception')) {
 		return (
@@ -16,8 +17,8 @@ async function parseErrorMessage(res) {
 	) {
 		if (text.trimStart().startsWith('<!') || /cf-error-details|Bad gateway/i.test(text)) {
 			return (
-				`Upstream API error (${res.status}): the server timed out or crashed while ` +
-				'resolving this location. Try another nearby point, or retry in a moment.'
+				`Upstream API error (${res.status}): the server timed out or became unreachable. ` +
+				'Retry in a moment; if this is a PDF export, wait for progress updates and try again.'
 			);
 		}
 		// JSON 503 from our own hard timeouts — clearer than Cloudflare HTML.

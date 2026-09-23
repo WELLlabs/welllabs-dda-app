@@ -826,13 +826,55 @@ def _export_secondary_vectors(
     return exports
 
 
+def _auth_qfield_username(client: sdk.Client) -> str | None:
+    """Return the canonical QField Cloud username for the client's token."""
+    try:
+        resp = client._request("GET", "auth/user")
+        data = resp.json() if hasattr(resp, "json") else resp
+        if isinstance(data, dict):
+            return (
+                data.get("username")
+                or (data.get("user") or {}).get("username")
+                or None
+            )
+    except Exception as exc:
+        logger.warning("Could not resolve QField Cloud auth username: %s", exc)
+    return None
+
+
 def _create_qfield_cloud_project(client: sdk.Client, name: str, owner: str | None) -> dict:
-    """Create without sending owner=null, which QField Cloud rejects as 400."""
+    """Create a QField Cloud project.
+
+    Omit owner so the authenticated token user owns the project. Passing a
+    login email or stale username as owner returns 404 object_not_found.
+    Only send owner when it is a known org/user slug distinct from auth.
+    """
     payload: dict = {"name": name, "description": "", "is_public": 0}
     if owner:
         payload["owner"] = owner
     resp = client._request("POST", "projects", data=payload)
     return resp.json()
+
+
+def _qfield_create_error_message(name: str, exc: BaseException) -> str:
+    text = str(exc)
+    if "object_not_found" in text or "404" in text:
+        return (
+            f"Could not create QField Cloud project '{name}'. "
+            "The QField owner username/organization was not found for this account. "
+            "Reconnect QField Cloud in Profile (use your QField username, not email), "
+            f"then retry. Original error: {exc}"
+        )
+    if "project_already_exists" in text:
+        return (
+            f"Could not create QField Cloud project '{name}': a project with this "
+            f"name already exists. Original error: {exc}"
+        )
+    return (
+        f"Could not create QField Cloud project '{name}'. "
+        "Names may contain only letters, numbers, hyphen, underscore, and dots. "
+        f"Original error: {exc}"
+    )
 
 
 def _get_or_create_project(
@@ -854,19 +896,36 @@ def _get_or_create_project(
     for project in client.list_projects():
         if project.get("name") in names:
             return project
+
+    # Prefer create under the authenticated user. Stored profile values are often
+    # login emails; QField rejects those as owner with 404 object_not_found.
+    auth_username = _auth_qfield_username(client)
+    create_owner: str | None = None
+    if owner and auth_username and owner != auth_username and "@" not in owner:
+        # Explicit org (or secondary account slug) — only when it is not an email.
+        create_owner = owner
+    elif owner and not auth_username and "@" not in owner:
+        create_owner = owner
+
     try:
-        return _create_qfield_cloud_project(client, name, owner)
+        return _create_qfield_cloud_project(client, name, create_owner)
     except Exception as exc:
+        # Retry once without owner if a bad owner slug caused object_not_found.
+        if create_owner and ("object_not_found" in str(exc) or "404" in str(exc)):
+            try:
+                logger.warning(
+                    "QField create with owner=%s failed (%s); retrying as auth user",
+                    create_owner,
+                    exc,
+                )
+                return _create_qfield_cloud_project(client, name, None)
+            except Exception as retry_exc:
+                exc = retry_exc
         for project in client.list_projects():
             if project.get("name") in names:
                 logger.info("Using existing QField Cloud project %s after create failed", project.get("name"))
                 return project
-        raise RuntimeError(
-            f"Could not create QField Cloud project '{name}'. "
-            "Names may contain only letters, numbers, hyphen, underscore, and dots. "
-            f"Original error: {exc}"
-        ) from exc
-
+        raise RuntimeError(_qfield_create_error_message(name, exc)) from exc
 
 def _extract_layer_ids(qgs_path: Path) -> dict[str, str]:
     """Return {layer_name: layer_id} from an existing .qgs file."""
@@ -1101,16 +1160,32 @@ def package_and_upload(
 
     step(70, "Connecting to QField Cloud…")
     client = sdk.Client(url=settings.qfield_cloud_url, token=qfield_token)
+    auth_username = _auth_qfield_username(client)
+    if auth_username and auth_username != qfield_username:
+        logger.info(
+            "QField profile username %r differs from auth username %r; using auth user for ownership",
+            qfield_username,
+            auth_username,
+        )
+        with db_cursor() as cur:
+            cur.execute(
+                """
+                UPDATE user_qfield_credentials
+                   SET qfield_username = %(u)s, updated_at = now()
+                 WHERE user_id = %(uid)s
+                """,
+                {"u": auth_username, "uid": user_id},
+            )
+        qfield_username = auth_username
     qfc_project = _get_or_create_project(
         client,
         project_name,
-        owner=qfield_username,
+        owner=None,
         existing_id=row.get("qfield_project_id") or None,
         aliases=qfield_cloud_name_aliases(row["name"]),
     )
     qfc_project_id = qfc_project["id"]
     step(75, f"QField project: {project_name}")
-
     step(78, "Uploading package files to QField Cloud…")
     client.upload_files(
         project_id=qfc_project_id,

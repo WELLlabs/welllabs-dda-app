@@ -1,4 +1,4 @@
-"""Generate a portrait MEL plan PDF matching the Assess website visual language."""
+"""Generate a landscape MEL plan PDF matching the Assess website visual language."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_LEFT
-from reportlab.lib.pagesizes import A4
+from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
@@ -25,6 +25,7 @@ from reportlab.platypus import (
 )
 
 from app.modules.assess.services.mel_measurement_catalog import build_schedule_packages
+from app.modules.assess.services.mel_playbooks import playbooks_as_reportlab_xml
 
 # Website @theme brand tokens (frontend/src/app.css)
 _BRAND_NAVY = colors.HexColor("#0a3d2a")
@@ -112,14 +113,31 @@ def _package_label(package_id: str) -> str:
     return _PACKAGE_LABELS.get(package_id, package_id.replace("_", " "))
 
 
-def _kv_table(rows: list[tuple[str, str]], *, usable_w: float, label_w: float, styles: dict) -> Table:
-    data = [
-        [
-            Paragraph(f"<b>{_clean(k)}</b>", styles["cell_label"]),
-            Paragraph(_clean(v) or "—", styles["cell"]),
-        ]
-        for k, v in rows
-    ]
+def _kv_table(
+    rows: list[tuple[str, str] | tuple[str, str, bool]],
+    *,
+    usable_w: float,
+    label_w: float,
+    styles: dict,
+) -> Table:
+    data = []
+    for row in rows:
+        if len(row) == 3:
+            k, v, raw_html = row
+        else:
+            k, v = row
+            raw_html = False
+        value_para = (
+            Paragraph(v if v else "—", styles["cell"])
+            if raw_html
+            else Paragraph(_clean(v) or "—", styles["cell"])
+        )
+        data.append(
+            [
+                Paragraph(f"<b>{_clean(k)}</b>", styles["cell_label"]),
+                value_para,
+            ]
+        )
     table = Table(data, colWidths=[label_w, usable_w - label_w])
     table.setStyle(
         TableStyle(
@@ -263,7 +281,7 @@ def build_mel_plan_pdf(
     indicators: list[dict],
     all_outcomes: list[dict] | None = None,
 ) -> bytes:
-    """Build a multi-page portrait MEL plan PDF.
+    """Build a multi-page landscape MEL plan PDF.
 
     ``outcomes`` = selected outcomes. ``all_outcomes`` = full catalog for the
     intervention (used to list outcomes that were not selected).
@@ -277,17 +295,17 @@ def build_mel_plan_pdf(
     catalog_outcomes = all_outcomes if all_outcomes is not None else outcomes
     not_selected = [o for o in catalog_outcomes if o.get("id") not in selected_ids]
 
-    page_w, page_h = A4
-    left = 16 * mm
-    right = 16 * mm
-    top = 14 * mm
-    bottom = 14 * mm
+    page_w, page_h = landscape(A4)
+    left = 14 * mm
+    right = 14 * mm
+    top = 12 * mm
+    bottom = 12 * mm
     usable_w = page_w - left - right
 
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
         buffer,
-        pagesize=A4,
+        pagesize=landscape(A4),
         leftMargin=left,
         rightMargin=right,
         topMargin=top,
@@ -635,7 +653,11 @@ def build_mel_plan_pdf(
                         ("Method of collection", measurement.get("method") or "—"),
                         ("When / frequency", measurement.get("frequency") or "—"),
                         ("Method of analysis", measurement.get("analysis") or "—"),
-                        ("Playbooks", measurement.get("playbooks") or "—"),
+                        (
+                            "Playbooks",
+                            playbooks_as_reportlab_xml(measurement.get("playbooks") or ""),
+                            True,
+                        ),
                         (
                             "ODK packages",
                             ", ".join(_package_label(p) for p in (measurement.get("package_ids") or []))

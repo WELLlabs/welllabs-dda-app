@@ -103,6 +103,9 @@ _PC11_STATE_NAMES = {
 }
 _PC11_DISTRICT_NAMES: dict[str, str] | None = None
 _VILLAGE_LOOKUP_FILENAME = "Village_pan_India_lookup.jsonl"
+# Pre-rename artifact; kept as S3 fallback until Village_pan_India_lookup.jsonl is rebuilt.
+_LEGACY_VILLAGE_LOOKUP_FILENAME = "villages_lookup.jsonl"
+_village_index_rebuild_started = False
 
 # Guardrails for custom / union AOIs (degrees / vertex count)
 _MAX_BBOX_SPAN_DEG = 8.0
@@ -334,6 +337,27 @@ def _read_bbox(path: str, lng: float, lat: float, pad: float):
         return table, geom_col
     geom_col = "geometry" if "geometry" in result.column_names else "wkb_geometry"
     return result, geom_col
+
+
+# Per-pad budget for /vsis3 Village_pan_India.fgb reads (Cloudflare ~100s total).
+_VILLAGE_FGB_READ_TIMEOUT_S = 12.0
+# ~1.2 km stand-in when the FGB read times out but the lookup has a centroid.
+_VILLAGE_CENTROID_FALLBACK_DEG = 0.012
+
+
+def _read_bbox_timed(path: str, lng: float, lat: float, pad: float, *, timeout_s: float = _VILLAGE_FGB_READ_TIMEOUT_S):
+    """``_read_bbox`` with a hard wall clock so hung /vsis3 reads cannot 502 the host."""
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        fut = pool.submit(_read_bbox, path, lng, lat, pad)
+        try:
+            return fut.result(timeout=timeout_s)
+        except FuturesTimeout as exc:
+            fut.cancel()
+            raise TimeoutError(
+                f"Village FGB read timed out after {timeout_s:.0f}s (pad={pad})"
+            ) from exc
 
 
 def _read_bbox_extent(path: str, minx: float, miny: float, maxx: float, maxy: float, pad: float = 0.02):
@@ -1014,27 +1038,67 @@ def _index_centroid_coverage(records: list[dict]) -> float:
     return with_c / len(records)
 
 
+def _index_state_count(records: list[dict]) -> int:
+    """Distinct usable state labels (skips numeric junk like ``0.0``)."""
+    states: set[str] = set()
+    for row in records:
+        raw = str(row.get("state") or "").strip()
+        if not raw or raw.lower() in {"0", "0.0", "nan", "none"}:
+            continue
+        if re.fullmatch(r"-?\d+(\.\d+)?", raw):
+            continue
+        states.add(raw.lower())
+    return len(states)
+
+
+# Stale pan-India caches from the pre-rename lookup only had ~15 states.
+_MIN_VILLAGE_LOOKUP_STATES = 20
+
+
+def _village_lookup_s3_candidate_keys() -> list[str]:
+    """Preferred lookup key first, then legacy villages_lookup.jsonl."""
+    keys = [_villages_lookup_s3_key(), f"vector/{_LEGACY_VILLAGE_LOOKUP_FILENAME}"]
+    # Preserve order, drop dupes if filenames ever coincide.
+    seen: set[str] = set()
+    out: list[str] = []
+    for key in keys:
+        if key not in seen:
+            seen.add(key)
+            out.append(key)
+    return out
+
+
 def _download_villages_lookup_from_s3(dest: Path) -> bool:
-    """Fetch prebuilt lookup from S3 into packages_dir. Returns True on success."""
+    """Fetch prebuilt lookup from S3 into packages_dir. Returns True on success.
+
+    Tries ``Village_pan_India_lookup.jsonl`` then the legacy ``villages_lookup.jsonl``
+    (still present after the pan-India FGB rename). Geometry resolve falls back to
+    centroid containment when numeric legacy ids do not match hex FGB ids.
+    """
     if not settings.aws_s3_bucket:
         return False
     try:
         import boto3
     except ImportError:
         return False
-    key = _villages_lookup_s3_key()
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".tmp")
-    try:
-        client = boto3.client("s3", region_name=settings.aws_default_region or None)
-        logger.info("Downloading village lookup s3://%s/%s …", settings.aws_s3_bucket, key)
-        client.download_file(settings.aws_s3_bucket, key, str(tmp))
-        tmp.replace(dest)
-        return dest.is_file() and dest.stat().st_size > 0
-    except Exception as exc:
-        logger.warning("Village lookup S3 download failed: %s", exc)
-        tmp.unlink(missing_ok=True)
-        return False
+    client = boto3.client("s3", region_name=settings.aws_default_region or None)
+    last_exc: Exception | None = None
+    for key in _village_lookup_s3_candidate_keys():
+        try:
+            logger.info("Downloading village lookup s3://%s/%s …", settings.aws_s3_bucket, key)
+            client.download_file(settings.aws_s3_bucket, key, str(tmp))
+            tmp.replace(dest)
+            if dest.is_file() and dest.stat().st_size > 0:
+                return True
+        except Exception as exc:
+            last_exc = exc
+            logger.warning("Village lookup S3 download failed for %s: %s", key, exc)
+            tmp.unlink(missing_ok=True)
+    if last_exc is not None:
+        logger.warning("Village lookup S3 download failed: %s", last_exc)
+    return False
 
 
 def _set_village_indexes(records: list[dict]) -> list[dict]:
@@ -1056,8 +1120,14 @@ def _rebuild_village_lookup_indexes(records: list[dict]) -> None:
         district_raw = row.get("district")
         if not state_raw:
             continue
-        states.add(state_raw)
-        state_key = str(state_raw).lower()
+        state_text = str(state_raw).strip()
+        # Drop census-code leftovers that leaked into the lookup as labels.
+        if not state_text or state_text.lower() in {"0", "0.0", "nan", "none"}:
+            continue
+        if re.fullmatch(r"-?\d+(\.\d+)?", state_text):
+            continue
+        states.add(state_text)
+        state_key = state_text.lower()
         if not district_raw:
             continue
         district_key = str(district_raw).lower()
@@ -1069,7 +1139,7 @@ def _rebuild_village_lookup_indexes(records: list[dict]) -> None:
                 "id": row["id"],
                 "name": row["name"],
                 "district": district_raw,
-                "state": state_raw,
+                "state": state_text,
             }
         )
     _village_states_sorted = sorted(states, key=str.lower)
@@ -1230,14 +1300,40 @@ def _build_village_name_index_from_fgb(source: str | None = None) -> list[dict]:
     return records
 
 
+def _schedule_village_index_rebuild() -> None:
+    """Kick a one-shot background FGB rebuild; never block the request path.
+
+    Caller may already hold ``_village_index_lock`` — do not re-acquire it here.
+    """
+    global _village_index_rebuild_started
+    if _village_index_rebuild_started:
+        return
+    _village_index_rebuild_started = True
+
+    def _run() -> None:
+        global _village_index_rebuild_started
+        try:
+            logger.warning(
+                "Building village name index from FGB in background "
+                "(missing prebuilt %s) …",
+                _VILLAGE_LOOKUP_FILENAME,
+            )
+            ensure_village_name_index(force_rebuild=True)
+        except Exception as exc:
+            logger.warning("Background village index rebuild failed: %s", exc)
+            _village_index_rebuild_started = False
+
+    threading.Thread(target=_run, name="village-index-rebuild", daemon=True).start()
+
+
 def ensure_village_name_index(*, force_rebuild: bool = False) -> list[dict]:
     """Load national village lookup (id/name/state/district + centroids when available).
 
     Preference order:
       1. In-memory
-      2. Local packages_dir/Village_pan_India_lookup.jsonl
-      3. Download vector/Village_pan_India_lookup.jsonl from S3
-      4. Attribute-only build from Village_pan_India.fgb
+      2. Local packages_dir/Village_pan_India_lookup.jsonl (or legacy villages_lookup.jsonl)
+      3. Download from S3 (new key, then legacy villages_lookup.jsonl)
+      4. Background rebuild from Village_pan_India.fgb (request path does not wait)
     """
     global _village_name_index
     if _village_name_index is not None and not force_rebuild:
@@ -1247,24 +1343,41 @@ def ensure_village_name_index(*, force_rebuild: bool = False) -> list[dict]:
             return _village_name_index
 
         lookup_path = _village_index_cache_path()
+        legacy_path = Path(settings.packages_dir) / _LEGACY_VILLAGE_LOOKUP_FILENAME
 
         if not force_rebuild:
             cached = _load_village_index_from_cache(lookup_path)
+            if cached is None:
+                cached = _load_village_index_from_cache(legacy_path)
+                if cached is not None:
+                    logger.info(
+                        "Loaded legacy village index from %s (%s rows)",
+                        legacy_path.name,
+                        len(cached),
+                    )
             if cached is not None:
                 coverage = _index_centroid_coverage(cached)
-                if coverage < 0.5 and _download_villages_lookup_from_s3(lookup_path):
+                states_n = _index_state_count(cached)
+                # Old villages_lookup.jsonl (~15 states) was copied to the pan-India
+                # key; keep refreshing from S3 until the disk cache is national.
+                need_upgrade = coverage < 0.5 or states_n < _MIN_VILLAGE_LOOKUP_STATES
+                if need_upgrade and _download_villages_lookup_from_s3(lookup_path):
                     upgraded = _load_village_index_from_cache(lookup_path)
-                    if upgraded is not None and _index_centroid_coverage(upgraded) >= 0.5:
-                        logger.info(
-                            "Loaded village lookup from S3 (%s rows, %.0f%% centroids)",
-                            len(upgraded),
-                            100 * _index_centroid_coverage(upgraded),
-                        )
-                        return _set_village_indexes(upgraded)
+                    if upgraded is not None:
+                        up_states = _index_state_count(upgraded)
+                        up_cov = _index_centroid_coverage(upgraded)
+                        if up_states > states_n or (up_cov >= 0.5 and up_cov > coverage):
+                            logger.info(
+                                "Upgraded village lookup from S3 (%s rows, %s states, %.0f%% centroids)",
+                                len(upgraded),
+                                up_states,
+                                100 * up_cov,
+                            )
+                            return _set_village_indexes(upgraded)
                 logger.info(
-                    "Loaded village index from %s (%s rows, %.0f%% centroids)",
-                    lookup_path.name,
+                    "Loaded village index from cache (%s rows, %s states, %.0f%% centroids)",
                     len(cached),
+                    states_n,
                     100 * coverage,
                 )
                 return _set_village_indexes(cached)
@@ -1278,6 +1391,14 @@ def ensure_village_name_index(*, force_rebuild: bool = False) -> list[dict]:
                         100 * _index_centroid_coverage(cached),
                     )
                     return _set_village_indexes(cached)
+
+            # Missing prebuilt lookup: do not block API behind a multi-minute FGB rebuild.
+            _schedule_village_index_rebuild()
+            raise RuntimeError(
+                f"Village lookup not ready ({_VILLAGE_LOOKUP_FILENAME} missing). "
+                "Background rebuild started — retry shortly, or run "
+                "`python scripts/build_village_lookup.py --upload`."
+            )
 
         records = _build_village_name_index_from_fgb()
         _write_village_index_cache(lookup_path, records)
@@ -1430,7 +1551,12 @@ def _village_id_matches(props: dict, vid: str) -> bool:
 
 
 def village_geometry_by_id(village_id: str) -> tuple[Any, dict]:
-    """Load a village polygon by id using centroid-scoped S3 range reads."""
+    """Load a village polygon by id using centroid-scoped S3 range reads.
+
+    Each FGB bbox read is time-boxed. If the pan-India FGB is unreachable within
+    budget but the lookup has a centroid, return a small buffer so watershed
+    resolve still works (outline is approximate).
+    """
     vid = (village_id or "").strip()
     if not vid:
         raise ValueError("village_id is required")
@@ -1442,8 +1568,12 @@ def village_geometry_by_id(village_id: str) -> tuple[Any, dict]:
     if syn:
         lng, lat = float(syn.group(2)), float(syn.group(3))
         point = Point(lng, lat)
-        for pad in (0.02, 0.1, 0.3):
-            table, geom_col = _read_bbox(path, lng, lat, pad)
+        for pad in (0.02, 0.08, 0.15):
+            try:
+                table, geom_col = _read_bbox_timed(path, lng, lat, pad)
+            except Exception as exc:
+                logger.warning("Village synthetic bbox read failed pad=%s: %s", pad, exc)
+                continue
             geom, props = _find_containing(table, geom_col, point)
             if geom is None:
                 geom, props = _find_intersecting(table, geom_col, point.buffer(0.005))
@@ -1453,24 +1583,31 @@ def village_geometry_by_id(village_id: str) -> tuple[Any, dict]:
 
     # Preferred path: centroid from name index → small spatial read (seconds, not minutes)
     meta = _village_record_by_id(vid)
-    if meta and (meta.get("lng") is None or meta.get("lat") is None) and meta.get("state"):
-        ensure_state_village_centroids(str(meta["state"]))
-        meta = _village_record_by_id(vid)
+    # Do not call ensure_state_village_centroids here — a full-state FGB enrich can
+    # hang past Cloudflare's budget and 502 the picker.
 
     if meta and meta.get("lng") is not None and meta.get("lat") is not None:
         lng = float(meta["lng"])
         lat = float(meta["lat"])
         point = Point(lng, lat)
-        for pad in (0.02, 0.05, 0.12, 0.3):
+        last_exc: Exception | None = None
+        for pad in (0.015, 0.04, 0.1):
             try:
-                table, geom_col = _read_bbox(path, lng, lat, pad)
+                table, geom_col = _read_bbox_timed(path, lng, lat, pad)
             except Exception as exc:
+                last_exc = exc
                 logger.warning("Village bbox read failed pad=%s: %s", pad, exc)
                 continue
+            # Prefer point-in-polygon first (fast); id scan only on the small pad.
+            geom, props = _find_containing(table, geom_col, point)
+            if geom is not None and props is not None:
+                return geom, props
             geoms = table.column(geom_col) if geom_col in table.column_names else None
             if geoms is None:
                 continue
-            for i in range(table.num_rows):
+            # Cap id scan — dense pads can have tens of thousands of villages.
+            limit = min(table.num_rows, 4000)
+            for i in range(limit):
                 props = _row_props(table, i)
                 if not _village_id_matches(props, vid):
                     continue
@@ -1478,15 +1615,64 @@ def village_geometry_by_id(village_id: str) -> tuple[Any, dict]:
                 if geom is None or geom.is_empty:
                     continue
                 return geom, props
-            # Fallback: polygon containing the indexed centroid
-            geom, props = _find_containing(table, geom_col, point)
-            if geom is not None and props is not None:
-                return geom, props
-        raise ValueError(f"Village not found for id {vid} near ({lng}, {lat})")
+        # FGB unavailable / timed out — still resolve basins from a centroid buffer.
+        logger.warning(
+            "Village FGB outline unavailable for id=%s near (%.5f, %.5f); "
+            "using centroid buffer (%s)",
+            vid,
+            lng,
+            lat,
+            last_exc,
+        )
+        props = {
+            "name": meta.get("name") or "Village",
+            "id": vid,
+            "district": meta.get("district"),
+            "state": meta.get("state"),
+        }
+        return point.buffer(_VILLAGE_CENTROID_FALLBACK_DEG), props
 
     raise ValueError(
         f"Village location unknown for id {vid} — pick the state again to load locations, then retry"
     )
+
+
+def resolve_village_from_point(lng: float, lat: float) -> dict:
+    """Map/geocode point → village polygon from configured FGB → L12 union clip.
+
+    Same output shape as ``resolve_village_watersheds`` (village outline + parts).
+    Uses the village layer from catalog/S3 (``Village_pan_India.fgb``), not the
+    name-index dropdown lookup that can be stale on beta.
+    """
+    t0 = time.monotonic()
+    village_geom, props = village_containing_point(lng, lat, quick=False)
+    village_name = _pick_prop(props, _VILLAGE_NAME_KEYS) or None
+    village_id = _village_id_str(
+        props.get("id")
+        or props.get("fid")
+        or props.get("FID")
+        or props.get("OBJECTID")
+        or props.get("vlcode")
+    ) or None
+
+    parts = watersheds_intersecting(village_geom)
+    result = union_geometries(parts, village_name=village_name)
+    result["village_geometry"] = _geojson_geom(_simplify_for_preview(village_geom))
+    result["village_name"] = village_name
+    result["village_id"] = village_id
+    # Keep the searched/clicked point as seed (not the union centroid).
+    result["seed_lng"] = float(lng)
+    result["seed_lat"] = float(lat)
+    result["source"] = "village"
+    logger.info(
+        "Village-from-point (%.5f, %.5f) name=%s parts=%s in %.2fs",
+        lng,
+        lat,
+        village_name,
+        len(parts),
+        time.monotonic() - t0,
+    )
+    return result
 
 
 def resolve_village_watersheds(

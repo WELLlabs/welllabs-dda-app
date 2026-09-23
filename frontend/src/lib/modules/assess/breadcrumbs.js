@@ -38,7 +38,10 @@ export function assessCrumbs({ projects = [], project, plan, form, tail = [] }) 
 	});
 
 	if (plan) {
-		const planBase = `${slugBase}/plans/${plan.id}`;
+		const isImpl = (plan.kind || 'plan') === 'implementation';
+		const planBase = isImpl
+			? `${slugBase}/plans/${plan.id}`
+			: `${slugBase}/plans/${plan.id}/new?step=plan`;
 		if (form) {
 			crumbs.push({ label: plan.name, href: planBase });
 			crumbs.push({ label: form });

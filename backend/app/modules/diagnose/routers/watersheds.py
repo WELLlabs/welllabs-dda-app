@@ -1,7 +1,9 @@
 from typing import Any, Literal
 
 import asyncio
+import logging
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
@@ -12,9 +14,13 @@ from app.shared.watersheds import (
     list_village_states,
     list_villages_for_district,
     lookup_watershed_with_village_context,
+    resolve_village_from_point,
     resolve_village_watersheds,
     search_villages,
 )
+
+logger = logging.getLogger(__name__)
+
 
 router = APIRouter()
 
@@ -30,6 +36,11 @@ class WatershedLookup(BaseModel):
 class FromVillageBody(BaseModel):
     village_id: str | None = None
     geometry: dict[str, Any] | None = None
+
+
+class FromPointBody(BaseModel):
+    lng: float = Field(..., ge=-180, le=180)
+    lat: float = Field(..., ge=-90, le=90)
 
 
 class FromGeometryBody(BaseModel):
@@ -123,6 +134,82 @@ async def villages_by_district(
         raise HTTPException(502, f"Failed to list villages: {exc}") from exc
 
 
+@router.get("/places/search")
+async def places_search(
+    q: str = Query(..., min_length=2, max_length=200),
+    limit: int = Query(6, ge=1, le=12),
+    user: dict = Depends(get_current_user),
+):
+    """Geocode place names (Nominatim, India-biased) for map village pick — clinton-style search."""
+    del user
+    query = (q or "").strip()
+    if not query:
+        return {"places": []}
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            resp = await client.get(
+                "https://nominatim.openstreetmap.org/search",
+                params={
+                    "q": query,
+                    "format": "jsonv2",
+                    "limit": limit,
+                    "countrycodes": "in",
+                    "addressdetails": 0,
+                },
+                headers={
+                    "User-Agent": "welllabs-dda-diagnose/1.0 (village map search)",
+                    "Accept": "application/json",
+                },
+            )
+        if resp.status_code != 200:
+            logger.warning("Nominatim search returned %s: %s", resp.status_code, resp.text[:200])
+            raise HTTPException(502, "Place search failed — try again in a moment.")
+        payload = resp.json()
+        rows = payload if isinstance(payload, list) else []
+        places = []
+        for row in rows:
+            try:
+                lat = float(row["lat"])
+                lng = float(row["lon"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            places.append(
+                {
+                    "label": row.get("display_name") or query,
+                    "lat": lat,
+                    "lng": lng,
+                    "bbox": row.get("boundingbox"),
+                    "type": row.get("type") or row.get("addresstype") or "",
+                }
+            )
+        return {"places": places}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("Place search failed: %s", exc)
+        raise HTTPException(502, f"Place search failed: {exc}") from exc
+
+
+@router.post("/from-point")
+async def watersheds_from_point(body: FromPointBody, user: dict = Depends(get_current_user)):
+    """Geocode/map click → village polygon from FGB → intersecting L12 clip (same as from-village)."""
+    del user
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(resolve_village_from_point, body.lng, body.lat),
+            timeout=55.0,
+        )
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(
+            504,
+            "Village resolve timed out — the village outline layer is slow to load. Retry in a moment.",
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(502, f"Village-from-point resolve failed: {exc}") from exc
+
+
 @router.post("/from-village")
 async def watersheds_from_village(body: FromVillageBody, user: dict = Depends(get_current_user)):
     """Union all Level-12 basins intersecting a village polygon."""
@@ -130,13 +217,21 @@ async def watersheds_from_village(body: FromVillageBody, user: dict = Depends(ge
     if not body.village_id and not body.geometry:
         raise HTTPException(400, "Provide village_id or geometry")
     try:
-        return await asyncio.to_thread(
-            resolve_village_watersheds,
-            village_id=body.village_id,
-            geometry=body.geometry,
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                resolve_village_watersheds,
+                village_id=body.village_id,
+                geometry=body.geometry,
+            ),
+            timeout=55.0,
         )
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(
+            504,
+            "Village resolve timed out — the village outline layer is slow to load. Retry in a moment.",
+        ) from exc
     except Exception as exc:
         raise HTTPException(502, f"Village watershed resolve failed: {exc}") from exc
 
