@@ -1637,6 +1637,44 @@ def village_geometry_by_id(village_id: str) -> tuple[Any, dict]:
     )
 
 
+def resolve_village_from_point(lng: float, lat: float) -> dict:
+    """Map/geocode point → village polygon from configured FGB → L12 union clip.
+
+    Same output shape as ``resolve_village_watersheds`` (village outline + parts).
+    Uses the village layer from catalog/S3 (``Village_pan_India.fgb``), not the
+    name-index dropdown lookup that can be stale on beta.
+    """
+    t0 = time.monotonic()
+    village_geom, props = village_containing_point(lng, lat, quick=False)
+    village_name = _pick_prop(props, _VILLAGE_NAME_KEYS) or None
+    village_id = _village_id_str(
+        props.get("id")
+        or props.get("fid")
+        or props.get("FID")
+        or props.get("OBJECTID")
+        or props.get("vlcode")
+    ) or None
+
+    parts = watersheds_intersecting(village_geom)
+    result = union_geometries(parts, village_name=village_name)
+    result["village_geometry"] = _geojson_geom(_simplify_for_preview(village_geom))
+    result["village_name"] = village_name
+    result["village_id"] = village_id
+    # Keep the searched/clicked point as seed (not the union centroid).
+    result["seed_lng"] = float(lng)
+    result["seed_lat"] = float(lat)
+    result["source"] = "village"
+    logger.info(
+        "Village-from-point (%.5f, %.5f) name=%s parts=%s in %.2fs",
+        lng,
+        lat,
+        village_name,
+        len(parts),
+        time.monotonic() - t0,
+    )
+    return result
+
+
 def resolve_village_watersheds(
     *,
     village_id: str | None = None,

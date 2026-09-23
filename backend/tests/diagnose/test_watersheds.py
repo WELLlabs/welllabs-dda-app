@@ -161,7 +161,43 @@ def test_index_state_count_skips_numeric_junk():
     assert _index_state_count(rows) == 2
 
 
-def test_village_geometry_falls_back_to_centroid_buffer(monkeypatch):
+def test_resolve_village_from_point_uses_fgb_then_union(monkeypatch):
+    from shapely.geometry import box
+
+    from app.shared import watersheds as ws
+
+    village = box(0, 0, 2, 2)
+    monkeypatch.setattr(
+        ws,
+        "village_containing_point",
+        lambda lng, lat, quick=False: (village, {"Village Na": "Demo Village", "id": "v1"}),
+    )
+    monkeypatch.setattr(
+        ws,
+        "watersheds_intersecting",
+        lambda _g: [
+            {
+                "watershed_id": "a",
+                "watershed_name": "A",
+                "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]},
+                "bounds": [0, 0, 1, 1],
+            },
+            {
+                "watershed_id": "b",
+                "watershed_name": "B",
+                "geometry": {"type": "Polygon", "coordinates": [[[1, 0], [2, 0], [2, 1], [1, 1], [1, 0]]]},
+                "bounds": [1, 0, 2, 1],
+            },
+        ],
+    )
+    result = ws.resolve_village_from_point(0.5, 0.5)
+    assert result["source"] == "village"
+    assert result["village_name"] == "Demo Village"
+    assert result["village_id"] == "v1"
+    assert result["seed_lng"] == 0.5
+    assert result["seed_lat"] == 0.5
+    assert result["village_geometry"] is not None
+    assert len(result["parts"]) == 2
     from shapely.geometry import Point
 
     from app.shared import watersheds as ws

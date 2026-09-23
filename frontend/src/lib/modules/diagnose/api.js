@@ -116,6 +116,28 @@ export async function lookupWatershed(lng, lat, { signal } = {}) {
 	});
 }
 
+/** Nominatim place search (India-biased) for map village pick. */
+export async function searchPlaces(q, limit = 6, { signal } = {}) {
+	const params = new URLSearchParams({ q, limit: String(limit) });
+	const data = await request(`/watersheds/places/search?${params}`, { signal });
+	return data.places ?? [];
+}
+
+/**
+ * Map/geocode point → village polygon from configured FGB → L12 union.
+ * Prefer this over the state/district dropdown when the name index is stale.
+ */
+export async function watershedsFromPoint({ lng, lat, signal } = {}) {
+	return request('/watersheds/from-point', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ lng, lat }),
+		signal,
+		retries: 1,
+		retryDelayMs: 800
+	});
+}
+
 export async function searchVillages(q, limit = 20, bounds = null) {
 	const params = new URLSearchParams({ q, limit: String(limit) });
 	if (bounds && bounds.length === 4) {

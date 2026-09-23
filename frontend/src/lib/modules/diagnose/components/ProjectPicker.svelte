@@ -3,7 +3,6 @@
 	import { onMount } from 'svelte';
 	import ModuleHeader from '$lib/shared/components/ModuleHeader.svelte';
 	import LocationPicker from '$lib/shared/components/LocationPicker.svelte';
-	import SearchableSelect from '$lib/shared/components/SearchableSelect.svelte';
 	import WatershedThumb from '$lib/shared/components/WatershedThumb.svelte';
 	import { itemPath } from '$lib/shared/slug.js';
 	import { session } from '$lib/shared/session.svelte.js';
@@ -14,14 +13,12 @@
 		createProject,
 		deleteProject,
 		fetchProjects,
-		fetchVillageDistricts,
-		fetchVillageStates,
-		fetchVillagesByDistrict,
 		fetchWatershedPreviewContext,
 		invalidateProjectsCache,
 		lookupWatershed,
+		searchPlaces,
 		watershedsFromGeometry,
-		watershedsFromVillage
+		watershedsFromPoint
 	} from '$lib/modules/diagnose/api';
 	import {
 		beginDiagnoseNav,
@@ -61,37 +58,21 @@
 	let pointAbort = null;
 	/** @type {AbortController | null} */
 	let aoiAbort = null;
+	/** @type {AbortController | null} */
+	let placeAbort = null;
 	let previewGen = 0;
 
-	let villageState = $state('');
-	let villageDistrict = $state('');
-	let villageId = $state('');
-	/** @type {string[]} */
-	let stateOptions = $state([]);
-	/** @type {string[]} */
-	let districtOptions = $state([]);
-	/** @type {Array<{ id: string, name: string }>} */
-	let villageOptions = $state([]);
-	/** @type {Map<string, string[]>} */
-	const districtCache = new Map();
-	/** @type {Map<string, Array<{ id: string, name: string }>>} */
-	const villageCache = new Map();
-	let cascadeLoading = $state('');
-	let cascadeError = $state('');
+	let placeQuery = $state('');
+	/** @type {Array<{ label: string, lat: number, lng: number, type?: string }>} */
+	let placeResults = $state([]);
+	let placeSearching = $state(false);
+	let placeError = $state('');
+	/** @type {ReturnType<typeof setTimeout> | null} */
+	let placeDebounce = null;
 	let uploadError = $state('');
 	let uploadName = $state('');
 	let coordError = $state('');
 	let coordInput = $state('');
-
-	const stateSelectOptions = $derived(
-		stateOptions.map((s) => ({ value: s, label: titleCase(s) }))
-	);
-	const districtSelectOptions = $derived(
-		districtOptions.map((d) => ({ value: d, label: titleCase(d) }))
-	);
-	const villageSelectOptions = $derived(
-		villageOptions.map((v) => ({ value: String(v.id), label: titleCase(v.name) }))
-	);
 
 	function titleCase(s) {
 		return String(s || '')
@@ -108,12 +89,12 @@
 			navBusy = isDiagnoseNavBusy();
 		});
 		loadProjects();
-		void ensureStatesLoaded();
 		mounted = true;
 		document.addEventListener('click', closeMenu);
 		return () => {
 			document.removeEventListener('click', closeMenu);
 			unsub();
+			if (placeDebounce) clearTimeout(placeDebounce);
 			// Cancel village resolve / preview-context so leaving create UI
 			// cannot leave GIS work running and 502 the next page.
 			abortInFlightLoads();
@@ -152,17 +133,15 @@
 		previewContextLayers = [];
 		previewLoading = false;
 		contextLoading = false;
-		cascadeError = '';
+		placeError = '';
 		uploadError = '';
 		uploadName = '';
 		coordError = '';
 		if (mode === 'point') {
 			coordInput = formatCoordInput(lat, lng);
 		}
-		if (mode === 'village') {
-			ensureStatesLoaded();
-		} else {
-			resetVillageCascade();
+		if (mode !== 'village') {
+			resetPlaceSearch();
 		}
 	}
 
@@ -245,10 +224,12 @@
 		previewAbort?.abort();
 		pointAbort?.abort();
 		aoiAbort?.abort();
+		placeAbort?.abort();
 		villageAbort = null;
 		previewAbort = null;
 		pointAbort = null;
 		aoiAbort = null;
+		placeAbort = null;
 		previewGen += 1;
 		contextLoading = false;
 	}
@@ -285,108 +266,79 @@
 		}
 	}
 
-	function resetVillageCascade() {
-		abortInFlightLoads();
-		villageState = '';
-		villageDistrict = '';
-		villageId = '';
-		districtOptions = [];
-		villageOptions = [];
-		cascadeError = '';
-	}
-
-	async function ensureStatesLoaded() {
-		if (stateOptions.length) return;
-		cascadeLoading = 'states';
-		cascadeError = '';
-		try {
-			stateOptions = await fetchVillageStates();
-		} catch (err) {
-			cascadeError = String(err);
-		} finally {
-			cascadeLoading = '';
+	function resetPlaceSearch() {
+		placeAbort?.abort();
+		placeAbort = null;
+		if (placeDebounce) {
+			clearTimeout(placeDebounce);
+			placeDebounce = null;
 		}
+		placeQuery = '';
+		placeResults = [];
+		placeSearching = false;
+		placeError = '';
 	}
 
-	async function onStateChange(state) {
-		abortInFlightLoads();
-		villageState = state;
-		villageDistrict = '';
-		villageId = '';
-		districtOptions = [];
-		villageOptions = [];
-		watershedPreview = null;
-		previewContextLayers = [];
-		if (!state) return;
-		cascadeError = '';
-		const cached = districtCache.get(state);
-		if (cached) {
-			districtOptions = cached;
+	function onPlaceQueryInput(event) {
+		const value = event.currentTarget?.value ?? '';
+		placeQuery = value;
+		placeError = '';
+		if (placeDebounce) clearTimeout(placeDebounce);
+		const q = String(value).trim();
+		if (q.length < 2) {
+			placeResults = [];
+			placeSearching = false;
+			placeAbort?.abort();
 			return;
 		}
-		cascadeLoading = 'districts';
+		placeDebounce = setTimeout(() => {
+			void runPlaceSearch(q);
+		}, 350);
+	}
+
+	async function runPlaceSearch(q) {
+		placeAbort?.abort();
+		placeAbort = new AbortController();
+		const { signal } = placeAbort;
+		placeSearching = true;
+		placeError = '';
 		try {
-			const rows = await fetchVillageDistricts(state);
-			districtCache.set(state, rows);
-			if (villageState === state) districtOptions = rows;
+			const rows = await searchPlaces(q, 6, { signal });
+			if (signal.aborted) return;
+			placeResults = rows;
+			if (!rows.length) placeError = 'No places found — try a nearby town or village name.';
 		} catch (err) {
-			cascadeError = String(err);
+			if (signal.aborted || (err instanceof Error && err.name === 'AbortError')) return;
+			placeResults = [];
+			placeError = String(err);
 		} finally {
-			cascadeLoading = '';
+			if (!signal.aborted) placeSearching = false;
 		}
 	}
 
-	async function onDistrictChange(district) {
-		abortInFlightLoads();
-		villageDistrict = district;
-		villageId = '';
-		villageOptions = [];
-		watershedPreview = null;
-		previewContextLayers = [];
-		if (!district || !villageState) return;
-		cascadeError = '';
-		const cacheKey = `${villageState}::${district}`;
-		const cached = villageCache.get(cacheKey);
-		if (cached) {
-			villageOptions = cached;
-			return;
-		}
-		cascadeLoading = 'villages';
-		try {
-			const rows = await fetchVillagesByDistrict(villageState, district);
-			villageCache.set(cacheKey, rows);
-			if (villageState && villageDistrict === district) villageOptions = rows;
-		} catch (err) {
-			cascadeError = String(err);
-		} finally {
-			cascadeLoading = '';
-		}
-	}
-
-	async function onVillageChange(id) {
-		villageId = id;
-		if (!id) {
-			abortInFlightLoads();
-			watershedPreview = null;
-			microChoice = 'all';
-			previewContextLayers = [];
-			return;
-		}
-		const hit = villageOptions.find((v) => v.id === id);
+	/**
+	 * Clinton-style: geocode / map click → lat/lng → village FGB polygon → L12 union.
+	 * @param {{ lng: number, lat: number, label?: string }} opts
+	 */
+	async function resolveVillageAtPoint({ lng: lon, lat: latVal, label } = {}) {
+		if (lon == null || latVal == null) return;
+		lng = lon;
+		lat = latVal;
 		previewLoading = true;
 		microChoice = 'all';
-		cascadeError = '';
+		placeError = '';
 		villageAbort?.abort();
 		previewAbort?.abort();
 		villageAbort = new AbortController();
 		const { signal } = villageAbort;
 		try {
-			const result = await watershedsFromVillage({ villageId: id, signal });
+			const result = await watershedsFromPoint({ lng: lon, lat: latVal, signal });
 			if (signal.aborted) return;
-			setWatershedPreview(result, 'all');
+			setWatershedPreview({ ...result, source: 'village' }, 'all');
 			if (result.seed_lng != null) lng = result.seed_lng;
 			if (result.seed_lat != null) lat = result.seed_lat;
-			if (!name.trim() && hit?.name) name = titleCase(hit.name);
+			const villageLabel = result.village_name || label;
+			if (!name.trim() && villageLabel) name = titleCase(villageLabel);
 			const geom = watershedPreview?.geometry;
 			if (geom) {
 				previewContextLayers = [];
@@ -398,9 +350,20 @@
 			if (signal.aborted || (err instanceof Error && err.name === 'AbortError')) return;
 			watershedPreview = { error: String(err) };
 			previewContextLayers = [];
+			placeError = String(err);
 		} finally {
 			if (!signal.aborted) previewLoading = false;
 		}
+	}
+
+	function onPlacePick(place) {
+		placeResults = [];
+		placeQuery = place.label || placeQuery;
+		void resolveVillageAtPoint({
+			lng: place.lng,
+			lat: place.lat,
+			label: place.label
+		});
 	}
 
 	function formatCoordInput(latVal, lon) {
@@ -613,7 +576,7 @@
 		selectMode = 'point';
 		coordError = '';
 		coordInput = formatCoordInput(lat, lng);
-		resetVillageCascade();
+		resetPlaceSearch();
 		uploadError = '';
 		uploadName = '';
 	}
@@ -622,7 +585,7 @@
 		selectMode === 'point'
 			? 'Click the map or enter coordinates (latitude, longitude). If the point sits in a village with several micro watersheds, choose one or all.'
 			: selectMode === 'village'
-				? 'Choose state → district → village. Use the options on the left to clip to one micro or all intersecting. Blue dashed outline is the selected L12 clip.'
+				? 'Search a place (or click the map). We take that point’s centroid, load the village polygon from the village boundaries layer, then clip intersecting micro watersheds — same as before, without the state/district dropdown.'
 				: 'Upload a polygon AOI (GeoJSON, KML, or GPX polygon). That shape becomes the clip boundary.'
 	);
 
@@ -779,41 +742,50 @@
 							<p class="m-0 text-xs text-red-600">{coordError}</p>
 						{/if}
 					{:else if selectMode === 'village'}
-						<div class="grid gap-3">
-							<SearchableSelect
-								id="village-state"
-								label="State"
-								placeholder="Select state…"
-								options={stateSelectOptions}
-								bind:value={villageState}
-								loading={cascadeLoading === 'states'}
-								disabled={cascadeLoading === 'states'}
-								onChange={onStateChange}
+						<div class="grid gap-2">
+							<label class="mb-0 block font-body text-sm font-medium text-brand-navy" for="place-search"
+								>Search place</label
+							>
+							<input
+								id="place-search"
+								type="search"
+								autocomplete="off"
+								class="w-full rounded border border-brand-navy/20 px-3 py-2 font-body"
+								placeholder="e.g. Periyakulam, Theni"
+								value={placeQuery}
+								oninput={onPlaceQueryInput}
 							/>
-							<SearchableSelect
-								id="village-district"
-								label="District"
-								placeholder="Select district…"
-								options={districtSelectOptions}
-								bind:value={villageDistrict}
-								loading={cascadeLoading === 'districts'}
-								disabled={!villageState || cascadeLoading === 'districts'}
-								onChange={onDistrictChange}
-							/>
-							<SearchableSelect
-								id="village-name"
-								label="Village"
-								placeholder="Select village…"
-								options={villageSelectOptions}
-								bind:value={villageId}
-								loading={cascadeLoading === 'villages'}
-								disabled={!villageDistrict || cascadeLoading === 'villages'}
-								emptyText="No villages in this district"
-								onChange={onVillageChange}
-							/>
+							<p class="m-0 text-xs text-brand-steel">
+								Uses map search for a location, then the village boundary from your configured FGB.
+								You can also click the map.
+							</p>
+							{#if placeSearching}
+								<p class="m-0 text-xs text-brand-steel">Searching…</p>
+							{/if}
+							{#if placeResults.length}
+								<ul
+									class="m-0 max-h-48 list-none overflow-y-auto rounded border border-brand-navy/15 p-0"
+									role="listbox"
+								>
+									{#each placeResults as place (place.label + place.lat + place.lng)}
+										<li class="m-0 border-b border-brand-navy/10 last:border-b-0">
+											<button
+												type="button"
+												class="w-full cursor-pointer px-3 py-2 text-left font-body text-sm text-brand-navy hover:bg-brand-sky/30"
+												onclick={() => onPlacePick(place)}
+											>
+												<span class="block font-medium leading-snug">{place.label}</span>
+												{#if place.type}
+													<span class="block text-[11px] text-brand-steel">{place.type}</span>
+												{/if}
+											</button>
+										</li>
+									{/each}
+								</ul>
+							{/if}
 						</div>
-						{#if cascadeError}
-							<p class="m-0 text-xs text-red-600">{cascadeError}</p>
+						{#if placeError}
+							<p class="m-0 text-xs text-red-600">{placeError}</p>
 						{/if}
 					{:else if selectMode === 'custom'}
 						<div>
@@ -948,15 +920,21 @@
 					<LocationPicker
 						bind:lng
 						bind:lat
-						onPick={selectMode === 'point' ? previewWatershedFromPoint : undefined}
+						onPick={
+							selectMode === 'point'
+								? previewWatershedFromPoint
+								: selectMode === 'village'
+									? resolveVillageAtPoint
+									: undefined
+						}
 						clipGeometry={watershedPreview?.geometry ?? null}
 						villageGeometry={watershedPreview?.village_geometry ?? null}
 						villageName={watershedPreview?.village_name ?? null}
 						parts={watershedPreview?.parts ?? null}
 						selectedPartId={multiMicroParts.length ? microChoice : null}
 						contextLayers={previewContextLayers}
-						interactiveClick={selectMode === 'point'}
-						showMarker={selectMode === 'point'}
+						interactiveClick={selectMode === 'point' || selectMode === 'village'}
+						showMarker={selectMode === 'point' || selectMode === 'village'}
 						hint={mapHint}
 					/>
 				</section>
