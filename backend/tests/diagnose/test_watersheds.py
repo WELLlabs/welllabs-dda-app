@@ -161,6 +161,33 @@ def test_index_state_count_skips_numeric_junk():
     assert _index_state_count(rows) == 2
 
 
+def test_village_geometry_falls_back_to_centroid_buffer(monkeypatch):
+    from shapely.geometry import Point
+
+    from app.shared import watersheds as ws
+
+    meta = {
+        "id": "abc",
+        "name": "Demo",
+        "district": "medak",
+        "state": "telangana",
+        "lng": 78.5,
+        "lat": 17.6,
+    }
+    monkeypatch.setattr(ws, "_village_record_by_id", lambda _vid: meta)
+    monkeypatch.setattr(ws, "_configure_gdal_aws", lambda: None)
+    monkeypatch.setattr(ws, "_villages_vsis3_path", lambda: "/vsis3/bucket/villages.fgb")
+
+    def boom(*_a, **_k):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(ws, "_read_bbox_timed", boom)
+    geom, props = ws.village_geometry_by_id("abc")
+    assert props["name"] == "Demo"
+    assert geom.geom_type == "Polygon"
+    assert Point(78.5, 17.6).within(geom) or geom.contains(Point(78.5, 17.6))
+
+
 def test_village_place_labels_from_pc11_codes():
     from app.shared.watersheds import _village_district_label, _village_state_label
 

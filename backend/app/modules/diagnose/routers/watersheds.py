@@ -130,13 +130,21 @@ async def watersheds_from_village(body: FromVillageBody, user: dict = Depends(ge
     if not body.village_id and not body.geometry:
         raise HTTPException(400, "Provide village_id or geometry")
     try:
-        return await asyncio.to_thread(
-            resolve_village_watersheds,
-            village_id=body.village_id,
-            geometry=body.geometry,
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                resolve_village_watersheds,
+                village_id=body.village_id,
+                geometry=body.geometry,
+            ),
+            timeout=55.0,
         )
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(
+            504,
+            "Village resolve timed out — the village outline layer is slow to load. Retry in a moment.",
+        ) from exc
     except Exception as exc:
         raise HTTPException(502, f"Village watershed resolve failed: {exc}") from exc
 

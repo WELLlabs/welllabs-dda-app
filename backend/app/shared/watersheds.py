@@ -339,6 +339,27 @@ def _read_bbox(path: str, lng: float, lat: float, pad: float):
     return result, geom_col
 
 
+# Per-pad budget for /vsis3 Village_pan_India.fgb reads (Cloudflare ~100s total).
+_VILLAGE_FGB_READ_TIMEOUT_S = 12.0
+# ~1.2 km stand-in when the FGB read times out but the lookup has a centroid.
+_VILLAGE_CENTROID_FALLBACK_DEG = 0.012
+
+
+def _read_bbox_timed(path: str, lng: float, lat: float, pad: float, *, timeout_s: float = _VILLAGE_FGB_READ_TIMEOUT_S):
+    """``_read_bbox`` with a hard wall clock so hung /vsis3 reads cannot 502 the host."""
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        fut = pool.submit(_read_bbox, path, lng, lat, pad)
+        try:
+            return fut.result(timeout=timeout_s)
+        except FuturesTimeout as exc:
+            fut.cancel()
+            raise TimeoutError(
+                f"Village FGB read timed out after {timeout_s:.0f}s (pad={pad})"
+            ) from exc
+
+
 def _read_bbox_extent(path: str, minx: float, miny: float, maxx: float, maxy: float, pad: float = 0.02):
     bbox = (minx - pad, miny - pad, maxx + pad, maxy + pad)
     result = pyogrio.read_arrow(path, bbox=bbox)
@@ -1530,7 +1551,12 @@ def _village_id_matches(props: dict, vid: str) -> bool:
 
 
 def village_geometry_by_id(village_id: str) -> tuple[Any, dict]:
-    """Load a village polygon by id using centroid-scoped S3 range reads."""
+    """Load a village polygon by id using centroid-scoped S3 range reads.
+
+    Each FGB bbox read is time-boxed. If the pan-India FGB is unreachable within
+    budget but the lookup has a centroid, return a small buffer so watershed
+    resolve still works (outline is approximate).
+    """
     vid = (village_id or "").strip()
     if not vid:
         raise ValueError("village_id is required")
@@ -1542,8 +1568,12 @@ def village_geometry_by_id(village_id: str) -> tuple[Any, dict]:
     if syn:
         lng, lat = float(syn.group(2)), float(syn.group(3))
         point = Point(lng, lat)
-        for pad in (0.02, 0.1, 0.3):
-            table, geom_col = _read_bbox(path, lng, lat, pad)
+        for pad in (0.02, 0.08, 0.15):
+            try:
+                table, geom_col = _read_bbox_timed(path, lng, lat, pad)
+            except Exception as exc:
+                logger.warning("Village synthetic bbox read failed pad=%s: %s", pad, exc)
+                continue
             geom, props = _find_containing(table, geom_col, point)
             if geom is None:
                 geom, props = _find_intersecting(table, geom_col, point.buffer(0.005))
@@ -1553,24 +1583,31 @@ def village_geometry_by_id(village_id: str) -> tuple[Any, dict]:
 
     # Preferred path: centroid from name index → small spatial read (seconds, not minutes)
     meta = _village_record_by_id(vid)
-    if meta and (meta.get("lng") is None or meta.get("lat") is None) and meta.get("state"):
-        ensure_state_village_centroids(str(meta["state"]))
-        meta = _village_record_by_id(vid)
+    # Do not call ensure_state_village_centroids here — a full-state FGB enrich can
+    # hang past Cloudflare's budget and 502 the picker.
 
     if meta and meta.get("lng") is not None and meta.get("lat") is not None:
         lng = float(meta["lng"])
         lat = float(meta["lat"])
         point = Point(lng, lat)
-        for pad in (0.02, 0.05, 0.12, 0.3):
+        last_exc: Exception | None = None
+        for pad in (0.015, 0.04, 0.1):
             try:
-                table, geom_col = _read_bbox(path, lng, lat, pad)
+                table, geom_col = _read_bbox_timed(path, lng, lat, pad)
             except Exception as exc:
+                last_exc = exc
                 logger.warning("Village bbox read failed pad=%s: %s", pad, exc)
                 continue
+            # Prefer point-in-polygon first (fast); id scan only on the small pad.
+            geom, props = _find_containing(table, geom_col, point)
+            if geom is not None and props is not None:
+                return geom, props
             geoms = table.column(geom_col) if geom_col in table.column_names else None
             if geoms is None:
                 continue
-            for i in range(table.num_rows):
+            # Cap id scan — dense pads can have tens of thousands of villages.
+            limit = min(table.num_rows, 4000)
+            for i in range(limit):
                 props = _row_props(table, i)
                 if not _village_id_matches(props, vid):
                     continue
@@ -1578,11 +1615,22 @@ def village_geometry_by_id(village_id: str) -> tuple[Any, dict]:
                 if geom is None or geom.is_empty:
                     continue
                 return geom, props
-            # Fallback: polygon containing the indexed centroid
-            geom, props = _find_containing(table, geom_col, point)
-            if geom is not None and props is not None:
-                return geom, props
-        raise ValueError(f"Village not found for id {vid} near ({lng}, {lat})")
+        # FGB unavailable / timed out — still resolve basins from a centroid buffer.
+        logger.warning(
+            "Village FGB outline unavailable for id=%s near (%.5f, %.5f); "
+            "using centroid buffer (%s)",
+            vid,
+            lng,
+            lat,
+            last_exc,
+        )
+        props = {
+            "name": meta.get("name") or "Village",
+            "id": vid,
+            "district": meta.get("district"),
+            "state": meta.get("state"),
+        }
+        return point.buffer(_VILLAGE_CENTROID_FALLBACK_DEG), props
 
     raise ValueError(
         f"Village location unknown for id {vid} — pick the state again to load locations, then retry"
