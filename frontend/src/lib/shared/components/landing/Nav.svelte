@@ -23,6 +23,12 @@
 			alt="WELL Labs"
 			class="brand-logo"
 		/>
+		<span class="brand-divider" aria-hidden="true"></span>
+		<img
+			src="{base}/logos/edf-logo.svg"
+			alt="Environmental Defense Fund"
+			class="brand-logo brand-logo-edf"
+		/>
 		<svg class="brand-star" viewBox="0 0 24 24" aria-hidden="true">
 			<path
 				d="M12 1.6 13.7 9.1 21 12 13.7 14.9 12 22.4 10.3 14.9 3 12l7.3-2.9L12 1.6Z"
@@ -67,6 +73,18 @@
 		object-position: left center;
 	}
 
+	.brand-logo-edf {
+		height: 1.5rem;
+		max-width: min(26vw, 6rem);
+	}
+
+	.brand-divider {
+		width: 1px;
+		height: 1.5rem;
+		flex-shrink: 0;
+		background: #cbd5e1;
+	}
+
 	.brand-star {
 		height: 0.85rem;
 		width: 0.85rem;
@@ -92,6 +110,13 @@
 		.brand-logo {
 			height: 2.55rem;
 			max-width: 13.5rem;
+		}
+		.brand-logo-edf {
+			height: 1.8rem;
+			max-width: 7rem;
+		}
+		.brand-divider {
+			height: 1.85rem;
 		}
 		.brand-product {
 			font-size: 1.05rem;

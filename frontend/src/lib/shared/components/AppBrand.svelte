@@ -16,6 +16,8 @@
 
 <a href={home} class="brand" class:compact aria-label="Water Security Toolbox home">
 	<img src="{base}/logos/well-labs-logo.png" alt="WELL Labs" class="brand-logo" />
+	<span class="brand-divider" aria-hidden="true"></span>
+	<img src="{base}/logos/edf-logo.svg" alt="Environmental Defense Fund" class="brand-logo brand-logo-edf" />
 	<svg class="brand-star" viewBox="0 0 24 24" aria-hidden="true">
 		<path
 			d="M12 1.6 13.7 9.1 21 12 13.7 14.9 12 22.4 10.3 14.9 3 12l7.3-2.9L12 1.6Z"
@@ -51,6 +53,23 @@
 		max-width: 9.5rem;
 	}
 
+	.brand-logo-edf {
+		height: 1.5rem;
+		max-width: min(26vw, 6rem);
+	}
+
+	.brand.compact .brand-logo-edf {
+		height: 1.35rem;
+		max-width: 5rem;
+	}
+
+	.brand-divider {
+		width: 1px;
+		height: 1.5rem;
+		flex-shrink: 0;
+		background: #cbd5e1;
+	}
+
 	.brand-star {
 		height: 0.85rem;
 		width: 0.85rem;
@@ -80,6 +99,17 @@
 		.brand.compact .brand-logo {
 			height: 2.15rem;
 			max-width: 11rem;
+		}
+		.brand-logo-edf {
+			height: 1.75rem;
+			max-width: 7rem;
+		}
+		.brand.compact .brand-logo-edf {
+			height: 1.55rem;
+			max-width: 6rem;
+		}
+		.brand-divider {
+			height: 1.8rem;
 		}
 		.brand-product {
 			font-size: 1.05rem;
