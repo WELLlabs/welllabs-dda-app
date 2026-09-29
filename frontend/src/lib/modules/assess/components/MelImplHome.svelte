@@ -352,7 +352,7 @@
 				>
 					<span class="phase-num">2</span>
 					<span>
-						<span class="phase-title">Asset allocation</span>
+						<span class="phase-title">Asset creation</span>
 						<span class="phase-sub">{includedOt.length} parameters · types & options</span>
 					</span>
 				</button>
@@ -399,7 +399,7 @@
 
 				<article class="plan-pane">
 					<header class="pane-head">
-						<h2>Asset allocation</h2>
+						<h2>Asset creation</h2>
 						<span class="count">{includedOt.length}</span>
 					</header>
 					<p class="pane-sub">Included one-time parameters</p>

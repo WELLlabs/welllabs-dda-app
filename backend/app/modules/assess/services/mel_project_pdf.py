@@ -396,12 +396,19 @@ def _append_shared_field_setup(story: list, styles: dict, outro: list[str]) -> N
                 story.append(Paragraph(f"<b>{n_i}.</b> {_esc(b)}", styles["body"]))
             continue
         if para.startswith(
-            ("Select control assets:", "Asset allocation:", "Deploy Instruments:", "Train community")
+            (
+                "Select control assets:",
+                "Asset creation:",
+                "Asset allocation:",
+                "Deploy Instruments:",
+                "Train community",
+            )
         ):
             steps = []
             while i < len(field) and field[i].startswith(
                 (
                     "Select control assets:",
+                    "Asset creation:",
                     "Asset allocation:",
                     "Deploy Instruments:",
                     "Train community",

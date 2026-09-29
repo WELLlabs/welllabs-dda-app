@@ -16,7 +16,7 @@
     "Field Setup for Data Collections",
     "The MEL Plan provides a blueprint to execute the impact assessment in the field. There are broadly four steps involved here:",
     "Select control assets: Once we know the geotags of selected assets, selection of control assets follows depending on the type of intervention. This information on whether a control is needed or not is presented as a part of the MEL Plan. Control provides a baseline for measuring change in comparison to the treatment asset. This step happens simultaneously with the next step.",
-    "Asset allocation: This step is about capturing contextual information on the assets from the field. This can include queries like area under cultivation, crops grown, sources of irrigation, area under irrigation, etc. These queries barely change with time and are asked before monitoring begins to support analytical understanding for MEL. For example, if the duration of irrigation applied in a plot is half of another plot growing the same crop, it was because the area under irrigation differed. It also supports the step 1 of selecting controls, as we want to find similar controls where the only thing that is different is that they don’t have the intervention. The MEL Deployment helps with asset allocation.",
+    "Asset creation: This step is about capturing contextual information on the assets from the field. This can include queries like area under cultivation, crops grown, sources of irrigation, area under irrigation, etc. These queries barely change with time and are asked before monitoring begins to support analytical understanding for MEL. For example, if the duration of irrigation applied in a plot is half of another plot growing the same crop, it was because the area under irrigation differed. It also supports the step 1 of selecting controls, as we want to find similar controls where the only thing that is different is that they don’t have the intervention. The MEL Deployment helps with asset creation.",
     "Deploy Instruments: Once the assets are identified, wherever needed, the requisite instrumentation for capturing continuous monitoring data needs to be deployed.",
     "Train community resource persons (CRPs): The CRPs should be trained by the implementing NGO on the data collection process, including reading data using the instrumentation, inform them on the frequency of monitoring, while developing a thorough understanding of the intention behind each query and preventing any introduction of biases.",
     "Once instrumentation is deployed and CRPs are trained, monitoring begins at the frequency defined for each indicator. CRPs record data using the MEL Dashboard’s Open Data Kit (ODK) forms at each asset with their mobile phones, and the data uploads automatically to the tool.",
@@ -46,7 +46,7 @@
         "Field Setup for Data Collections",
         "The MEL Plan provides a blueprint to execute the impact assessment in the field. There are broadly four steps involved here:",
         "Select control assets: Once we know the geotags of selected assets, selection of control assets follows depending on the type of intervention. This information on whether a control is needed or not is presented as a part of the MEL Plan. Control provides a baseline for measuring change in comparison to the treatment asset. This step happens simultaneously with the next step.",
-        "Asset allocation: This step is about capturing contextual information on the assets from the field. This can include queries like area under cultivation, crops grown, sources of irrigation, area under irrigation, etc. These queries barely change with time and are asked before monitoring begins to support analytical understanding for MEL. For example, if the duration of irrigation applied in a plot is half of another plot growing the same crop, it was because the area under irrigation differed. It also supports the step 1 of selecting controls, as we want to find similar controls where the only thing that is different is that they don’t have the intervention. The MEL Deployment helps with asset allocation.",
+        "Asset creation: This step is about capturing contextual information on the assets from the field. This can include queries like area under cultivation, crops grown, sources of irrigation, area under irrigation, etc. These queries barely change with time and are asked before monitoring begins to support analytical understanding for MEL. For example, if the duration of irrigation applied in a plot is half of another plot growing the same crop, it was because the area under irrigation differed. It also supports the step 1 of selecting controls, as we want to find similar controls where the only thing that is different is that they don’t have the intervention. The MEL Deployment helps with asset creation.",
         "Deploy Instruments: Once the assets are identified, wherever needed, the requisite instrumentation for capturing continuous monitoring data needs to be deployed.",
         "Train community resource persons (CRPs): The CRPs should be trained by the implementing NGO on the data collection process, including reading data using the instrumentation, inform them on the frequency of monitoring, while developing a thorough understanding of the intention behind each query and preventing any introduction of biases.",
         "Once instrumentation is deployed and CRPs are trained, monitoring begins at the frequency defined for each indicator. CRPs record data using the MEL Dashboard’s Open Data Kit (ODK) forms at each asset with their mobile phones, and the data uploads automatically to the tool.",
@@ -77,28 +77,6 @@
           "kind": "outcome",
           "label": "Outcome 2",
           "outcome_type": null,
-          "title": "Post-monsoon increased water availability",
-          "indicators": [
-            "Volume of water retained in the structure during post-monsoon (m3)",
-            "Groundwater level change in the zone of influence",
-            "Changed cropping acreage (rabi, zaid)"
-          ],
-          "assumptions": "1. It is a normal rainfall year and \n2. Catchment upstream of the farm pond will generate adequate runoff."
-        },
-        {
-          "kind": "outcome",
-          "label": "Outcome 3",
-          "outcome_type": null,
-          "title": "Groundwater pumped in the structure",
-          "indicators": [
-            "Volumetric water pumped (m3)"
-          ],
-          "assumptions": "Farm pond has seasonality in the source of water used to fill it, where groundwater is pumped during the dry season."
-        },
-        {
-          "kind": "outcome",
-          "label": "Outcome 4",
-          "outcome_type": null,
           "title": "Improved crop water productivity (Rs/m3)",
           "indicators": [
             "Revenue/Profit (in Rs.) per acre (rabi, zaid, horticulture crops)",
@@ -107,6 +85,31 @@
             "Irrigation water applied (m3)"
           ],
           "assumptions": "1. Water consumption decreases or remains the same \n\n2. Pre-conditions for when CWP gain is counted:\na. ↑ market price of crop < ↑ in crop yield\nb. ↑ in crop yield (only)\nc. ↓ in input cost (only)\nd. ↓ in input cost > ↑ market price of crop\ne. Increased market price due to adoption of higher value crop\n\n3. It is a normal year, no input-supply disruptions/geopolitical shocks in the economy (e.g., Covid, fertilizer unavailability), and the market prices are stable"
+        },
+        {
+          "kind": "outcome",
+          "label": "Outcome 3",
+          "outcome_type": null,
+          "title": "Protective irrigation access (resilience)",
+          "indicators": [
+            "Crop yield",
+            "Irrigation water applied from surface water (farm pond)",
+            "Irrigation water applied from groundwater",
+            "Number of months the irrigation water sources availability during the monsoon."
+          ],
+          "assumptions": "It may or may not be a normal rainfall year, but the rainfall distribution is erratic."
+        },
+        {
+          "kind": "outcome",
+          "label": "Outcome 4",
+          "outcome_type": null,
+          "title": "Post-monsoon increased water availability",
+          "indicators": [
+            "Volume of water retained in the structure during post-monsoon (m3)",
+            "Groundwater level change in the zone of influence",
+            "Changed cropping acreage (rabi, zaid)"
+          ],
+          "assumptions": "1. It is a normal rainfall year and \n2. Catchment upstream of the farm pond will generate adequate runoff."
         },
         {
           "kind": "outcome",
@@ -132,19 +135,6 @@
         {
           "kind": "outcome",
           "label": "Outcome 7",
-          "outcome_type": null,
-          "title": "Protective irrigation access (resilience)",
-          "indicators": [
-            "Crop yield",
-            "Irrigation water applied from surface water (farm pond)",
-            "Irrigation water applied from groundwater",
-            "Number of months the irrigation water sources availability during the monsoon."
-          ],
-          "assumptions": "It may or may not be a normal rainfall year, but the rainfall distribution is erratic."
-        },
-        {
-          "kind": "outcome",
-          "label": "Outcome 8",
           "outcome_type": null,
           "title": "Reduced migration",
           "indicators": [
@@ -201,42 +191,10 @@
           "playbooks": "Staff Gauge | WELL LABS"
         },
         {
-          "indicator": "Volume of water retained in the structure during post-monsoon (m3)",
-          "monitoring_type": "CM",
-          "data": "Water level (m)",
-          "method": "Water level recordings using Staff gauge or Automatic Water Level Recorder",
-          "frequency": "Weekly or how quickly water level changes in the structure",
-          "playbooks": "Staff Gauge | WELL LABS \n\nPressure Transducers_Playbook.pdf"
-        },
-        {
-          "indicator": "Groundwater level change in the zone of influence (m bgl)",
-          "monitoring_type": "CM",
-          "data": "Groundwater level measured through wells",
-          "method": "Manual water level sounder",
-          "frequency": "Monthly/Seasonal",
-          "playbooks": ""
-        },
-        {
-          "indicator": "Volumetric water pumped (m3)",
-          "monitoring_type": "CM",
-          "data": "Rate of pipe flow (liters/sec);\nNumber of pumping hours OR\nFlow meter readings (unit or m3)",
-          "method": "Flow meter\nFarmer diary",
-          "frequency": "Every filling of the farm pond",
-          "playbooks": "Flow Meters_Playbook.pdf"
-        },
-        {
           "indicator": "Revenue/Profit (in Rs.) per acre (rabi, zaid, horticulture crops)",
           "monitoring_type": "BME",
           "data": "Season-wise as applicable (kharif/rabi/zaid/perennial/horticulture/tree plantations)\nYield (quintals/kg);\nSale price (Rs./quintal or kg);\nArea under cultivation (acres/bigha);\nInput costs - seeds, fertiliser & pesticide, weeding, herbicide, labour, diesel, electricity, pump-leasing, other costs",
           "method": "Farmer survey (retrospective recall-basis)\n\nSecondary Dataset (Price, Yield) can be used for triangulation -\n1. Yield : https://data.desagri.gov.in/website/crops-report-district-level-web\n2. Crop Price: https://agmarknet.gov.in/home",
-          "frequency": "Once per survey round (baseline/midline/endline)",
-          "playbooks": ""
-        },
-        {
-          "indicator": "Changed cropping acreage (rabi, zaid)",
-          "monitoring_type": "BME",
-          "data": "Area under cultivation for rabi, zaid seasons (acres or bigha)",
-          "method": "Farmer survey  (retrospective recall-basis)",
           "frequency": "Once per survey round (baseline/midline/endline)",
           "playbooks": ""
         },
@@ -273,30 +231,6 @@
           "playbooks": ""
         },
         {
-          "indicator": "Livelihoods adopted - livestock/poultry/fisheries/aquatic cultivation",
-          "monitoring_type": "BME",
-          "data": "No. of cows, buffaloes, goats, hens, roosters reared;\nTypes of fish reared;\nAquatic cultivation categories (whether foxnut/water chestnut cultivated);\nNo. of cows, buffaloes, goats, hens, roosters owned;\n\n(This is not a exhaustive list, and purely a recommendation.)",
-          "method": "Farmer survey  (retrospective recall-basis)",
-          "frequency": "Once per survey round (baseline/midline/endline)",
-          "playbooks": ""
-        },
-        {
-          "indicator": "Income derived from the additional livelihoods  -  livestock/poultry/fisheries/aquatic cultivation",
-          "monitoring_type": "BME",
-          "data": "Species-wise\n\nQuantity of milk sold (litres);\nno. of livestock sold (by type);\nquantity of by-products sold (manure/dung, wool/hide);\nquantity of fodder sold (quintals);\nno. of poultry birds sold;\nno. of eggs sold;\n\nSpecies-wise\n\nQuantity of fish harvested (kg),\nDiesel cost (for pumping GW) (Rs.);\nleasing cost for diesel pump(for pumping GW) (Rs.);\nelectricity cost (Rs.);\nsale price (Rs./kg);\nseed costs (Rs.)\nfeed costs (Rs.);\nother costs (Rs.)\n\nQuantity of foxnut/water chestnut harvested (kg);\nDiesel cost (for pumping GW) (Rs.);\nleasing cost for diesel pump(for pumping GW) (Rs.);\nelectricity cost (Rs.);\nsale price (Rs./kg);\nseed costs (Rs.)\nfeed costs (Rs.);\nlabour costs (Rs.);\nother costs (Rs.)\n\n(This is not a exhaustive list, and purely a recommendation.)",
-          "method": "Farmer survey (retrospective recall-basis)",
-          "frequency": "Once per survey round (baseline/midline/endline)",
-          "playbooks": ""
-        },
-        {
-          "indicator": "Revenue/Profit (in Rs.) from plantation on farm pond bunds (season of cultivation on bunds)",
-          "monitoring_type": "BME",
-          "data": "Season-wise as applicable (kharif/rabi/zaid/perennial/horticulture/tree plantations)\nYield (quintals/kg);\nSale price (Rs./quintal or kg);\nArea under cultivation (acres/bigha);\nInput costs - seeds, fertiliser & pesticide, weeding, herbicide, labour, diesel, electricity, pump-leasing, other costs",
-          "method": "Farmer survey (retrospective recall-basis)\n\nSecondary Dataset (Price, Yield) can be used for triangulation -\n1. Yield : https://data.desagri.gov.in/website/crops-report-district-level-web\n2. Crop Price: https://agmarknet.gov.in/home",
-          "frequency": "Once per survey round (baseline/midline/endline)",
-          "playbooks": ""
-        },
-        {
           "indicator": "Irrigation water applied from surface water (farm pond)",
           "monitoring_type": "CM",
           "data": "Rate of pipe flow (liters/sec);\nNumber of pumping hours\nOR\nFlow meter readings (unit or m3)",
@@ -318,6 +252,54 @@
           "data": "",
           "method": "Farmer diary/ODK form",
           "frequency": "",
+          "playbooks": ""
+        },
+        {
+          "indicator": "Volume of water retained in the structure during post-monsoon (m3)",
+          "monitoring_type": "CM",
+          "data": "Water level (m)",
+          "method": "Water level recordings using Staff gauge or Automatic Water Level Recorder",
+          "frequency": "Weekly or how quickly water level changes in the structure",
+          "playbooks": "Staff Gauge | WELL LABS \n\nPressure Transducers_Playbook.pdf"
+        },
+        {
+          "indicator": "Groundwater level change in the zone of influence (m bgl)",
+          "monitoring_type": "CM",
+          "data": "Groundwater level measured through wells",
+          "method": "Manual water level sounder",
+          "frequency": "Monthly/Seasonal",
+          "playbooks": ""
+        },
+        {
+          "indicator": "Changed cropping acreage (rabi, zaid)",
+          "monitoring_type": "BME",
+          "data": "Area under cultivation for rabi, zaid seasons (acres or bigha)",
+          "method": "Farmer survey  (retrospective recall-basis)",
+          "frequency": "Once per survey round (baseline/midline/endline)",
+          "playbooks": ""
+        },
+        {
+          "indicator": "Livelihoods adopted - livestock/poultry/fisheries/aquatic cultivation",
+          "monitoring_type": "BME",
+          "data": "No. of cows, buffaloes, goats, hens, roosters reared;\nTypes of fish reared;\nAquatic cultivation categories (whether foxnut/water chestnut cultivated);\nNo. of cows, buffaloes, goats, hens, roosters owned;\n\n(This is not a exhaustive list, and purely a recommendation.)",
+          "method": "Farmer survey  (retrospective recall-basis)",
+          "frequency": "Once per survey round (baseline/midline/endline)",
+          "playbooks": ""
+        },
+        {
+          "indicator": "Income derived from the additional livelihoods  -  livestock/poultry/fisheries/aquatic cultivation",
+          "monitoring_type": "BME",
+          "data": "Species-wise\n\nQuantity of milk sold (litres);\nno. of livestock sold (by type);\nquantity of by-products sold (manure/dung, wool/hide);\nquantity of fodder sold (quintals);\nno. of poultry birds sold;\nno. of eggs sold;\n\nSpecies-wise\n\nQuantity of fish harvested (kg),\nDiesel cost (for pumping GW) (Rs.);\nleasing cost for diesel pump(for pumping GW) (Rs.);\nelectricity cost (Rs.);\nsale price (Rs./kg);\nseed costs (Rs.)\nfeed costs (Rs.);\nother costs (Rs.)\n\nQuantity of foxnut/water chestnut harvested (kg);\nDiesel cost (for pumping GW) (Rs.);\nleasing cost for diesel pump(for pumping GW) (Rs.);\nelectricity cost (Rs.);\nsale price (Rs./kg);\nseed costs (Rs.)\nfeed costs (Rs.);\nlabour costs (Rs.);\nother costs (Rs.)\n\n(This is not a exhaustive list, and purely a recommendation.)",
+          "method": "Farmer survey (retrospective recall-basis)",
+          "frequency": "Once per survey round (baseline/midline/endline)",
+          "playbooks": ""
+        },
+        {
+          "indicator": "Revenue/Profit (in Rs.) from plantation on farm pond bunds (season of cultivation on bunds)",
+          "monitoring_type": "BME",
+          "data": "Season-wise as applicable (kharif/rabi/zaid/perennial/horticulture/tree plantations)\nYield (quintals/kg);\nSale price (Rs./quintal or kg);\nArea under cultivation (acres/bigha);\nInput costs - seeds, fertiliser & pesticide, weeding, herbicide, labour, diesel, electricity, pump-leasing, other costs",
+          "method": "Farmer survey (retrospective recall-basis)\n\nSecondary Dataset (Price, Yield) can be used for triangulation -\n1. Yield : https://data.desagri.gov.in/website/crops-report-district-level-web\n2. Crop Price: https://agmarknet.gov.in/home",
+          "frequency": "Once per survey round (baseline/midline/endline)",
           "playbooks": ""
         },
         {
@@ -361,7 +343,7 @@
         "Field Setup for Data Collections",
         "The MEL Plan provides a blueprint to execute the impact assessment in the field. There are broadly four steps involved here:",
         "Select control assets: Once we know the geotags of selected assets, selection of control assets follows depending on the type of intervention. This information on whether a control is needed or not is presented as a part of the MEL Plan. Control provides a baseline for measuring change in comparison to the treatment asset. This step happens simultaneously with the next step.",
-        "Asset allocation: This step is about capturing contextual information on the assets from the field. This can include queries like area under cultivation, crops grown, sources of irrigation, area under irrigation, etc. These queries barely change with time and are asked before monitoring begins to support analytical understanding for MEL. For example, if the duration of irrigation applied in a plot is half of another plot growing the same crop, it was because the area under irrigation differed. It also supports the step 1 of selecting controls, as we want to find similar controls where the only thing that is different is that they don’t have the intervention. The MEL Deployment helps with asset allocation.",
+        "Asset creation: This step is about capturing contextual information on the assets from the field. This can include queries like area under cultivation, crops grown, sources of irrigation, area under irrigation, etc. These queries barely change with time and are asked before monitoring begins to support analytical understanding for MEL. For example, if the duration of irrigation applied in a plot is half of another plot growing the same crop, it was because the area under irrigation differed. It also supports the step 1 of selecting controls, as we want to find similar controls where the only thing that is different is that they don’t have the intervention. The MEL Deployment helps with asset creation.",
         "Deploy Instruments: Once the assets are identified, wherever needed, the requisite instrumentation for capturing continuous monitoring data needs to be deployed.",
         "Train community resource persons (CRPs): The CRPs should be trained by the implementing NGO on the data collection process, including reading data using the instrumentation, inform them on the frequency of monitoring, while developing a thorough understanding of the intention behind each query and preventing any introduction of biases.",
         "Once instrumentation is deployed and CRPs are trained, monitoring begins at the frequency defined for each indicator. CRPs record data using the MEL Dashboard’s Open Data Kit (ODK) forms at each asset with their mobile phones, and the data uploads automatically to the tool.",
@@ -552,7 +534,7 @@
         "Field Setup for Data Collections",
         "The MEL Plan provides a blueprint to execute the impact assessment in the field. There are broadly four steps involved here:",
         "Select control assets: Once we know the geotags of selected assets, selection of control assets follows depending on the type of intervention. This information on whether a control is needed or not is presented as a part of the MEL Plan. Control provides a baseline for measuring change in comparison to the treatment asset. This step happens simultaneously with the next step.",
-        "Asset allocation: This step is about capturing contextual information on the assets from the field. This can include queries like area under cultivation, crops grown, sources of irrigation, area under irrigation, etc. These queries barely change with time and are asked before monitoring begins to support analytical understanding for MEL. For example, if the duration of irrigation applied in a plot is half of another plot growing the same crop, it was because the area under irrigation differed. It also supports the step 1 of selecting controls, as we want to find similar controls where the only thing that is different is that they don’t have the intervention. The MEL Deployment helps with asset allocation.",
+        "Asset creation: This step is about capturing contextual information on the assets from the field. This can include queries like area under cultivation, crops grown, sources of irrigation, area under irrigation, etc. These queries barely change with time and are asked before monitoring begins to support analytical understanding for MEL. For example, if the duration of irrigation applied in a plot is half of another plot growing the same crop, it was because the area under irrigation differed. It also supports the step 1 of selecting controls, as we want to find similar controls where the only thing that is different is that they don’t have the intervention. The MEL Deployment helps with asset creation.",
         "Deploy Instruments: Once the assets are identified, wherever needed, the requisite instrumentation for capturing continuous monitoring data needs to be deployed.",
         "Train community resource persons (CRPs): The CRPs should be trained by the implementing NGO on the data collection process, including reading data using the instrumentation, inform them on the frequency of monitoring, while developing a thorough understanding of the intention behind each query and preventing any introduction of biases.",
         "Once instrumentation is deployed and CRPs are trained, monitoring begins at the frequency defined for each indicator. CRPs record data using the MEL Dashboard’s Open Data Kit (ODK) forms at each asset with their mobile phones, and the data uploads automatically to the tool.",

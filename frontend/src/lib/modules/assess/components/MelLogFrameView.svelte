@@ -17,6 +17,7 @@
 
 	const STEP_PREFIXES = [
 		'Select control assets:',
+		'Asset creation:',
 		'Asset allocation:',
 		'Deploy Instruments:',
 		'Train community'

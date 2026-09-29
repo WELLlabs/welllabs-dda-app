@@ -107,7 +107,7 @@
 	const STEPS = $derived(
 		plotMode
 			? ['Outcomes', 'Farm-plot allocation', 'CM form', 'Publish']
-			: ['Outcomes', 'Asset allocation', 'CM form', 'Publish']
+			: ['Outcomes', 'Asset creation', 'CM form', 'Publish']
 	);
 
 	onMount(() => {
@@ -481,7 +481,7 @@
 					<div class="flex flex-wrap items-start justify-between gap-3">
 						<div>
 							<h2 class="m-0 text-base font-semibold text-brand-navy">
-								{plotMode ? 'Farm-plot allocation' : 'Asset allocation'}
+								{plotMode ? 'Farm-plot allocation' : 'Asset creation'}
 							</h2>
 							<p class="mt-1 text-sm text-brand-steel">
 								Review one-time fields. Click Edit on a card to change labels, types, or options.
@@ -585,7 +585,7 @@
 					disabled={saving || !selectedOutcomeIds.length}
 					onclick={saveOutcomesAndNext}
 				>
-					{saving ? 'Saving…' : plotMode ? 'Continue to farm-plot allocation' : 'Continue to asset allocation'}
+					{saving ? 'Saving…' : plotMode ? 'Continue to farm-plot allocation' : 'Continue to asset creation'}
 				</button>
 			</section>
 		{:else if addAssetMode || step === 1}
@@ -595,7 +595,7 @@
 					<div class="flex flex-wrap items-start justify-between gap-3">
 						<div>
 							<h2 class="m-0 text-base font-semibold text-brand-navy">
-								{plotMode ? 'Farm-plot allocation' : 'Asset allocation'}
+								{plotMode ? 'Farm-plot allocation' : 'Asset creation'}
 							</h2>
 							<p class="mt-1 text-sm text-brand-steel">
 								Review one-time fields. Click Edit on a card to change labels, types, or options.
@@ -891,7 +891,7 @@
 						type="button"
 						class="rounded-lg border border-brand-navy/20 px-4 py-2 text-sm"
 						onclick={() => (step = 1)}
-						>{plotMode ? 'Edit farm-plot allocation' : 'Edit asset allocation'}</button
+						>{plotMode ? 'Edit farm-plot allocation' : 'Edit asset creation'}</button
 					>
 					>
 					<button

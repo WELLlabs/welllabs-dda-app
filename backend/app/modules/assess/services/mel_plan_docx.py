@@ -586,6 +586,7 @@ def _is_field_step(text: str) -> bool:
         text
         and (
             text.startswith("Select control assets:")
+            or text.startswith("Asset creation:")
             or text.startswith("Asset allocation:")
             or text.startswith("Deploy Instruments:")
             or text.startswith("Train community")
