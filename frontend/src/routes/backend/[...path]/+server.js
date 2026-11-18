@@ -122,11 +122,15 @@ async function proxy(event) {
 		}
 	}
 
+	// fetch() already decompressed the body, so a gzip upstream's content-length
+	// (the compressed size) no longer matches — drop it with content-encoding.
+	const decoded = res.headers.has('content-encoding');
 	const outHeaders = new Headers();
 	for (const [key, value] of res.headers.entries()) {
 		const lower = key.toLowerCase();
 		if (
 			lower === 'content-encoding' ||
+			(decoded && lower === 'content-length') ||
 			lower === 'set-cookie' ||
 			lower === 'transfer-encoding' ||
 			lower === 'location'

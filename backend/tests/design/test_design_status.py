@@ -8,4 +8,4 @@ def test_design_status(client):
     assert response.status_code == 200
     data = response.json()
     assert data["module"] == "design"
-    assert data["status"] == "not_implemented"
+    assert data["status"] == "ok"

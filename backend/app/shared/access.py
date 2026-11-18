@@ -148,3 +148,24 @@ def assert_diagnosis_access(user_id: str, diagnosis_id: str) -> None:
         forbidden_message="You do not have access to this project",
         access_sql=diagnosis_access_where("d"),
     )
+
+
+def require_design_owner(project_id: str, user: dict = Depends(get_current_user)) -> dict:
+    """Route dependency for Design projects (owner-only in v1): 404 if missing, 403 if not the owner."""
+    from uuid import UUID
+
+    try:
+        UUID(project_id)
+    except ValueError:
+        raise HTTPException(404, "Project not found") from None
+    with db_cursor() as cur:
+        cur.execute(
+            "SELECT owner_id FROM design_projects WHERE id = %(id)s",
+            {"id": project_id},
+        )
+        row = cur.fetchone()
+    if not row:
+        raise HTTPException(404, "Project not found")
+    if str(row["owner_id"]) != str(user["id"]):
+        raise HTTPException(403, "You do not have access to this project")
+    return user

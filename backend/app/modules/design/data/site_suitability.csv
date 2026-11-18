@@ -1,0 +1,30 @@
+Sl,Solutions,GIS check,Solution type,Secondary data criteria 1,Secondary data criteria 2,Secondary data criteria 3,Secondary data criteria 4,Primary Data 1,Primary data 2,Primary data 3
+#,Solution Name,GIS Site suitability,Solution type,"Slope range
+in %",Stream order,LULC,Water source type,Min catchment area required (ha),"Soil thickness , m",Summer Ground water level: Depth to Water level in m
+1,Continuous Contour Trenches (CCT),Yes,Areal,5 - 15 %,,,,,>1 m,
+2,Staggered Contour Trenches (SCT),Yes,Areal,15 - 25 %,,,,,>1 m,
+3,Water Absorption Trenches (WAT),Yes,Areal,0 - 5 %,,,,,>1 m,
+4,Field trenches/Field bunds,Yes,Areal,0 - 15%,,,,,>1 m,
+5,Parabolic/Crescent trenches,Yes,Areal,0 - 10%,,"Agriculture, Plantation",,,>1 m,
+6,30-40 model of Farm trenches,Yes,Areal,0 - 10%,,Agriculture,,,>1 m,
+7,Stone bunding/Loose boulder Structure bunding (LBS),Yes,Areal,5 - 25 %,,,,,<1m,
+8,Sub-Surface Dyke,Yes,Areal,0 - 5 %,1st - 2nd,,,,,<1 m
+14,Recharge pits (Jal tara),Yes,Areal,0 - 10 %,,,,1 ha,>2 m,> 2m
+16,Gully plug,Yes,Instream,5 - 15 %,1st - 2nd,,,1 ha,,
+17,Nala bund/Loose Boulder Structure (LBS),Yes,Instream,0 - 10 %,1st - 2nd,,,1 ha,,
+18,Concrete Nala bunds (CNB),Yes,Instream,0 - 10 %,2nd - 3rd,,,5 ha,,
+19,Gabion structure,Yes,Instream,0 - 10 %,2nd - 3rd,,,5 ha,,
+20,Check dam,Yes,Instream,0 - 5 %,2nd - 4th,,,5 ha,,
+21,Kolhapur Type weirs (K.T. Weirs),Yes,Instream,0 - 5 %,3th - 5th,,,10 ha,,
+22,Irrigation/Earthen Dams,Yes,Instream,0 - 5 %,3th - 5th,,,10 ha,> 2m,
+23,Percolation Ponds,Yes,Point,0 - 10 %,,,,5 ha,> 2m,>5m
+24,Farm pond (Unlined),Yes,Point,0 - 10 %,,"Agriculture, Plantation",,1 ha,> 2m,
+25,Farm pond (Lined),Yes,Point,0 - 10 %,,"Agriculture, Plantation",,1 ha,> 2m,
+26,Water harvesting tanks,Yes,Instream,0 - 5 %,2nd - 4th,,"Ponds, Tanks",5 ha,> 2m,
+27,Agroforestry,Yes,Areal,0 - 30%,,"Agriculture, Plantation",,,,
+28,Social forestry,Yes,Areal,0 - 30%,,"Agriculture, Plantation, Barren, Wasteland",,,,
+29,Seed balls dibbling,Yes,Areal,0 - 30%,,"Agriculture, Plantation, Barren, Wasteland",,,,
+31,Desiltation/rennovation of a waterbody,Yes,Point,,,Waterbody,Ponds/Tanks,,,
+33,Desiltation of the drainage channels,Yes,Point,,,,,,,
+39,"Constructed wetlands for ponds, lakes and other water bodies",Yes,Point,,,Waterbody,Ponds/Tanks,,,
+43,Planting grasses in the degraded lands and common lands,Yes,Areal,0 - 30%,,"Agriculture, Plantation, Barren, Wasteland",,,,

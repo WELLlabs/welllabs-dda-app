@@ -51,3 +51,16 @@ backend/db/migrations/data/
 
 # OS
 .DS_Store
+
+# Local scratch: reference docs, notebooks, source sheets, big geo files
+miscellaneous/
+
+# Local virtualenvs
+.venv-*/
+backend/.venv-*/
+
+# Design module site-suitability inputs (large; read via DESIGN_* paths)
+/srtm_slope_30m_cog.tif
+/Drainage Lines
+/drainage_lines.fgb
+/drainage_lines.tmp.gpkg

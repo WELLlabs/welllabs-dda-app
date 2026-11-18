@@ -25,7 +25,7 @@
 			accent: '#C98A16',
 			accentClass: 'text-design',
 			icon: 'design',
-			available: false
+			available: true
 		},
 		{
 			id: 'assess',

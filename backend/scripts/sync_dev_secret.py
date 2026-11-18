@@ -31,6 +31,9 @@ SYNC_KEYS = (
     "COG_LAYERS",
     "VECTOR_LAYERS",
     "WATERSHEDS_FGB_KEY",
+    "DESIGN_SLOPE_PATH",
+    "DESIGN_DRAINAGE_PATH",
+    "DESIGN_LULC_S3_KEY",
 )
 
 # Hierarchy stack — always loaded via preview_context, never via VECTOR_LAYERS.

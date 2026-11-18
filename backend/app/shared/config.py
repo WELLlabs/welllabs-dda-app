@@ -15,6 +15,11 @@ class Settings(BaseSettings):
     cog_layers: str = "lulc.cog.tif"
     vector_layers: str = ""
     watersheds_fgb_key: str = "watersheds.fbg"
+    # Design module — site-suitability inputs. Slope and drainage accept a local
+    # path or a GDAL path such as /vsis3/<bucket>/<key>; LULC is an S3 key.
+    design_slope_path: str = ""
+    design_drainage_path: str = ""
+    design_lulc_s3_key: str = "rasters/lulc250k_2023_24_classed_cog.tif"
     qfield_cloud_url: str = "https://app.qfield.cloud/api/v1/"
     qfield_project_name: str = "geo-field-pipeline"
     postgis_public_host: str = "localhost"
